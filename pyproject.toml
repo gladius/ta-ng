@@ -1,0 +1,13 @@
+[project]
+name = "token-auditor"
+version = "0.1.0"
+description = "Out-of-path token-waste auditor — reads recorded agent traces, detects per-call-site waste, proves fixes preserve behavior."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "jinja2>=3.1",
+    "langsmith>=0.1",       # live LangSmith trace pull (offline mode needs no key)
+]
+
+# Slice 1: datasource -> workspaces -> agents. Run: python -m app.web.server  (http://127.0.0.1:8100)

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Workspaces · {{ source }}{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <b>{{ source }}</b>{% endblock %}
+{% block content %}
+  <h1>Workspaces</h1>
+  <p class="sub">{{ source }}</p>
+  <ul class="rows">
+    {% for w in workspaces %}
+    <li><a href="/s/{{ source }}/ws/{{ w.id }}/agents">
+      <span class="name">{{ w.name }}</span>
+      <span class="id mono">{{ w.id }}</span>
+    </a></li>
+    {% else %}
+    <li class="empty">No workspaces — check this source's credentials, or it may be unreachable.</li>
+    {% endfor %}
+  </ul>
+{% endblock %}

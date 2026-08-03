@@ -1,0 +1,16 @@
+# secrets — never commit
+.env
+.galileo_key
+*.key
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# local editor/tooling
+.claude/settings.local.json
+.DS_Store

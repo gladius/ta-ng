@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Agents · {{ ws_name }}{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <b>{{ ws_name }}</b>{% endblock %}
+{% block content %}
+  <h1>Agents</h1>
+  <p class="sub">{{ ws_name }}</p>
+  <table class="grid">
+    <thead><tr><th>Agent</th><th class="num">Runs</th><th class="num"></th></tr></thead>
+    <tbody>
+    {% for a in agents %}
+      <tr>
+        <td class="name"><a href="/s/{{ source }}/ws/{{ ws_id }}/agent/{{ a.name | urlencode }}/report">{{ a.name }}</a></td>
+        <td class="num">{{ a.runs if a.runs is not none else '—' }}</td>
+        <td class="num"><a href="/s/{{ source }}/ws/{{ ws_id }}/agent/{{ a.name | urlencode }}/report">savings report ›</a></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3" class="empty">No agents in this workspace.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

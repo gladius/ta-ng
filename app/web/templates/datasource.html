@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Data sources · Token Auditor{% endblock %}
+{% block content %}
+  <h1>Data sources</h1>
+  <p class="sub">Pick a source to browse its workspaces and agents.</p>
+  <ul class="cards">
+    {% for d in datasources %}
+    <li class="card">
+      <a href="/s/{{ d.id }}/workspaces">
+        <span class="name">{{ d.name }}</span>
+        <span class="pill {{ 'ok' if d.configured else 'off' }}">{{ 'configured' if d.configured else 'no credentials' }}</span>
+      </a>
+    </li>
+    {% else %}
+    <li class="empty">No connectors found.</li>
+    {% endfor %}
+  </ul>
+{% endblock %}

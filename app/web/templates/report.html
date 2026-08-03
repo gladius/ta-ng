@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% set base = '/s/' ~ source ~ '/ws/' ~ ws_id ~ '/agent/' ~ (project | urlencode) %}
+{% set proven = proof is not none %}
+{% block title %}{{ f.agent }} · savings report{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · Savings report</b>{% endblock %}
+{% block content %}
+
+<section class="hero">
+  <p class="eyebrow">Prompt caching + model downgrade · advisory, out-of-path</p>
+  <div class="hero-num" id="heroNum">
+    ${{ '{:,.0f}'.format(proof.total if proven else f.total) }}<span class="per">/ month</span>
+    {% if proven %}<span class="hero-chip proven">✓ proven live</span>{% else %}<span class="hero-chip detected">detected · not yet proven</span>{% endif %}
+  </div>
+  <p class="hero-sub">{{ f.agent }} · {{ f.rows | length }} call-sites.
+    {% if proven %}Every figure is measured by a real provider call — the cache-read counter and a preservation re-run, not an estimate.{% else %}Detection is deterministic and free; prove the shortlist to confirm each with a live call.{% endif %}
+    Quoted at an assumed {{ '{:,}'.format(f.calls) }} calls/mo — the per-call saving is exact, so scale it to your real volume.</p>
+  <div class="stats" id="heroStats">
+    <div class="stat"><div class="k">Caching</div><div class="v">${{ '{:,.0f}'.format(proof.cache_usd if proven else f.cache_total) }}</div></div>
+    <div class="stat"><div class="k">Downgrade</div><div class="v">${{ '{:,.0f}'.format(proof.downgrade_usd if proven else f.downgrade_total) }}</div></div>
+    <div class="stat"><div class="k">Call-sites with a win</div><div class="v">{{ f.wins }}</div></div>
+  </div>
+</section>
+
+<section class="panel" id="selector">
+  <h2>Call-sites — costliest first</h2>
+  <p class="hint">Detection is free. The top opportunities are pre-selected; prove them with a live round-trip.</p>
+  <table class="grid">
+    <thead><tr><th style="width:34px"></th><th>call-site</th><th>model</th><th class="num">cost / mo</th><th>opportunity</th><th class="num">saving / mo</th></tr></thead>
+    <tbody>
+    {% for r in f.rows %}
+      <tr class="{{ '' if r.opportunity > 0 else 'dim' }}">
+        <td><input type="checkbox" class="sel" value="{{ r.key }}"{{ ' checked' if (loop.index <= 5 and r.opportunity > 0) else '' }}{{ ' disabled' if r.opportunity <= 0 else '' }}></td>
+        <td class="name">{{ r.node }}</td>
+        <td class="mono">{{ r.model }}</td>
+        <td class="num">${{ '{:,.0f}'.format(r.cost) }}</td>
+        <td>
+          {% if r.cache_usd > 0 and r.cache_verdict == 'CACHEABLE' %}<span class="chip cache">enable caching</span>
+          {% elif r.cache_usd > 0 and r.cache_verdict == 'BREAKER' %}<span class="chip cache">cache expansion</span>
+          {% elif r.downgrade_usd > 0 %}<span class="chip down">downgrade → {{ r.downgrade_to }}</span>
+          {% else %}<span class="chip none">{{ {'TOO-SMALL':'prefix below cache minimum','ALREADY':'already cached','AUTO':'auto-cached ✓ (no action)'}.get(r.cache_verdict, 'no win found') }}</span>{% endif %}
+        </td>
+        <td class="num money">{{ '${:,.0f}'.format(r.opportunity) if r.opportunity > 0 else '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="selbar">
+    <span class="muted" id="selnote"></span>
+    <button class="btn" id="proveBtn" onclick="prove()">{{ 'Re-prove selected →' if proven else 'Prove selected →' }}</button>
+  </div>
+  <div class="prog" id="prog" hidden>
+    <div class="bar"><i id="barfill"></i></div>
+    <ul class="steps" id="steps"></ul>
+  </div>
+</section>
+
+<div id="results" class="{{ 'reveal' if proven else '' }}">
+  {% if proven %}{% for x in proof.results if x.cache or x.downgrade %}
+  <details class="node"{{ ' open' if loop.first else '' }}>
+    <summary class="node-sum">
+      <span class="node">{{ x.node }}</span>
+      <span class="mono">{{ x.model }}</span>
+      <span class="spacer"></span>
+      {% if x.cache %}<span class="chip cache">{{ 'cache expansion' if x.cache.verdict == 'BREAKER' else 'enable caching' }}</span>{% endif %}
+      {% if x.downgrade %}<span class="chip down">downgrade</span>{% endif %}
+      <span class="amt">${{ '{:,.0f}'.format(x.cache_usd + x.downgrade_usd) }}/mo</span>
+    </summary>
+    <div class="node-body">
+
+      {% if x.cache %}
+      <details class="strat" open>
+        <summary class="strat-sum">
+          <span class="chip cache">{{ 'cache expansion' if x.cache.verdict == 'BREAKER' else 'enable caching' }}</span>
+          <span class="strat-what">{% if x.cache.verdict == 'BREAKER' %}a per-call line breaks the {{ '{:,}'.format(x.cache.recoverable_tok) }}-token prefix{% else %}{{ '{:,}'.format(x.cache.recoverable_tok) }}-token policy re-sent uncached every call{% endif %}</span>
+          <span class="spacer"></span>
+          <span class="amt">${{ '{:,.0f}'.format(x.cache_usd) }}/mo</span>
+        </summary>
+        <div class="strat-body">
+          {% if x.cache.verdict == 'BREAKER' %}
+          <p class="what">Move the per-call line <b>below</b> the {{ '{:,}'.format(x.cache.recoverable_tok) }}-token policy and the whole prefix becomes byte-stable and caches.</p>
+          <div class="diff">
+            <div class="diff-col before"><div class="tag">before — top of prompt</div>
+              <div class="diff-line moved">{{ x.cache.reorg.moved | truncate(70, true) }}</div>
+              <div class="diff-line static">… {{ '{:,}'.format(x.cache.recoverable_tok) }} tokens of static policy …</div>
+            </div>
+            <div class="diff-col after"><div class="tag">after — caches ✓</div>
+              <div class="diff-line static">… {{ '{:,}'.format(x.cache.recoverable_tok) }} tokens of static policy …</div>
+              <div class="diff-line moved">↳ session line, moved to the end</div>
+            </div>
+          </div>
+          {% else %}
+          <p class="what">Add one cache breakpoint after the policy — no wording changes.</p>
+          {% endif %}
+          {% if x.cache.method == 'structural' %}
+          <div class="proofstrip">
+            <span class="ps-mark">✓ Provable by construction</span>
+            <span class="ps-metric"><b>{{ '{:,}'.format(x.cache.recoverable_tok) }}</b> tok byte-stable</span>
+            <span class="ps-metric"><b>${{ '{:,.0f}'.format(x.cache_usd) }}</b>/mo</span>
+          </div>
+          <div class="ps-cap">{{ x.model }} caches eligible prefixes automatically — moving the per-call line lets it hit. No breakpoint, no paid call.</div>
+          {% else %}
+          <div class="proofstrip">
+            <span class="ps-mark">✓ Cached live</span>
+            <span class="ps-metric"><b>{{ '{:,}'.format(x.cache.read) }}</b> tok read from cache</span>
+            <span class="ps-metric"><b>${{ '{:,.0f}'.format(x.cache_usd) }}</b>/mo</span>
+          </div>
+          <div class="ps-cap">Verified on {{ x.model }} — a real write→read round-trip returning the provider's own <code>cache_read</code> count, not an estimate · {{ '{:,}'.format(f.calls) }} calls/mo.</div>
+          {% endif %}
+          <details class="full"><summary>Full prompt sent (tools + system) — highlighted</summary>
+            <div class="hl-legend"><span class="hl-static">static · caches</span><span class="hl-dyn">per-request · breaks the prefix</span></div>
+            <pre class="hl">{% for ln in x.cache.lines or [] %}<span class="hl-{{ 'dyn' if ln.kind == 'dynamic' else 'static' }}">{{ ln.t }}</span>
+{% endfor %}</pre>
+          </details>
+        </div>
+      </details>
+      {% endif %}
+
+      {% if x.downgrade %}{% set d = x.downgrade %}
+      <details class="strat"{{ ' open' if not x.cache else '' }}>
+        <summary class="strat-sum">
+          <span class="chip down">downgrade</span>
+          <span class="strat-what">{% if d.from_tier and d.to_tier %}<b>{{ d.from_tier }} → {{ d.to_tier }}</b> · {% endif %}{{ d.model }} → {{ d.cheaper }}</span>
+          <span class="spacer"></span>
+          <span class="amt">${{ '{:,.0f}'.format(x.downgrade_usd) }}/mo</span>
+        </summary>
+        <div class="strat-body">
+          {% if d.verdict == 'PRESERVED' %}
+          <div class="ev">✓ Proven: re-ran <b>{{ d.n }} distinct inputs</b> on <b>{{ d.cheaper }}</b>{% if d.to_tier %} (the {{ d.to_tier }} tier{% if d.to_release %}, rel. {{ d.to_release }}{% endif %}){% endif %} — <b>{{ d.preserved }}/{{ d.n }} kept the same decision</b>. One capability tier down, not a size question — no token floor applies.</div>
+          {% else %}
+          <div class="ev warn">⚠ {{ d.preserved }}/{{ d.n }} preserved — at least one input drifted on <b>{{ d.cheaper }}</b> ({{ d.to_tier }}). Keep the stronger model, or route only the safe inputs.</div>
+          {% endif %}
+        </div>
+      </details>
+      {% endif %}
+
+    </div>
+  </details>
+  {% endfor %}
+
+  <div class="actions">
+    <a class="btn" href="{{ base }}/report/download">Download report (.md)</a>
+    <button type="button" class="btn ghost" onclick="window.print()">Print / PDF</button>
+    <button type="button" class="btn ghost" onclick="reaudit()">Re-audit fresh</button>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  const BASE = {{ base | tojson }};
+  const selKeys = () => [...document.querySelectorAll('.sel:checked')].map(b => b.value);
+  const note = () => { document.getElementById('selnote').textContent = selKeys().length + ' call-site(s) selected'; };
+  document.querySelectorAll('.sel').forEach(b => b.addEventListener('change', note)); note();
+
+  function prove() {
+    const keys = selKeys();
+    if (!keys.length) { alert('Select at least one call-site to prove.'); return; }
+    const prog = document.getElementById('prog'), steps = document.getElementById('steps');
+    const btn = document.getElementById('proveBtn'), fill = document.getElementById('barfill');
+    prog.hidden = false; steps.innerHTML = ''; fill.style.width = '0%';
+    btn.disabled = true; btn.textContent = 'Proving…';
+    const li = {};
+    keys.forEach(k => { const el = document.createElement('li'); el.textContent = k; steps.appendChild(el); li[k] = el; });
+    const es = new EventSource(BASE + '/prove-stream?keys=' + encodeURIComponent(keys.join(',')));
+    let done = 0;
+    es.addEventListener('step', e => { const d = JSON.parse(e.data); if (li[d.node]) { li[d.node].className = 'on'; li[d.node].textContent = d.node + ' — ' + d.msg; } });
+    es.addEventListener('done_node', e => { const d = JSON.parse(e.data); if (li[d.node]) { li[d.node].className = 'ok'; li[d.node].textContent = d.node + ' — proven'; } fill.style.width = Math.round(++done / keys.length * 100) + '%'; });
+    es.addEventListener('complete', async () => {
+      es.close(); fill.style.width = '100%';
+      const doc = new DOMParser().parseFromString(await (await fetch(location.href, { cache: 'no-store' })).text(), 'text/html');
+      document.getElementById('results').innerHTML = doc.getElementById('results').innerHTML;
+      document.getElementById('results').classList.add('reveal');
+      document.getElementById('heroNum').innerHTML = doc.getElementById('heroNum').innerHTML;
+      document.getElementById('heroStats').innerHTML = doc.getElementById('heroStats').innerHTML;
+      setTimeout(() => { prog.hidden = true; btn.disabled = false; btn.textContent = 'Re-prove selected →';
+        document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 450);
+    });
+    es.onerror = () => { es.close(); prog.hidden = true; btn.disabled = false; btn.textContent = 'Prove selected →'; alert('Proof stream interrupted — check the server log.'); };
+  }
+  function reaudit() { fetch(BASE + '/prove-clear', { method: 'POST' }).then(() => location.reload()); }
+</script>
+{% endblock %}

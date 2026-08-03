@@ -1,0 +1,51 @@
+{
+  "_note": "Model/price catalog — THE single source of truth for the whole project. USD per 1M tokens. Every price/limit the code uses comes from here; add or update models/providers HERE, never in code. Fields per model: `input`, `output` (normal token prices); `cache_read` (price of a cache HIT), `cache_write` (price to CREATE the cache entry); `cache_min` (smallest stable prefix the provider will cache, tokens). Per provider: `cache_mode` = 'explicit' (caching is opt-in — Anthropic cache_control; 'enable caching' is a real fix we prove with a live write->read round-trip) or 'auto' (provider caches eligible prefixes automatically — OpenAI always-on, Google implicit on 2.5+; 'enable' is a no-op, but a per-call prefix that BREAKS the stable region still defeats the auto-cache, so restructuring still applies). NOTE ON READ/WRITE: there is NO separate read/write price for NORMAL tokens — that is just input/output. 'read/write' exists only for CACHING (read = cache hit, write = cache creation). Verified Aug 2026: Anthropic cache read 0.1x / write 1.25x (5-min; 1-hr write is 2x); OpenAI GPT-5.6 cache read 0.1x / write 1.25x; Google implicit read 0.1x, no per-token write fee but explicit caching adds storage $1-4.50/1M/hr. Sources: platform.claude.com/docs pricing, developers.openai.com/api/docs/pricing, ai.google.dev/gemini-api/docs/pricing. Anthropic base prices verified (Opus 4.8 5/25, Sonnet 3/15, Haiku 4.5 1/5). OpenAI GPT-5.6 base updated to the Jul-2026 family (Sol 5/30, Terra 2/12, Luna 0.20/1.20). Google base spot-checked; VERIFY any specific SKU against the live pricing page before trusting its $ (third-party sources disagree on some tiers). haiku-4-5 cache_min is 4096 (MEASURED: a 3362-tok prefix did not cache, 7002 did). Per model also: `tier` = capability class (frontier > balanced > small > nano) and `release` = approximate launch (YYYY-MM, verify). The DOWNGRADE ladder now uses `tier`, NOT file order: util.next_cheaper steps ONE tier down to the most-capable callable model there (the gentlest drop) — so a newer cheap 'flash' is never mistaken for a downgrade target of an older pricier 'pro'. File order is therefore cosmetic (kept price-descending for reading). `release` dates are approximate — verify against the provider before quoting recency. Unknown models fall back to a default price in code.",
+  "providers": [
+    {
+      "provider": "google",
+      "cache_mode": "auto",
+      "models": [
+        {"name": "gemini-3.1-pro",        "tier": "frontier", "release": "2026-06", "input": 2.00, "output": 12.0, "cache_read": 0.20,  "cache_write": 2.00, "cache_min": 2048},
+        {"name": "gemini-2.5-pro",        "tier": "frontier", "release": "2025-06", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 1.25, "cache_min": 2048},
+        {"name": "gemini-3.5-flash",      "tier": "balanced", "release": "2026-05", "input": 1.50, "output": 9.00, "cache_read": 0.15,  "cache_write": 1.50, "cache_min": 1024},
+        {"name": "gemini-3-flash",        "tier": "balanced", "release": "2026-03", "input": 0.50, "output": 3.00, "cache_read": 0.05,  "cache_write": 0.50, "cache_min": 1024},
+        {"name": "gemini-2.5-flash",      "tier": "balanced", "release": "2025-06", "input": 0.30, "output": 2.50, "cache_read": 0.03,  "cache_write": 0.30, "cache_min": 1024},
+        {"name": "gemini-3.1-flash-lite", "tier": "small",    "release": "2026-06", "input": 0.25, "output": 1.50, "cache_read": 0.025, "cache_write": 0.25, "cache_min": 1024},
+        {"name": "gemini-2.5-flash-lite", "tier": "small",    "release": "2025-06", "input": 0.10, "output": 0.40, "cache_read": 0.01,  "cache_write": 0.10, "cache_min": 1024, "callable": false}
+      ]
+    },
+    {
+      "provider": "anthropic",
+      "cache_mode": "explicit",
+      "models": [
+        {"name": "claude-fable-5",    "tier": "frontier", "release": "2026-05", "input": 10.0, "output": 50.0, "cache_read": 1.00, "cache_write": 12.50, "cache_min": 1024},
+        {"name": "claude-opus-4-8",   "tier": "frontier", "release": "2026-06", "input": 5.0,  "output": 25.0, "cache_read": 0.50, "cache_write": 6.25,  "cache_min": 1024},
+        {"name": "claude-sonnet-5",   "tier": "balanced", "release": "2026-05", "input": 3.0,  "output": 15.0, "cache_read": 0.30, "cache_write": 3.75,  "cache_min": 1024},
+        {"name": "claude-haiku-4-5",  "tier": "small",    "release": "2025-10", "input": 1.00, "output": 5.0,  "cache_read": 0.10, "cache_write": 1.25,  "cache_min": 4096},
+        {"name": "claude-3-5-haiku",  "tier": "small",    "release": "2024-11", "input": 0.80, "output": 4.0,  "cache_read": 0.08, "cache_write": 1.00,  "cache_min": 4096, "callable": false},
+        {"name": "claude-3-haiku",    "tier": "small",    "release": "2024-03", "input": 0.25, "output": 1.25, "cache_read": 0.03, "cache_write": 0.31,  "cache_min": 2048, "callable": false}
+      ]
+    },
+    {
+      "provider": "openai",
+      "cache_mode": "auto",
+      "models": [
+        {"name": "gpt-5.6-sol",   "tier": "frontier", "release": "2026-07", "input": 5.00, "output": 30.0, "cache_read": 0.50,  "cache_write": 6.25, "cache_min": 1024},
+        {"name": "gpt-5.6-terra", "tier": "balanced", "release": "2026-07", "input": 2.00, "output": 12.0, "cache_read": 0.20,  "cache_write": 2.50, "cache_min": 1024},
+        {"name": "gpt-5.4-mini",  "tier": "small",    "release": "2026-03", "input": 0.75, "output": 4.50, "cache_read": 0.075, "cache_write": 0.94, "cache_min": 1024},
+        {"name": "gpt-5.6-luna",  "tier": "nano",     "release": "2026-07", "input": 0.20, "output": 1.20, "cache_read": 0.02,  "cache_write": 0.25, "cache_min": 1024},
+        {"name": "gpt-5.4-nano",  "tier": "nano",     "release": "2026-03", "input": 0.20, "output": 1.25, "cache_read": 0.02,  "cache_write": 0.25, "cache_min": 1024}
+      ]
+    }
+  ],
+  "_alias_note": "Aliases map a legacy/dated/variant id onto a catalog entry that is the SAME model at the SAME price and tier (a dated snapshot, a '-latest' pointer, or a minor patch). NEVER alias across generations or capability tiers — that would misreport the model and feed the wrong tier into the downgrade ladder; give such a model its own entry instead.",
+  "aliases": {
+    "claude-opus-4-7": "claude-opus-4-8",
+    "claude-opus-4-6": "claude-opus-4-8",
+    "claude-opus-4-5": "claude-opus-4-8",
+    "claude-sonnet-4-6": "claude-sonnet-5",
+    "claude-sonnet-4-5": "claude-sonnet-5",
+    "claude-3-5-haiku-latest": "claude-3-5-haiku",
+    "gpt-5.6": "gpt-5.6-terra"
+  }
+}

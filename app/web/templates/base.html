@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Token Auditor{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">Token<span>Auditor</span></a>
+    <nav class="crumbs">{% block crumbs %}{% endblock %}</nav>
+  </header>
+  <main class="wrap {% block wrap_extra %}{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

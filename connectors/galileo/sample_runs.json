@@ -1,0 +1,77 @@
+[
+  {
+    "id": "span-a1",
+    "trace_id": "gtrace-a1",
+    "project_id": "proj-support",
+    "type": "llm",
+    "name": "triage",
+    "model": "claude-sonnet-4-5-20250101",
+    "metrics": {"num_input_tokens": 3200, "num_output_tokens": 90, "num_total_tokens": 3290, "duration_ns": 1840000000},
+    "tools": [
+      {"type": "function", "function": {"name": "lookup_account", "description": "Look up a customer account by id", "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}}},
+      {"type": "function", "function": {"name": "issue_refund", "description": "Issue a refund to an account", "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "amount": {"type": "number"}}}}}
+    ],
+    "user_metadata": {"agent_id": "support-agent", "langgraph_node": "triage", "task_type": "classification", "owner": "payments-team"},
+    "input": [
+      {"role": "system", "content": "You are a support triage assistant. Classify each ticket and call a tool when needed."},
+      {"role": "user", "content": "My card was charged twice for order 123 this morning."}
+    ],
+    "output": {"role": "assistant", "content": "Looking up the account now.", "tool_calls": [{"id": "c1", "function": {"name": "lookup_account", "arguments": "{\"id\":\"123\"}"}}]}
+  },
+  {
+    "id": "span-a2",
+    "trace_id": "gtrace-a2",
+    "project_id": "proj-support",
+    "type": "llm",
+    "name": "triage",
+    "model": "claude-sonnet-4-5-20250101",
+    "metrics": {"num_input_tokens": 3100, "num_output_tokens": 40, "num_total_tokens": 3140, "duration_ns": 1200000000},
+    "user_metadata": {"agent_id": "support-agent", "langgraph_node": "triage", "task_type": "classification", "owner": "payments-team"},
+    "input": [
+      {"role": "system", "content": "You are a support triage assistant. Classify each ticket and call a tool when needed."},
+      {"role": "user", "content": "I was double charged on my subscription renewal yesterday."}
+    ],
+    "output": {"role": "assistant", "content": "This is a billing dispute — issuing a refund."},
+    "events": [{"type": "tool_call", "name": "issue_refund", "payload": {"id": "sub-77", "amount": 12.0}}]
+  },
+  {
+    "id": "span-b1",
+    "trace_id": "gtrace-b1",
+    "project_id": "proj-support",
+    "type": "llm",
+    "name": "responder",
+    "model": "gpt-4o-mini",
+    "metrics": {"num_input_tokens": 1500, "num_output_tokens": 120, "num_total_tokens": 1620, "duration_ns": 900000000},
+    "user_metadata": {"agent_id": "support-agent", "langgraph_node": "responder", "task_type": "unknown", "owner": "payments-team"},
+    "input": [
+      {"role": "system", "content": "Draft a friendly, apologetic reply to the customer and confirm the resolution."},
+      {"role": "user", "content": "Customer was double charged on order 123 and we issued a refund. Draft a reply."}
+    ],
+    "output": {"role": "assistant", "content": "Hi! So sorry about the double charge on order 123 — we've refunded it and you should see it in 3-5 days."}
+  },
+  {
+    "id": "span-b2",
+    "trace_id": "gtrace-b2",
+    "project_id": "proj-support",
+    "type": "llm",
+    "name": "responder",
+    "model": "galileo-router-x1",
+    "metrics": {"num_input_tokens": 1600, "num_output_tokens": 110, "num_total_tokens": 1710, "duration_ns": 880000000},
+    "user_metadata": {"agent_id": "support-agent", "langgraph_node": "responder", "task_type": "unknown"},
+    "input": [
+      {"role": "system", "content": "Draft a friendly, apologetic reply to the customer and confirm the resolution."},
+      {"role": "user", "content": "Customer's refund for order 456 was processed. Draft a short confirmation."}
+    ],
+    "output": {"role": "assistant", "content": "Good news — your refund for order 456 is on its way!"}
+  },
+  {
+    "id": "span-c1-workflow",
+    "trace_id": "gtrace-c1",
+    "project_id": "proj-support",
+    "type": "workflow",
+    "name": "graph",
+    "user_metadata": {"agent_id": "support-agent", "langgraph_node": "graph"},
+    "input": [{"role": "user", "content": "orchestration span — not an LLM call, should be skipped"}],
+    "output": {"role": "assistant", "content": ""}
+  }
+]

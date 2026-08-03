@@ -1,0 +1,80 @@
+[
+  {
+    "id": "run-a1",
+    "trace_id": "trace-a1",
+    "run_type": "llm",
+    "prompt_tokens": 3200,
+    "completion_tokens": 90,
+    "extra": {
+      "invocation_params": {
+        "model": "claude-sonnet-4-5-20250101",
+        "tools": [
+          {"type": "function", "function": {"name": "lookup_account", "description": "Look up a customer account by id", "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}}},
+          {"type": "function", "function": {"name": "issue_refund", "description": "Issue a refund to an account", "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "amount": {"type": "number"}}}}}
+        ]
+      },
+      "metadata": {"agent_id": "support-agent", "langgraph_node": "triage", "task_type": "classification", "owner": "payments-team", "ls_model_name": "claude-sonnet-4-5"}
+    },
+    "inputs": {"messages": [[
+      {"lc": 1, "type": "constructor", "id": ["langchain", "schema", "messages", "SystemMessage"], "kwargs": {"content": "You are a support triage assistant. Classify each ticket and call a tool when needed."}},
+      {"lc": 1, "type": "constructor", "id": ["langchain", "schema", "messages", "HumanMessage"], "kwargs": {"content": "My card was charged twice for order 123 this morning."}}
+    ]]},
+    "outputs": {"generations": [[{"text": "", "message": {"lc": 1, "type": "constructor", "id": ["langchain", "schema", "messages", "AIMessage"], "kwargs": {"content": "Looking up the account now.", "tool_calls": [{"name": "lookup_account", "args": {"id": "123"}}]}}}]]}
+  },
+  {
+    "id": "run-a2",
+    "trace_id": "trace-a2",
+    "run_type": "llm",
+    "prompt_tokens": 3100,
+    "completion_tokens": 40,
+    "extra": {
+      "invocation_params": {"model": "claude-sonnet-4-5-20250101"},
+      "metadata": {"agent_id": "support-agent", "langgraph_node": "triage", "task_type": "classification", "owner": "payments-team"}
+    },
+    "inputs": {"messages": [
+      {"role": "system", "content": "You are a support triage assistant. Classify each ticket and call a tool when needed."},
+      {"role": "user", "content": "I was double charged on my subscription renewal yesterday."}
+    ]},
+    "outputs": {"generations": [[{"text": "This is a billing dispute.", "message": {"kwargs": {"content": "This is a billing dispute."}}}]]}
+  },
+  {
+    "id": "run-b1",
+    "trace_id": "trace-b1",
+    "run_type": "llm",
+    "prompt_tokens": 1500,
+    "completion_tokens": 120,
+    "extra": {
+      "invocation_params": {"model": "gpt-4o-mini"},
+      "metadata": {"agent_id": "support-agent", "langgraph_node": "responder", "task_type": "unknown", "owner": "payments-team"}
+    },
+    "inputs": {"messages": [
+      {"role": "system", "content": "Draft a friendly, apologetic reply to the customer and confirm the resolution."},
+      {"role": "user", "content": "Customer was double charged on order 123 and we issued a refund. Draft a reply."}
+    ]},
+    "outputs": {"generations": [[{"text": "Hi! So sorry about the double charge on order 123 — we have refunded it and you should see it in 3-5 days.", "message": {"kwargs": {"content": "Hi! So sorry about the double charge on order 123 — we have refunded it and you should see it in 3-5 days."}}}]]}
+  },
+  {
+    "id": "run-b2",
+    "trace_id": "trace-b2",
+    "run_type": "llm",
+    "prompt_tokens": 1600,
+    "completion_tokens": 110,
+    "extra": {
+      "invocation_params": {"model": "some-new-model-9000"},
+      "metadata": {"agent_id": "support-agent", "langgraph_node": "responder", "task_type": "unknown"}
+    },
+    "inputs": {"messages": [
+      {"role": "system", "content": "Draft a friendly, apologetic reply to the customer and confirm the resolution."},
+      {"role": "user", "content": "Customer's refund for order 456 was processed. Draft a short confirmation."}
+    ]},
+    "outputs": {"generations": [[{"text": "Good news — your refund for order 456 is on its way!", "message": {"kwargs": {"content": "Good news — your refund for order 456 is on its way!"}}}]]}
+  },
+  {
+    "id": "run-c1-chain",
+    "trace_id": "trace-c1",
+    "run_type": "chain",
+    "extra": {"metadata": {"agent_id": "support-agent", "langgraph_node": "graph"}},
+    "inputs": {"messages": [{"role": "user", "content": "orchestration span — not an LLM call, should be skipped"}]},
+    "outputs": {}
+  }
+]
