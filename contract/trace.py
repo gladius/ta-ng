@@ -32,7 +32,7 @@ def _canonical_model(raw):
 
 TRACE_VERSION = 1
 ROLES = ("system", "user", "assistant", "tool")
-TRACE_FIELDS = ("trace_id", "agent_id", "node_id", "owner", "model", "task_type", "source",
+TRACE_FIELDS = ("trace_id", "agent_id", "node_id", "graph_path", "owner", "model", "task_type", "source",
                 "thinking_enabled", "input_messages", "tools_defined", "tools_called", "output", "usage",
                 "error", "runtime_ms")
 
@@ -70,17 +70,22 @@ def norm_content(c):
     return str(c)
 
 
-def build_trace(*, trace_id, agent_id, model, input_messages, output, usage, node_id="",
+def build_trace(*, trace_id, agent_id, model, input_messages, output, usage, node_id="", graph_path="",
                 tools_defined=(), tools_called=(), task_type="unknown",
                 owner="n/a", source="", thinking_enabled=False, error="", runtime_ms=0):
     """Assemble a contract-valid trace. `model` is resolved against the catalog; if unknown it is kept
-    verbatim and flagged (model_known=False) so the caller can surface / add it."""
+    verbatim and flagged (model_known=False) so the caller can surface / add it.
+
+    `graph_path` is the call-site's graph/subgraph nesting (e.g. 'router/billing_subgraph'), '' for a
+    single-level agent. Carried so the audit can be selected / rolled up per graph; it does NOT change the
+    call-site bucket key (a node-name collision across subgraphs is a real-data decision, not assumed here)."""
     canon = _canonical_model(model)
     u = usage or {}
     return {
         "trace_id": str(trace_id or "")[:64],
         "agent_id": str(agent_id),
         "node_id": str(node_id or ""),
+        "graph_path": str(graph_path or ""),
         "owner": owner or "n/a",
         "model": canon or (str(model) if model else "unknown"),
         "model_raw": str(model) if model else "",

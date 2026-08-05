@@ -1,44 +1,85 @@
 {% extends "base.html" %}
 {% set base = '/s/' ~ source ~ '/ws/' ~ ws_id ~ '/agent/' ~ (project | urlencode) %}
 {% set proven = proof is not none %}
-{% block title %}{{ f.agent }} · savings report{% endblock %}
-{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · Savings report</b>{% endblock %}
+{% block title %}{{ f.agent }} · downgrade report{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · Downgrade report</b>{% endblock %}
 {% block content %}
+<style>
+  .verdict{font-weight:700;font-size:.72rem;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase}
+  .verdict.safe{background:#0f7a3d;color:#fff}
+  .verdict.unsafe{background:var(--accent,#b3231d);color:#fff}
+  .verdict.thin{background:#7a6a12;color:#fff}
+  .verdict.na{background:#555;color:#fff}
+  .subtle{color:var(--muted,#888);font-size:.9rem}
+  .samples{margin:.5rem 0 0;border-top:1px solid rgba(128,128,128,.25)}
+  .samp{padding:.55rem 0;border-bottom:1px solid rgba(128,128,128,.18)}
+  .samp-head{display:flex;gap:.6rem;align-items:baseline}
+  .tag{font-weight:700;font-size:.68rem;padding:1px 7px;border-radius:4px;white-space:nowrap}
+  .tag.kept{background:rgba(15,122,61,.15);color:#0f7a3d}
+  .tag.drift{background:rgba(179,35,29,.15);color:var(--accent,#b3231d)}
+  .tag.flip{background:rgba(122,106,18,.18);color:#8a7712}
+  .run{margin:.35rem 0;padding:.3rem 0;border-top:1px dashed rgba(128,128,128,.2)}
+  .run-why{font-size:.8rem;color:var(--muted,#888)}
+  .samp-in{flex:1;font-size:.92rem}
+  .samp-why{color:var(--muted,#888);font-size:.85rem}
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-top:.45rem}
+  .ba .col{border:1px solid rgba(128,128,128,.25);border-radius:6px;padding:.5rem}
+  .ba .lbl{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#888);margin-bottom:.25rem}
+  .ba pre{white-space:pre-wrap;font-size:.82rem;margin:0;max-height:180px;overflow:auto}
+  .howto{font-size:.86rem;color:var(--muted,#888);margin:.3rem 0 0}
+  .gfilter{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.2rem 0 .8rem;font-size:.85rem}
+  .gfilter .glabel{color:var(--muted,#888);text-transform:uppercase;letter-spacing:.04em;font-size:.72rem}
+  .gfilter select{padding:.25rem .5rem;border:1px solid rgba(128,128,128,.35);border-radius:6px;background:transparent;color:inherit;font:inherit}
+  .modebar{display:flex;flex-wrap:wrap;gap:1.2rem;margin:.2rem 0 .7rem;font-size:.9rem}
+  .modebar label{display:inline-flex;gap:.35rem;align-items:center;cursor:pointer}
+</style>
 
 <section class="hero">
-  <p class="eyebrow">Prompt caching + model downgrade · advisory, out-of-path</p>
+  <p class="eyebrow">Model-tier downgrade · advisory, out-of-path · read-only</p>
   <div class="hero-num" id="heroNum">
-    ${{ '{:,.0f}'.format(proof.total if proven else f.total) }}<span class="per">/ month</span>
-    {% if proven %}<span class="hero-chip proven">✓ proven live</span>{% else %}<span class="hero-chip detected">detected · not yet proven</span>{% endif %}
+    ${{ '{:,.0f}'.format(proof.downgrade_usd if proven else f.downgrade_total) }}<span class="per">per {{ '{:,}'.format(f.calls) }} calls</span>
+    {% if proven %}<span class="hero-chip proven">✓ proven live</span>{% else %}<span class="hero-chip detected">candidates · not yet proven</span>{% endif %}
   </div>
   <p class="hero-sub">{{ f.agent }} · {{ f.rows | length }} call-sites.
-    {% if proven %}Every figure is measured by a real provider call — the cache-read counter and a preservation re-run, not an estimate.{% else %}Detection is deterministic and free; prove the shortlist to confirm each with a live call.{% endif %}
-    Quoted at an assumed {{ '{:,}'.format(f.calls) }} calls/mo — the per-call saving is exact, so scale it to your real volume.</p>
+    {% if proven %}Each figure is earned by re-running the cheaper model on real recorded inputs and checking the decision + facts held — not an estimate.{% else %}We rank every call-site by cost and audit the costliest ones that can drop a tier. Prove the shortlist with a live re-run.{% endif %}
+    <b>All $ figures are per {{ '{:,}'.format(f.calls) }} calls</b> (a fixed basis — the per-call saving is exact, so multiply by your real call volume).</p>
   <div class="stats" id="heroStats">
-    <div class="stat"><div class="k">Caching</div><div class="v">${{ '{:,.0f}'.format(proof.cache_usd if proven else f.cache_total) }}</div></div>
-    <div class="stat"><div class="k">Downgrade</div><div class="v">${{ '{:,.0f}'.format(proof.downgrade_usd if proven else f.downgrade_total) }}</div></div>
-    <div class="stat"><div class="k">Call-sites with a win</div><div class="v">{{ f.wins }}</div></div>
+    <div class="stat"><div class="k">Provable downgrades</div><div class="v">${{ '{:,.0f}'.format(proof.downgrade_usd if proven else f.downgrade_total) }}</div></div>
+    <div class="stat"><div class="k">{{ 'Safe to downgrade' if proven else 'Candidates' }}</div><div class="v">{% if proven %}{{ proof.results | selectattr('downgrade') | selectattr('downgrade.verdict','equalto','SAFE') | list | length }}{% else %}{{ f.wins }}{% endif %}</div></div>
+    <div class="stat"><div class="k">Call-sites</div><div class="v">{{ f.rows | length }}</div></div>
   </div>
 </section>
 
 <section class="panel" id="selector">
   <h2>Call-sites — costliest first</h2>
-  <p class="hint">Detection is free. The top opportunities are pre-selected; prove them with a live round-trip.</p>
+  <p class="hint">Detection is free and deterministic. Choose how to pick what to prove:</p>
+  <div class="modebar">
+    <label><input type="radio" name="mode" value="auto" checked onchange="setMode()"> <b>Auto</b> — prove the top 5 costliest</label>
+    <label><input type="radio" name="mode" value="manual" onchange="setMode()"> <b>Manual</b> — choose graph &amp; nodes</label>
+  </div>
+  {% if f.graphs %}
+  {% set has_top = f.rows | selectattr('graph_path','equalto','') | list | length %}
+  <div class="gfilter" id="gfwrap">
+    <label class="glabel" for="gfsel">graph / subgraph:</label>
+    <select id="gfsel" onchange="filterGraph()">
+      <option value="__all">All graphs ({{ f.rows | length }} call-sites)</option>
+      {% if has_top %}<option value="__top">(top level)</option>{% endif %}
+      {% for gp in f.graphs %}<option value="{{ gp }}">{{ gp }}</option>{% endfor %}
+    </select>
+    <span class="muted" id="gfcount"></span>
+  </div>
+  {% endif %}
   <table class="grid">
-    <thead><tr><th style="width:34px"></th><th>call-site</th><th>model</th><th class="num">cost / mo</th><th>opportunity</th><th class="num">saving / mo</th></tr></thead>
+    <thead><tr><th style="width:34px"></th><th>call-site</th><th>graph</th><th>current model</th><th class="num">cost / {{ (f.calls // 1000) }}k</th><th>candidate</th><th class="num">saving / {{ (f.calls // 1000) }}k</th></tr></thead>
     <tbody>
     {% for r in f.rows %}
-      <tr class="{{ '' if r.opportunity > 0 else 'dim' }}">
-        <td><input type="checkbox" class="sel" value="{{ r.key }}"{{ ' checked' if (loop.index <= 5 and r.opportunity > 0) else '' }}{{ ' disabled' if r.opportunity <= 0 else '' }}></td>
+      <tr data-graph="{{ r.graph_path }}" class="{{ '' if r.opportunity > 0 else 'dim' }}">
+        <td><input type="checkbox" class="sel" value="{{ r.key }}"{% if loop.index <= 5 and r.opportunity > 0 %} checked data-default="1"{% endif %}{% if r.opportunity <= 0 %} disabled{% endif %}></td>
         <td class="name">{{ r.node }}</td>
+        <td class="subtle">{{ r.graph_path or '—' }}</td>
         <td class="mono">{{ r.model }}</td>
         <td class="num">${{ '{:,.0f}'.format(r.cost) }}</td>
-        <td>
-          {% if r.cache_usd > 0 and r.cache_verdict == 'CACHEABLE' %}<span class="chip cache">enable caching</span>
-          {% elif r.cache_usd > 0 and r.cache_verdict == 'BREAKER' %}<span class="chip cache">cache expansion</span>
-          {% elif r.downgrade_usd > 0 %}<span class="chip down">downgrade → {{ r.downgrade_to }}</span>
-          {% else %}<span class="chip none">{{ {'TOO-SMALL':'prefix below cache minimum','ALREADY':'already cached','AUTO':'auto-cached ✓ (no action)'}.get(r.cache_verdict, 'no win found') }}</span>{% endif %}
-        </td>
+        <td>{% if r.downgrade_usd > 0 %}<span class="chip down">→ {{ r.downgrade_to }}</span>{% else %}<span class="chip none">no cheaper tier</span>{% endif %}</td>
         <td class="num money">{{ '${:,.0f}'.format(r.opportunity) if r.opportunity > 0 else '—' }}</td>
       </tr>
     {% endfor %}
@@ -55,84 +96,46 @@
 </section>
 
 <div id="results" class="{{ 'reveal' if proven else '' }}">
-  {% if proven %}{% for x in proof.results if x.cache or x.downgrade %}
+  {% if proven %}{% for x in proof.results if x.downgrade %}{% set d = x.downgrade %}
   <details class="node"{{ ' open' if loop.first else '' }}>
     <summary class="node-sum">
       <span class="node">{{ x.node }}</span>
-      <span class="mono">{{ x.model }}</span>
+      <span class="mono">{{ d.model }} → {{ d.cheaper or '—' }}</span>
+      {% if d.from_tier and d.to_tier %}<span class="subtle">{{ d.from_tier }} → {{ d.to_tier }}</span>{% endif %}
       <span class="spacer"></span>
-      {% if x.cache %}<span class="chip cache">{{ 'cache expansion' if x.cache.verdict == 'BREAKER' else 'enable caching' }}</span>{% endif %}
-      {% if x.downgrade %}<span class="chip down">downgrade</span>{% endif %}
-      <span class="amt">${{ '{:,.0f}'.format(x.cache_usd + x.downgrade_usd) }}/mo</span>
+      {% if d.verdict == 'SAFE' %}<span class="verdict safe">safe to downgrade</span>
+      {% elif d.verdict == 'BORDERLINE' %}<span class="verdict thin">borderline — don't downgrade</span>
+      {% elif d.verdict == 'NOT-SAFE' %}<span class="verdict unsafe">not safe — keep current</span>
+      {% elif d.verdict == 'LOW-EVIDENCE' %}<span class="verdict thin">needs more data</span>
+      {% else %}<span class="verdict na">already cheapest</span>{% endif %}
+      <span class="amt">{{ '${:,.0f} / {}k'.format(x.downgrade_usd, f.calls // 1000) if d.verdict == 'SAFE' else '—' }}</span>
     </summary>
     <div class="node-body">
-
-      {% if x.cache %}
-      <details class="strat" open>
-        <summary class="strat-sum">
-          <span class="chip cache">{{ 'cache expansion' if x.cache.verdict == 'BREAKER' else 'enable caching' }}</span>
-          <span class="strat-what">{% if x.cache.verdict == 'BREAKER' %}a per-call line breaks the {{ '{:,}'.format(x.cache.recoverable_tok) }}-token prefix{% else %}{{ '{:,}'.format(x.cache.recoverable_tok) }}-token policy re-sent uncached every call{% endif %}</span>
-          <span class="spacer"></span>
-          <span class="amt">${{ '{:,.0f}'.format(x.cache_usd) }}/mo</span>
-        </summary>
-        <div class="strat-body">
-          {% if x.cache.verdict == 'BREAKER' %}
-          <p class="what">Move the per-call line <b>below</b> the {{ '{:,}'.format(x.cache.recoverable_tok) }}-token policy and the whole prefix becomes byte-stable and caches.</p>
-          <div class="diff">
-            <div class="diff-col before"><div class="tag">before — top of prompt</div>
-              <div class="diff-line moved">{{ x.cache.reorg.moved | truncate(70, true) }}</div>
-              <div class="diff-line static">… {{ '{:,}'.format(x.cache.recoverable_tok) }} tokens of static policy …</div>
+      {% if d.inputs %}
+        <p class="subtle">Tested <b>{{ d.n }} distinct inputs × {{ d.k }} re-runs each</b> on <b>{{ d.cheaper }}</b>{% if d.to_tier %} ({{ d.to_tier }} tier{% if d.to_release %}, rel. {{ d.to_release }}{% endif %}){% endif %} — <b>{{ d.safe_inputs }}/{{ d.n }}</b> inputs preserved in <b>every</b> re-run.
+          {% if d.verdict == 'SAFE' %}All held across all repeats, so this drop is safe here.{% elif d.verdict == 'BORDERLINE' %}At least one input <b>flips</b> between runs — genuinely uncertain, so we don't recommend it.{% else %}At least one input reliably changes behavior, so keep the current model.{% endif %}</p>
+        <div class="samples">
+          {% for r in d.inputs %}
+          <details class="samp">
+            <summary class="samp-head">
+              {% if r.verdict == 'SAFE' %}<span class="tag kept">safe {{ r.kept }}/{{ r.k }}</span>
+              {% elif r.verdict == 'NOT-SAFE' %}<span class="tag drift">drifts {{ r.kept }}/{{ r.k }}</span>
+              {% else %}<span class="tag flip">flips {{ r.kept }}/{{ r.k }}</span>{% endif %}
+              <span class="samp-in">{{ r.input or '(input)' }}</span>
+              <span class="samp-why">{{ r.reason }}</span>
+            </summary>
+            <div class="ba">
+              <div class="col"><div class="lbl">original · {{ d.model }} (recorded)</div><pre>{{ r.recorded }}</pre></div>
+              <div class="col"><div class="lbl">cheaper · {{ d.cheaper }} · {{ r.k }} re-runs</div>
+                {% for s in r.samples %}<div class="run"><span class="tag {{ 'kept' if s.preserved else 'drift' }}">{{ '✓' if s.preserved else '✗' }}</span> <span class="run-why">{{ s.reason }}</span><pre>{{ s.output }}</pre></div>{% endfor %}
+              </div>
             </div>
-            <div class="diff-col after"><div class="tag">after — caches ✓</div>
-              <div class="diff-line static">… {{ '{:,}'.format(x.cache.recoverable_tok) }} tokens of static policy …</div>
-              <div class="diff-line moved">↳ session line, moved to the end</div>
-            </div>
-          </div>
-          {% else %}
-          <p class="what">Add one cache breakpoint after the policy — no wording changes.</p>
-          {% endif %}
-          {% if x.cache.method == 'structural' %}
-          <div class="proofstrip">
-            <span class="ps-mark">✓ Provable by construction</span>
-            <span class="ps-metric"><b>{{ '{:,}'.format(x.cache.recoverable_tok) }}</b> tok byte-stable</span>
-            <span class="ps-metric"><b>${{ '{:,.0f}'.format(x.cache_usd) }}</b>/mo</span>
-          </div>
-          <div class="ps-cap">{{ x.model }} caches eligible prefixes automatically — moving the per-call line lets it hit. No breakpoint, no paid call.</div>
-          {% else %}
-          <div class="proofstrip">
-            <span class="ps-mark">✓ Cached live</span>
-            <span class="ps-metric"><b>{{ '{:,}'.format(x.cache.read) }}</b> tok read from cache</span>
-            <span class="ps-metric"><b>${{ '{:,.0f}'.format(x.cache_usd) }}</b>/mo</span>
-          </div>
-          <div class="ps-cap">Verified on {{ x.model }} — a real write→read round-trip returning the provider's own <code>cache_read</code> count, not an estimate · {{ '{:,}'.format(f.calls) }} calls/mo.</div>
-          {% endif %}
-          <details class="full"><summary>Full prompt sent (tools + system) — highlighted</summary>
-            <div class="hl-legend"><span class="hl-static">static · caches</span><span class="hl-dyn">per-request · breaks the prefix</span></div>
-            <pre class="hl">{% for ln in x.cache.lines or [] %}<span class="hl-{{ 'dyn' if ln.kind == 'dynamic' else 'static' }}">{{ ln.t }}</span>
-{% endfor %}</pre>
           </details>
+          {% endfor %}
         </div>
-      </details>
+      {% else %}
+        <p class="subtle">{{ d.reason }}</p>
       {% endif %}
-
-      {% if x.downgrade %}{% set d = x.downgrade %}
-      <details class="strat"{{ ' open' if not x.cache else '' }}>
-        <summary class="strat-sum">
-          <span class="chip down">downgrade</span>
-          <span class="strat-what">{% if d.from_tier and d.to_tier %}<b>{{ d.from_tier }} → {{ d.to_tier }}</b> · {% endif %}{{ d.model }} → {{ d.cheaper }}</span>
-          <span class="spacer"></span>
-          <span class="amt">${{ '{:,.0f}'.format(x.downgrade_usd) }}/mo</span>
-        </summary>
-        <div class="strat-body">
-          {% if d.verdict == 'PRESERVED' %}
-          <div class="ev">✓ Proven: re-ran <b>{{ d.n }} distinct inputs</b> on <b>{{ d.cheaper }}</b>{% if d.to_tier %} (the {{ d.to_tier }} tier{% if d.to_release %}, rel. {{ d.to_release }}{% endif %}){% endif %} — <b>{{ d.preserved }}/{{ d.n }} kept the same decision</b>. One capability tier down, not a size question — no token floor applies.</div>
-          {% else %}
-          <div class="ev warn">⚠ {{ d.preserved }}/{{ d.n }} preserved — at least one input drifted on <b>{{ d.cheaper }}</b> ({{ d.to_tier }}). Keep the stronger model, or route only the safe inputs.</div>
-          {% endif %}
-        </div>
-      </details>
-      {% endif %}
-
     </div>
   </details>
   {% endfor %}
@@ -150,6 +153,38 @@
   const selKeys = () => [...document.querySelectorAll('.sel:checked')].map(b => b.value);
   const note = () => { document.getElementById('selnote').textContent = selKeys().length + ' call-site(s) selected'; };
   document.querySelectorAll('.sel').forEach(b => b.addEventListener('change', note)); note();
+
+  function filterGraph() {
+    const sel = document.getElementById('gfsel');
+    const v = sel ? sel.value : '__all';
+    let shown = 0;
+    document.querySelectorAll('#selector tbody tr').forEach(tr => {
+      const g = tr.getAttribute('data-graph') || '';
+      const show = v === '__all' || (v === '__top' && !g) || g === v;
+      tr.style.display = show ? '' : 'none';
+      if (show) shown++; else { const cb = tr.querySelector('.sel'); if (cb) cb.checked = false; }  // don't prove hidden nodes
+    });
+    const c = document.getElementById('gfcount');
+    if (c) c.textContent = v === '__all' ? '' : shown + ' call-site(s) in this graph';
+    note();
+  }
+
+  function setMode() {
+    const m = (document.querySelector('input[name="mode"]:checked') || {}).value || 'auto';
+    const gf = document.getElementById('gfwrap');
+    if (m === 'auto') {                                   // top-5 default: hide the graph filter, restore defaults
+      if (gf) gf.style.display = 'none';
+      document.querySelectorAll('#selector tbody tr').forEach(tr => tr.style.display = '');
+      document.querySelectorAll('.sel').forEach(cb => { if (!cb.disabled) cb.checked = cb.hasAttribute('data-default'); });
+      const sel = document.getElementById('gfsel'); if (sel) sel.value = '__all';
+      const c = document.getElementById('gfcount'); if (c) c.textContent = '';
+    } else {                                              // manual: reveal the graph filter, apply it
+      if (gf) gf.style.display = '';
+      filterGraph();
+    }
+    note();
+  }
+  setMode();
 
   function prove() {
     const keys = selKeys();

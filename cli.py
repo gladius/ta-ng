@@ -64,12 +64,15 @@ def main(argv):
         if not bucket:
             print("node %r not found. available: %s" % (argv[4], [k.split("/")[-1] for k in buckets]))
         else:
-            print("auditing %s (%d recorded traces) — faithful re-run on the cheaper tier + judge ...\n" % (node, len(bucket)))
+            print("auditing %s (%d recorded traces) — temp=0 head-to-head on the cheaper tier + judge ...\n" % (node, len(bucket)))
             r = audit.audit_node(node, bucket, n=5)
             print("  %s : %s -> %s   %s   (%d/%d preserved)" %
-                  (r["node"], r.get("model"), r.get("cheaper"), r["verdict"], r.get("preserved", 0), r.get("n", 0)))
+                  (r["node"], r.get("model"), r.get("cheaper", "-"), r["verdict"], r.get("preserved", 0), r.get("n", 0)))
+            if r.get("reason"):
+                print("    reason: %s" % r["reason"])
             for s in r.get("samples", []):
-                print("    [%s]  recorded=%r  cheaper=%r" % ("keep" if s["preserved"] else "DRIFT", s["recorded"], s["candidate"]))
+                print("    [%-5s via %-13s] %s | A=%r  B=%r" %
+                      ("keep" if s["preserved"] else "DRIFT", s["method"], s["reason"], s["orig"], s["cand"]))
     else:
         print("usage: python cli.py sources | workspaces <source> | agents <source> <ws_id> | graph <ws_id> <agent>")
 

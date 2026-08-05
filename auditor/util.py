@@ -39,7 +39,8 @@ def _load_catalog(path=_CATALOG_PATH):
             cmode[m["name"]] = mode
         for m in prov["models"]:
             order[m["name"]] = {"provider": prov["provider"], "siblings": names,
-                                "tier": m.get("tier"), "release": m.get("release")}
+                                "tier": m.get("tier"), "release": m.get("release"),
+                                "max_output": m.get("max_output")}   # per-model output ceiling (optional)
     return cat, price, order, aliases, callable_, cmode
 
 
@@ -123,6 +124,18 @@ def release(model):
     """Approximate launch (YYYY-MM) from the catalog, or None. Recency signal for the UI — verify before quoting."""
     info = _ORDER.get(canonical_model(model) or model)
     return info.get("release") if info else None
+
+
+DEFAULT_MAX_OUTPUT = 32768        # fallback ceiling when a model has no `max_output` in the catalog
+
+
+def max_output(model):
+    """The model's max OUTPUT tokens, from the catalog `max_output` (optional per model), else DEFAULT_MAX_OUTPUT.
+    Used to bound a replay's budget by the model's real capability instead of a hardcoded number — so a long
+    production output is never truncated, and we never ask a model for more than it can return."""
+    info = _ORDER.get(canonical_model(model) or model)
+    mo = info.get("max_output") if info else None
+    return int(mo) if mo else DEFAULT_MAX_OUTPUT
 
 
 def cache_min(model):

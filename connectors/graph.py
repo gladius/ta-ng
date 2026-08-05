@@ -142,6 +142,24 @@ def _resolve_node(rec, by_id):
     return str(rec.get("name") or "llm"), False          # last resort: the model class name (untagged)
 
 
+def _resolve_path(rec, by_id):
+    """The graph/subgraph nesting for an llm run — the chain of NAMED ancestor nodes (outer -> inner), EXCLUDING
+    the run's own node. '' at top level. Framework-agnostic: derived from the run TREE, so multiagent subgraphs
+    group correctly even when LangGraph's checkpoint_ns metadata is absent. Used only as a fallback when the trace
+    doesn't already carry a graph_path."""
+    path, seen, cur = [], set(), rec.get("parent_run_id")
+    while cur and str(cur) not in seen:
+        seen.add(str(cur))
+        p = by_id.get(str(cur))
+        if p is None:
+            break
+        name = p.get("node_hint") or (p.get("name") if p.get("run_type") == "chain" else None)
+        if name and not _is_generic(name):
+            path.append(str(name))
+        cur = p.get("parent_run_id")
+    return "/".join(reversed(path))
+
+
 class Graph:
     def __init__(self, agent, buckets, nodes, edges, trace_count):
         self.agent = agent
@@ -163,6 +181,7 @@ def build_graph(records, agent_default="agent"):
 
     # PASS 1 — resolve every llm run to (node_label, tagged, shape_sig); collect the shape variants per node
     resolved = []                                        # (rec, node_label, tagged, sig)
+    paths = {}                                           # rec id -> tree-derived graph/subgraph path (fallback)
     node_order_per_trace = OrderedDict()                 # trace_id -> [node_label in first-seen dotted order]
     for tid, runs in by_trace.items():
         by_id = {str(r["id"]): r for r in runs if r.get("id")}
@@ -174,6 +193,7 @@ def build_graph(records, agent_default="agent"):
                 node = rec.get("node_hint") or rec.get("name")
             if rec.get("trace") is not None and not rec.get("skip"):      # a profileable llm sample
                 nl, tagged = _resolve_node(rec, by_id)
+                paths[str(rec.get("id"))] = _resolve_path(rec, by_id)     # subgraph nesting from the tree (fallback)
                 sig = _shape_sig(rec["trace"])
                 resolved.append((rec, nl, tagged, sig))               # kept for stats + error_rate (all samples)
                 node = node or nl
@@ -216,11 +236,12 @@ def build_graph(records, agent_default="agent"):
         s = stats.setdefault(key, {"node": nl, "variant": variant, "untagged": not tagged,
                                    "in": 0, "out": 0, "ms": 0, "n": 0, "err": 0, "traces": set(),
                                    "cost_ls": 0.0, "fb": [], "ttft": [], "tools": 0, "out_json": 0, "tool_in": 0,
-                                   "out_list": [], "models": Counter(),
+                                   "out_list": [], "models": Counter(), "gpaths": Counter(),
                                    "model": rec["trace"].get("model", ""), "first": "", "last": ""})
         tr = rec["trace"]
         u = tr.get("usage", {})
         s["models"][tr.get("model", "")] += 1                                 # full model DISTRIBUTION, not just first
+        s["gpaths"][tr.get("graph_path") or paths.get(str(rec.get("id")), "")] += 1   # trace field, else tree-derived
         s["out_list"].append(u.get("output_tokens", 0))                       # for the output-length DISTRIBUTION
         s["out_json"] += 1 if _is_json(tr.get("output")) else 0                # deterministic output-structure signal
         s["tool_in"] += 1 if any(m.get("role") == "tool" for m in tr.get("input_messages", []) or []) else 0
@@ -247,8 +268,10 @@ def build_graph(records, agent_default="agent"):
         _mm = s["models"].most_common()
         nodes.append({"key": key, "node": s["node"], "variant": s["variant"], "untagged": s["untagged"],
                       "samples": s["n"], "traces": len(s["traces"]),
+                      "graph_path": s["gpaths"].most_common(1)[0][0] if s["gpaths"] else "",  # subgraph nesting
                       "model": (_mm[0][0] if _mm else s["model"]),          # DOMINANT model (mode), not the first sample
                       "models": ", ".join("%s x%d" % (m or "?", c) for m, c in _mm),
+                      "models_list": [{"name": m or "?", "calls": c} for m, c in _mm],   # distribution (app view)
                       "mixed_model": len(s["models"]) > 1,
                       "avg_in": round(s["in"] / n), "avg_out": round(s["out"] / n),
                       "avg_ms": round(s["ms"] / n), "errors": s["err"], "error_rate": round(s["err"] / n, 3),

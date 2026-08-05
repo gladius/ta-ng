@@ -9,7 +9,8 @@ import json
 from contract import norm_role, norm_content, build_trace, validate_trace  # re-exported for adapters
 
 __all__ = ["norm_role", "norm_content", "build_trace", "validate_trace",
-           "norm_messages", "norm_tools", "extract_output", "tool_calls_from_output"]
+           "norm_messages", "norm_tools", "extract_output", "tool_calls_from_output",
+           "tool_calls_full", "render_behavior"]
 
 
 def _one_message(m):
@@ -117,3 +118,46 @@ def tool_calls_from_output(outputs):
     except Exception:
         pass
     return sorted(set(names))
+
+
+def tool_calls_full(outputs):
+    """Tool calls the model actually made — name AND arguments — off the output AI message. Args are parsed to a
+    dict when the provider serialized them as a JSON string."""
+    out = []
+    try:
+        g = _unwrap_generation(outputs) or {}
+        msg = g.get("message", {}) if isinstance(g, dict) else {}
+        kw = msg.get("kwargs", msg) if isinstance(msg, dict) else {}
+        calls = kw.get("tool_calls") or (kw.get("additional_kwargs", {}) or {}).get("tool_calls") or []
+        for tc in calls:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+            name = fn.get("name")
+            args = fn.get("arguments", fn.get("args", {}))
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except Exception:
+                    pass
+            if name:
+                out.append({"name": name, "args": args if isinstance(args, dict) else {"_": args}})
+    except Exception:
+        pass
+    return out
+
+
+def render_behavior(outputs):
+    """The model's FULL recorded behavior as one string: assistant text PLUS any tool call rendered as
+    `[calls name({args})]`. This is the audit's comparison reference — so a tool node's own DECISION (which the
+    plain text output drops) is preserved and the cheaper model's tool call can be judged against it."""
+    calls = tool_calls_full(outputs)
+    g = _unwrap_generation(outputs) or {}
+    msg = g.get("message") if isinstance(g, dict) else None
+    text = norm_content(_msg_content(msg)).strip() if isinstance(msg, dict) else ""
+    if not text and not calls:                       # no tool call and no message text -> fall back to best-effort
+        text = (extract_output(outputs) or "").strip()
+    parts = [text] if text else []
+    for c in calls:
+        parts.append("[calls %s(%s)]" % (c["name"], json.dumps(c["args"], sort_keys=True)))
+    return "\n".join(parts).strip()

@@ -1,7 +1,8 @@
-"""Report export — build a clean Markdown report the exec can forward, ZERO dependencies.
+"""Report export — a clean Markdown report the reviewer can forward, ZERO dependencies.
 
-Built ONLY from the frozen proof, so the file says exactly what the page says — proven numbers, measured,
-nothing invented. Markdown renders everywhere (GitHub, Notion, email) and stays diff-able.
+Built ONLY from the frozen proof, so the file says exactly what the page says — measured, nothing invented.
+Unlike the page (scannable), the download carries the FULL evidence: every input, every re-run, and the original
+recorded behavior vs each cheaper re-run — so a downgrade call can be audited offline. Markdown renders everywhere.
 """
 
 
@@ -9,46 +10,46 @@ def _fmt(n):
     return "{:,.0f}".format(n)
 
 
+_VERDICT = {"SAFE": "✅ safe to downgrade", "BORDERLINE": "⚠ borderline — flips, don't downgrade",
+            "NOT-SAFE": "❌ not safe — keep current", "LOW-EVIDENCE": "⚠ needs more data",
+            "N/A": "already cheapest tier"}
+
+
 def build_md(f, proof):
     calls = f["calls"]
-    total = proof["total"] if proof else f["total"]
-    L = ["# Token Audit — %s" % f["agent"], ""]
-    L.append("**$%s / month %s** · prompt caching + model downgrade" %
-             (_fmt(total), "proven live" if proof else "detected"))
+    unit = "%s calls" % _fmt(calls)
+    total = (proof["downgrade_usd"] if proof else f["downgrade_total"])
+    rows = [x for x in (proof["results"] if proof else []) if x.get("downgrade")]
+
+    L = ["# Token Audit — %s · model-tier downgrade" % f["agent"], ""]
+    L.append("**$%s per %s** %s" % (_fmt(total), unit, "· proven live" if proof else "· detected, not yet proven"))
     L.append("")
-    L.append("> Advisory, out-of-path. Every figure below is measured by a real provider call — the cache-read "
-             "counter and a preservation re-run, not an estimate. Quoted at an assumed %s calls/month; the "
-             "per-call saving is exact, so scale to your real volume." % _fmt(calls))
-    L += ["", "| Call-site | Strategy | Evidence | $ / mo |", "|---|---|---|---|"]
-    for x in (proof["results"] if proof else []):
-        amt = "$" + _fmt(x.get("cache_usd", 0) + x.get("downgrade_usd", 0))
-        c, d = x.get("cache"), x.get("downgrade")
-        if c:
-            lever = "Cache expansion" if c["verdict"] == "BREAKER" else "Enable caching"
-            L.append("| `%s` | %s | reads %s tok from cache (live `cache_read`) | %s |"
-                     % (x["node"], lever, _fmt(c["read"]), "$" + _fmt(x["cache_usd"])))
-        if d:
-            L.append("| `%s` | Downgrade %s → %s | %d/%d inputs preserved on the cheaper tier | %s |"
-                     % (x["node"], d.get("model", x["model"]), d.get("cheaper", "?"),
-                        d.get("preserved", 0), d.get("n", 0), "$" + _fmt(x["downgrade_usd"])))
-    L += ["", "## How each was proven", ""]
-    for x in (proof["results"] if proof else []):
-        c, d = x.get("cache"), x.get("downgrade")
-        if c:
-            if c["verdict"] == "BREAKER":
-                L.append("- **%s — cache expansion.** A per-call line broke the byte-prefix; moving it below the "
-                         "%s-token policy makes the prefix stable. Re-sent live, the provider returned **%s tokens** "
-                         "from cache." % (x["node"], _fmt(c["recoverable_tok"]), _fmt(c["read"])))
-            else:
-                L.append("- **%s — enable caching.** A %s-token policy prefix is re-sent uncached every call; one "
-                         "cache breakpoint fixes it. Re-sent live, **%s tokens** returned from cache."
-                         % (x["node"], _fmt(c["recoverable_tok"]), _fmt(c["read"])))
-        if d:
-            L.append("- **%s — downgrade.** Runs on %s for a task %s handles the same. Re-ran %d distinct inputs on "
-                     "the cheaper tier; **%d preserved** the decision." % (x["node"], d.get("model", x["model"]),
-                     d.get("cheaper", "?"), d.get("n", 0), d.get("preserved", 0)))
-    L.append("")
+    L.append("> Advisory, out-of-path, read-only. Each candidate is tested on real recorded inputs, and each input "
+             "is **re-run K times** on the cheaper model — a downgrade is called SAFE only if every input preserved "
+             "behavior in **every** re-run (unanimous), so verdicts don't flip between audits. **All $ are per %s** "
+             "(a fixed basis; multiply by your real call volume)." % unit)
+
+    L += ["", "| Call-site | Downgrade | Verdict | Inputs safe | $ / %s |" % unit, "|---|---|---|---|---|"]
+    for x in rows:
+        d = x["downgrade"]
+        amt = "$" + _fmt(x["downgrade_usd"]) if d["verdict"] == "SAFE" else "—"
+        safe = "%s/%s" % (d.get("safe_inputs", 0), d.get("n", 0)) if d.get("inputs") else "—"
+        L.append("| `%s` | %s → %s | %s | %s | %s |" % (
+            x["node"], d.get("model", "?"), d.get("cheaper", "-"), _VERDICT.get(d["verdict"], d["verdict"]), safe, amt))
+
+    L += ["", "## Evidence — every input, every re-run", ""]
+    for x in rows:
+        d = x["downgrade"]
+        L.append("### `%s` — %s → %s · %s" % (x["node"], d.get("model", "?"), d.get("cheaper", "-"),
+                                              _VERDICT.get(d["verdict"], d["verdict"])))
+        if not d.get("inputs"):
+            L += ["_%s_" % d.get("reason", ""), ""]
+            continue
+        for r in d["inputs"]:
+            L.append("**[%s %d/%d]** input: %s" % (r["verdict"], r["kept"], r["k"], r.get("input", "")))
+            L.append("- _original (%s, recorded):_ %s" % (d.get("model", "?"), r.get("recorded", "")))
+            for i, s in enumerate(r.get("samples", []), 1):
+                L.append("- _cheaper run %d (%s):_ %s — %s" % (
+                    i, "kept" if s["preserved"] else "DRIFT", s.get("reason", ""), s.get("output", "")))
+            L.append("")
     return "\n".join(L)
-
-_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-

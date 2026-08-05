@@ -63,9 +63,9 @@ def _prove_one(node, r, b):
             out["cache"]["reorg"] = _reorg(b, cd)
         out["cache_usd"] = r["cache_usd"] if proven else 0.0              # honest: no proof → no claimed saving
     if r["downgrade"] and b:
-        a = audit.audit_node(node, b, n=3)
+        a = audit.audit_node(node, b)               # N distinct inputs x K repeats (central config); rate-based verdict
         out["downgrade"] = a
-        out["downgrade_usd"] = r["downgrade_usd"] if a["verdict"] == "PRESERVED" else 0.0
+        out["downgrade_usd"] = r["downgrade_usd"] if a["verdict"] == "SAFE" else 0.0   # $ only when unanimously safe
     return out
 
 

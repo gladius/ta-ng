@@ -6,7 +6,7 @@ reconcile, and ranks costliest-first — the shortlist the user proves. Nothing 
 """
 from auditor.util import PRICE, canonical_model
 from app.services import cache, downgrade
-from app.config import DISPLAY_CALLS
+from app.config import DISPLAY_CALLS, lever_on
 
 
 def _price(model):
@@ -24,11 +24,12 @@ def build(source_id, ws_id, project, calls=None):
     buckets, _ = get_source(source_id).pull(ws_id, project, limit=300)
 
     cache_by = {}
-    for k, b in buckets.items():
-        d = cache.detect(b, model=b[0].get("model"))
-        if d:
-            cache_by[k.split("/")[-1]] = d
-    dg_by = {c["node"]: c for c in downgrade.candidates(g["nodes"], per_calls=calls)}
+    if lever_on("cache"):                               # levers come from config.LEVERS — one source of truth
+        for k, b in buckets.items():
+            d = cache.detect(b, model=b[0].get("model"))
+            if d:
+                cache_by[k.split("/")[-1]] = d
+    dg_by = {c["node"]: c for c in downgrade.candidates(g["nodes"], per_calls=calls)} if lever_on("downgrade") else {}
 
     rows = []
     for n in g["nodes"]:
@@ -40,6 +41,7 @@ def build(source_id, ws_id, project, calls=None):
         dg_usd = round(dg["usd"], 2) if dg else 0.0                       # already priced at `calls`
         rows.append({
             "key": node, "node": node, "model": n["model"], "calls": n["calls"], "cost": cost,
+            "graph_path": n.get("graph_path", ""),                 # subgraph nesting — drives the graph filter
             "cache": cd, "cache_usd": cache_usd,
             "cache_verdict": cd["verdict"] if cd else "NONE",
             "downgrade": dg, "downgrade_usd": dg_usd, "downgrade_to": dg["cheaper"] if dg else None,
@@ -48,6 +50,7 @@ def build(source_id, ws_id, project, calls=None):
     rows.sort(key=lambda r: (-r["opportunity"], -r["cost"]))
     return {
         "agent": project, "calls": calls, "rows": rows,
+        "graphs": g.get("graphs", []),                             # distinct subgraphs, for the filter control
         "total": round(sum(r["opportunity"] for r in rows), 2),
         "cache_total": round(sum(r["cache_usd"] for r in rows), 2),
         "downgrade_total": round(sum(r["downgrade_usd"] for r in rows), 2),

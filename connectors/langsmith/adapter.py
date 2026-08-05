@@ -97,6 +97,28 @@ def _runtime_ms(rec):
         return 0
 
 
+def _graph_path(meta):
+    """The call-site's graph/subgraph nesting as 'outer/inner', or '' for a single-level agent.
+
+    Derived from LangGraph's own metadata — no tree walk, no content: `langgraph_checkpoint_ns` encodes the
+    subgraph namespace (e.g. 'billing:uuid|refund:uuid' -> 'billing/refund'); we keep the node names, drop the
+    per-run uuids. Falls back to an explicit `graph`/`subgraph` hint, else ''. Fully exercised only on a real
+    subgraph export; single-level traces correctly yield ''."""
+    ns = meta.get("langgraph_checkpoint_ns") or meta.get("langgraph_path") or ""
+    if isinstance(ns, (list, tuple)):
+        ns = "|".join(str(x) for x in ns)
+    parts = [seg.split(":", 1)[0].strip() for seg in str(ns).split("|") if seg.strip()]
+    parts = [p for p in parts if p and not _is_generic_seg(p)]
+    if parts:
+        return "/".join(parts)
+    hint = meta.get("subgraph") or meta.get("graph")
+    return str(hint) if hint else ""
+
+
+def _is_generic_seg(p):
+    return p.lower() in ("", "__start__", "__end__", "langgraph")
+
+
 def _callsite(rec, meta, project, group_by):
     """Return (agent_id, node_id): agent = the agent, node = the call-site within it.
 
@@ -180,12 +202,12 @@ class LangSmithAdapter(Adapter):
         agent_id, node_id = _callsite(rec, meta, project, group_by)
         t = schema.build_trace(
             trace_id=rec.get("trace_id") or rec.get("id"),
-            agent_id=agent_id, node_id=node_id,
+            agent_id=agent_id, node_id=node_id, graph_path=_graph_path(meta),
             model=model,
             task_type=meta.get("task_type") or meta.get("ls_task") or "unknown",
             owner=meta.get("owner") or meta.get("team") or "n/a",
             input_messages=schema.norm_messages(rec.get("inputs")),
-            output=schema.extract_output(rec.get("outputs")),
+            output=schema.render_behavior(rec.get("outputs")),   # text + the original's tool call(with args) — the audit reference
             tools_defined=schema.norm_tools(inv.get("tools") or inv.get("functions")),
             tools_called=schema.tool_calls_from_output(rec.get("outputs")),
             usage=usage,
