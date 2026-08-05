@@ -9,7 +9,7 @@ report reads identical numbers on every reload. Nothing is asserted here that is
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app.services import cache_proof, audit, funnel, store
+from app.services import cache_proof, audit, funnel, graph, store
 from app.services.cache import _prefix_text, annotate_prompt
 
 
@@ -24,12 +24,6 @@ def _reorg(bucket, cd):
     return {"moved": (lines[0] if lines else "").strip(), "recover_tok": cd["recoverable_tok"]}
 
 
-def _buckets_by_node(source, ws, project):
-    from connectors.datasource import get_source
-    buckets, _ = get_source(source).pull(ws, project, limit=300)
-    return {k.split("/")[-1]: b for k, b in buckets.items()}
-
-
 def _step_msg(r):
     parts = []
     if r["cache"] and r["cache"]["verdict"] in ("CACHEABLE", "BREAKER"):
@@ -39,10 +33,13 @@ def _step_msg(r):
     return " + ".join(parts) + " · proving live" if parts else "proving live"
 
 
-def _prove_one(node, r, b):
-    """Prove ONE node (both levers if it has both). Runs in a worker thread → paid calls happen concurrently
-    across nodes. The $ only counts what actually PROVED — an unproven cache or a drifted downgrade is $0."""
-    out = {"node": node, "model": r["model"], "cost": r["cost"], "cache_usd": 0.0, "downgrade_usd": 0.0}
+def _prove_one(key, r, b):
+    """Prove ONE call-site (both levers if it has both). Runs in a worker thread → paid calls happen concurrently.
+    Identified by the UNIQUE key; `node` is the display label (may repeat across call-sites). The $ only counts what
+    actually PROVED — an unproven cache or a drifted downgrade is $0."""
+    node = r["node"]
+    out = {"key": key, "node": node, "graph_path": r.get("graph_path", ""),
+           "model": r["model"], "cost": r["cost"], "cache_usd": 0.0, "downgrade_usd": 0.0}
     cd = r["cache"]
     if cd and cd["verdict"] in ("CACHEABLE", "BREAKER") and b:
         if cd.get("mode") == "explicit":
@@ -74,28 +71,32 @@ def stream(source, ws, project, keys, calls=None):
     the frozen result. Nodes prove in parallel and each downgrade fans its inputs out too, so wall-clock is the
     slowest single node, not the sum. Paid — same number of calls as sequential, just overlapped."""
     f = funnel.build(source, ws, project, calls=calls)
-    rows = {r["node"]: r for r in f["rows"] if r["node"] in keys}
+    rows = {r["key"]: r for r in f["rows"] if r["key"] in keys}            # identity = UNIQUE key, never the label
     order = [k for k in keys if k in rows]
-    by_node = _buckets_by_node(source, ws, project)
+    # Per-call-site traces come from the graph's OWN buckets, keyed by the SAME unique key — so two call-sites that
+    # share a display label (e.g. two 'supervisor' nodes) neither collide nor audit each other's traces.
+    g = store.get_or_build((source, ws, project, "graph"), lambda: graph.build(source, ws, project))
+    by_key = g.get("buckets", {})
 
     yield {"type": "start", "total": len(order), "agent": project}
-    for node in order:                                                     # announce every node (all now in flight)
-        yield {"type": "step", "node": node, "msg": _step_msg(rows[node])}
+    for k in order:                                                        # announce every call-site (all in flight)
+        yield {"type": "step", "key": k, "node": rows[k]["node"], "msg": _step_msg(rows[k])}
 
     done = {}
     with ThreadPoolExecutor(max_workers=min(4, len(order) or 1)) as ex:
-        futs = {ex.submit(_prove_one, node, rows[node], by_node.get(node, [])): node for node in order}
+        futs = {ex.submit(_prove_one, k, rows[k], by_key.get(k, [])): k for k in order}
         for fut in as_completed(futs):
-            node = futs[fut]
+            k = futs[fut]
             try:
-                done[node] = fut.result()
-            except Exception as e:                                         # one node failing must not kill the run
-                r = rows[node]
-                done[node] = {"node": node, "model": r["model"], "cost": r["cost"],
-                              "cache_usd": 0.0, "downgrade_usd": 0.0, "error": str(e)[:200]}
-            yield {"type": "done_node", "node": node}
+                done[k] = fut.result()
+            except Exception as e:                                         # one call-site failing must not kill the run
+                r = rows[k]
+                done[k] = {"key": k, "node": r["node"], "graph_path": r.get("graph_path", ""),
+                           "model": r["model"], "cost": r["cost"],
+                           "cache_usd": 0.0, "downgrade_usd": 0.0, "error": str(e)[:200]}
+            yield {"type": "done_node", "key": k, "node": rows[k]["node"]}
 
-    results = [done[n] for n in order]                                     # stable, selection order (not finish order)
+    results = [done[k] for k in order]                                     # stable, selection order (not finish order)
     res = {"agent": project, "calls": f["calls"], "results": results,
            "cache_usd": round(sum(x.get("cache_usd", 0) for x in results), 2),
            "downgrade_usd": round(sum(x.get("downgrade_usd", 0) for x in results), 2),

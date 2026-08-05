@@ -18,6 +18,8 @@
   .tag.drift{background:rgba(179,35,29,.15);color:var(--accent,#b3231d)}
   .tag.flip{background:rgba(122,106,18,.18);color:#8a7712}
   .samp-in{flex:1;font-size:.92rem}
+  .samp-rate{font-variant-numeric:tabular-nums;font-size:.8rem;color:var(--muted,#888);white-space:nowrap}
+  .samp-rate b{color:var(--fg,#222);font-weight:600}
   .samp-why{color:var(--muted,#888);font-size:.85rem}
   .dl-note{font-size:.82rem;color:var(--muted,#888);margin:.5rem 0 0}
   .gfilter{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.2rem 0 .8rem;font-size:.85rem}
@@ -92,7 +94,7 @@
   {% if proven %}{% for x in proof.results if x.downgrade %}{% set d = x.downgrade %}
   <details class="node"{{ ' open' if loop.first else '' }}>
     <summary class="node-sum">
-      <span class="node">{{ x.node }}</span>
+      <span class="node">{{ x.node }}</span>{% if x.graph_path %}<span class="subtle"> · {{ x.graph_path }}</span>{% endif %}
       <span class="mono">{{ d.model }} → {{ d.cheaper or '—' }}</span>
       {% if d.from_tier and d.to_tier %}<span class="subtle">{{ d.from_tier }} → {{ d.to_tier }}</span>{% endif %}
       <span class="spacer"></span>
@@ -106,19 +108,20 @@
     <div class="node-body">
       {% if d.inputs %}
         <p class="subtle">Tested <b>{{ d.n }} distinct inputs × {{ d.k }} re-runs each</b> on <b>{{ d.cheaper }}</b>{% if d.to_tier %} ({{ d.to_tier }} tier{% if d.to_release %}, rel. {{ d.to_release }}{% endif %}){% endif %} — <b>{{ d.safe_inputs }}/{{ d.n }}</b> inputs preserved in <b>every</b> re-run.
-          {% if d.verdict == 'SAFE' %}All held across all repeats, so this drop is safe here.{% elif d.verdict == 'BORDERLINE' %}At least one input <b>flips</b> between runs — genuinely uncertain, so we don't recommend it.{% else %}At least one input reliably changes behavior, so keep the current model.{% endif %}</p>
+          {% if d.verdict == 'SAFE' %}Every input held up as well as the original model does on its own re-runs, so this drop is safe here.{% elif d.verdict == 'BORDERLINE' %}At least one input is uncertain — the cheaper model drifted more than the original does on its own, or the recorded output isn't reliably reproducible — so we don't recommend it.{% else %}At least one input reliably changed behavior beyond the original's own noise, so keep the current model.{% endif %}</p>
         <div class="samples">
           {% for r in d.inputs %}
           <div class="samp-row">
-            {% if r.verdict == 'SAFE' %}<span class="tag kept">safe {{ r.kept }}/{{ r.k }}</span>
-            {% elif r.verdict == 'NOT-SAFE' %}<span class="tag drift">drifts {{ r.kept }}/{{ r.k }}</span>
-            {% else %}<span class="tag flip">flips {{ r.kept }}/{{ r.k }}</span>{% endif %}
-            <span class="samp-in">{{ (r.input or '(input)') | truncate(100, true) }}</span>
-            <span class="samp-why">{{ r.reason }}</span>
+            {% if r.verdict == 'SAFE' %}<span class="tag kept">safe</span>
+            {% elif r.verdict == 'NOT-SAFE' %}<span class="tag drift">not safe</span>
+            {% else %}<span class="tag flip">borderline</span>{% endif %}
+            <span class="samp-rate">cheaper <b>{{ r.kept }}/{{ r.k }}</b>{% if r.self_kept is not none %} · baseline <b>{{ r.self_kept }}/{{ r.k }}</b>{% endif %}</span>
+            <span class="samp-in">{{ (r.input or '(input)') | truncate(90, true) }}</span>
+            <span class="samp-why">{{ r.note or r.reason }}</span>
           </div>
           {% endfor %}
         </div>
-        <p class="dl-note">Reasons only, on screen. The full before/after for every input is in the <a href="{{ base }}/report/download">downloadable report</a>.</p>
+        <p class="dl-note"><b>baseline</b> = how often the original model reproduced its own recorded output on re-run; the cheaper model is judged against that noise floor, not a fixed bar (shown only where the cheaper model wasn't already perfect). Reasons only, on screen — the full before/after for every input is in the <a href="{{ base }}/report/download">downloadable report</a>.</p>
       {% else %}
         <p class="subtle">{{ d.reason }}</p>
       {% endif %}
@@ -183,8 +186,8 @@
     keys.forEach(k => { const el = document.createElement('li'); el.textContent = k; steps.appendChild(el); li[k] = el; });
     const es = new EventSource(BASE + '/prove-stream?keys=' + encodeURIComponent(keys.join(',')));
     let done = 0;
-    es.addEventListener('step', e => { const d = JSON.parse(e.data); if (li[d.node]) { li[d.node].className = 'on'; li[d.node].textContent = d.node + ' — ' + d.msg; } });
-    es.addEventListener('done_node', e => { const d = JSON.parse(e.data); if (li[d.node]) { li[d.node].className = 'ok'; li[d.node].textContent = d.node + ' — proven'; } fill.style.width = Math.round(++done / keys.length * 100) + '%'; });
+    es.addEventListener('step', e => { const d = JSON.parse(e.data); const el = li[d.key]; if (el) { el.className = 'on'; el.textContent = d.node + ' — ' + d.msg; } });
+    es.addEventListener('done_node', e => { const d = JSON.parse(e.data); const el = li[d.key]; if (el) { el.className = 'ok'; el.textContent = d.node + ' — proven'; } fill.style.width = Math.round(++done / keys.length * 100) + '%'; });
     es.addEventListener('complete', async () => {
       es.close(); fill.style.width = '100%';
       const doc = new DOMParser().parseFromString(await (await fetch(location.href, { cache: 'no-store' })).text(), 'text/html');

@@ -33,8 +33,8 @@ def _canonical_model(raw):
 TRACE_VERSION = 1
 ROLES = ("system", "user", "assistant", "tool")
 TRACE_FIELDS = ("trace_id", "agent_id", "node_id", "graph_path", "owner", "model", "task_type", "source",
-                "thinking_enabled", "input_messages", "tools_defined", "tools_called", "output", "usage",
-                "error", "runtime_ms")
+                "thinking_enabled", "input_messages", "tools_defined", "tools_called", "tool_choice", "output",
+                "usage", "error", "runtime_ms")
 
 # platform message class / type / role -> contract role
 _ROLE = {
@@ -71,7 +71,7 @@ def norm_content(c):
 
 
 def build_trace(*, trace_id, agent_id, model, input_messages, output, usage, node_id="", graph_path="",
-                tools_defined=(), tools_called=(), task_type="unknown",
+                tools_defined=(), tools_called=(), tool_choice=None, task_type="unknown",
                 owner="n/a", source="", thinking_enabled=False, error="", runtime_ms=0):
     """Assemble a contract-valid trace. `model` is resolved against the catalog; if unknown it is kept
     verbatim and flagged (model_known=False) so the caller can surface / add it.
@@ -97,6 +97,7 @@ def build_trace(*, trace_id, agent_id, model, input_messages, output, usage, nod
                            for m in (input_messages or []) if isinstance(m, dict)],
         "tools_defined": [list(t) for t in tools_defined],
         "tools_called": list(tools_called),
+        "tool_choice": tool_choice,      # recorded selection policy (auto/required/specific-tool), raw form; None if unset
         "output": output or "",
         "error": str(error or ""),
         "runtime_ms": int(runtime_ms or 0),

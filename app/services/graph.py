@@ -31,4 +31,7 @@ def build(source_id, ws_id, project, limit=300):
         })
     nodes.sort(key=lambda x: -x["avg_out"])
     graphs = sorted({n["graph_path"] for n in nodes if n["graph_path"]})
-    return {"agent": g.agent, "nodes": nodes, "edges": g.edges, "graphs": graphs, "skipped": len(skipped)}
+    # buckets are keyed by the UNIQUE call-site key (same as each node's "key"), so a consumer can fetch exactly
+    # that call-site's traces — two nodes sharing a display label (e.g. two 'supervisor') never cross-contaminate.
+    return {"agent": g.agent, "nodes": nodes, "edges": g.edges, "graphs": graphs,
+            "buckets": g.buckets, "skipped": len(skipped)}

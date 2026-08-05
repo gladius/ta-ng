@@ -83,10 +83,16 @@ _TIER_RANK = {"frontier": 0, "balanced": 1, "small": 2, "nano": 3}     # capabil
 
 
 def next_cheaper(model):
-    """The gentlest downgrade target: the MOST-capable callable model exactly one capability TIER below `model`,
-    in the SAME provider (or None). Driven by catalog `tier`, NOT file order — so a cheaper *newer* model in the
-    same tier is never treated as a downgrade, and an *older pricier* higher tier is never mistaken for one. Falls
-    back to legacy price/file order for a model that has no tier."""
+    """The gentlest downgrade target that is ACTUALLY cheaper: the most-capable callable model in the nearest
+    lower capability TIER whose price is <= this model's on BOTH input AND output (a real drop on every axis),
+    same provider (or None).
+
+    Why the both-axes test: pricing is NOT monotonic with tier — a newer premium 'flash' can cost MORE per input
+    token than an older, soon-retiring 'pro' (e.g. gemini-3.6-flash $1.50-in vs gemini-2.5-pro $1.25-in). Picking
+    'most capable in the next tier' alone then lands on a target that's pricier on input, and an input-heavy node
+    shows a near-zero saving. Requiring Pareto-cheaper skips those and picks the most capable model that genuinely
+    costs less (gemini-2.5-pro -> gemini-3-flash, not 3.6-flash). Falls back to legacy file order for an untier'd
+    model, and keeps a candidate whose price is unknown (can't test it, don't silently drop it)."""
     m = canonical_model(model) or model
     info = _ORDER.get(m)
     if not info:
@@ -98,12 +104,21 @@ def next_cheaper(model):
             if _CALLABLE.get(sibs[j], True):
                 return sibs[j]
         return None
-    cands = [(s, _TIER_RANK.get(_ORDER[s].get("tier"), 99), PRICE.get(s, {}).get("input", 0))
-             for s in info["siblings"]
-             if _CALLABLE.get(s, True) and _TIER_RANK.get(_ORDER[s].get("tier"), 99) > cur]
+    p0 = PRICE.get(m, {})
+    in0, out0 = p0.get("input"), p0.get("output")
+    cands = []
+    for s in info["siblings"]:
+        r = _TIER_RANK.get(_ORDER[s].get("tier"), 99)
+        if not (_CALLABLE.get(s, True) and r > cur):                  # callable + strictly lower capability tier
+            continue
+        ps = PRICE.get(s, {})
+        si, so = ps.get("input"), ps.get("output")
+        if None not in (in0, out0, si, so) and not (si <= in0 and so <= out0 and (si < in0 or so < out0)):
+            continue                                                  # not cheaper on both axes -> illusory drop, skip
+        cands.append((s, r, ps.get("input", 0)))
     if not cands:
         return None
-    nearest = min(r for _, r, _ in cands)                             # the nearest lower tier that has a model
+    nearest = min(r for _, r, _ in cands)                             # nearest lower tier that HAS a real-drop model
     return max(((s, p) for s, r, p in cands if r == nearest), key=lambda x: x[1])[0]   # most capable in it
 
 

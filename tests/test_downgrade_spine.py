@@ -7,6 +7,7 @@ from collections import OrderedDict
 from connectors.langsmith.adapter import LangSmithAdapter, _graph_path
 from connectors.datasource import DataSource
 from app.services import graph as gmod, downgrade
+from auditor.util import next_cheaper, PRICE
 
 _SAMPLE = os.path.join("connectors", "langsmith", "sample_runs.json")
 
@@ -45,6 +46,58 @@ def test_graph_path_parser():
     print("[ok] graph_path parser")
 
 
+def test_pareto_ladder():
+    # The downgrade target must be cheaper on BOTH axes. gemini-2.5-pro ($1.25/$10): the newer gemini-3.6-flash
+    # ($1.50/$7.50) is PRICIER on input, so it must NOT be chosen — 3-flash ($0.50/$3.0) is the real drop.
+    tgt = next_cheaper("gemini-2.5-pro")
+    assert tgt == "gemini-3-flash", "2.5-pro must skip the pricier-input flash: got %s" % tgt
+    assert PRICE[tgt]["input"] <= PRICE["gemini-2.5-pro"]["input"] and PRICE[tgt]["output"] <= PRICE["gemini-2.5-pro"]["output"]
+    # healthy cases unchanged: 3.1-pro -> 3.6-flash IS cheaper on both, and sonnet-5 -> haiku-4-5 as before.
+    assert next_cheaper("gemini-3.1-pro") == "gemini-3.6-flash", next_cheaper("gemini-3.1-pro")
+    assert next_cheaper("claude-sonnet-5") == "claude-haiku-4-5", next_cheaper("claude-sonnet-5")
+    print("[ok] pareto ladder: 2.5-pro -> 3-flash (skips pricier-input 3.6-flash); healthy drops unchanged")
+
+
+def test_thinking_detection():
+    ad = LangSmithAdapter()
+
+    def rec(tok_details=None, inv_extra=None):
+        um = {"prompt_tokens": 100, "completion_tokens": 10}
+        if tok_details is not None:
+            um["completion_tokens_details"] = tok_details
+        return {"run_type": "llm", "id": "1", "trace_id": "t", "name": "ChatX",
+                "inputs": {"messages": [{"role": "user", "content": "hi"}]},
+                "outputs": {"llm_output": {"token_usage": um}},
+                "extra": {"metadata": {"agent_id": "a", "langgraph_node": "n"},
+                          "invocation_params": dict({"model": "claude-sonnet-5"}, **(inv_extra or {}))},
+                "prompt_tokens": 100, "completion_tokens": 10}
+
+    # 1) reasoning-token COUNT (the universal signal — how it looks through a litellm/OpenAI-normalized gateway)
+    assert ad.to_trace(rec(tok_details={"reasoning_tokens": 64}))["thinking_enabled"] is True
+    # 2) invocation param flag (reasoning_effort / thinking), no token detail
+    assert ad.to_trace(rec(inv_extra={"reasoning_effort": "high"}))["thinking_enabled"] is True
+    # 3) no signal -> not thinking (don't force reasoning onto a plain node)
+    assert ad.to_trace(rec())["thinking_enabled"] is False
+    print("[ok] thinking detected from reasoning_tokens (litellm-uniform) AND param flags; off when absent")
+
+
+def test_same_label_distinct_keys():
+    # Two call-sites share the display label 'supervisor' but are DISTINCT call-sites (distinct keys). They must
+    # stay two rows and both survive prove's key-indexed dict — the old label-keyed dict silently dropped one.
+    nodes = [
+        {"key": "agent/supervisor~plan", "node": "supervisor", "model": "claude-sonnet-5",
+         "avg_in": 2000, "avg_out": 300, "calls": 10, "graph_path": "researcher"},
+        {"key": "agent/supervisor~critique", "node": "supervisor", "model": "claude-sonnet-5",
+         "avg_in": 2000, "avg_out": 300, "calls": 10, "graph_path": "writer"},
+    ]
+    cands = downgrade.candidates(nodes, per_calls=10000)
+    assert len(cands) == 2 and {c["key"] for c in cands} == {"agent/supervisor~plan", "agent/supervisor~critique"}
+    assert all(c["node"] == "supervisor" for c in cands)
+    assert len({c["key"]: c for c in cands}) == 2, "key-indexed (the fix): both kept"
+    assert len({c["node"]: c for c in cands}) == 1, "label-indexed (the old bug): WOULD collapse to one"
+    print("[ok] same-label call-sites keep distinct keys through candidates + prove indexing")
+
+
 def test_spine():
     traces = _parse_sample()
     assert len(traces) == 4, "4 llm runs parsed, the chain span skipped (got %d)" % len(traces)
@@ -69,5 +122,8 @@ def test_spine():
 
 if __name__ == "__main__":
     test_graph_path_parser()
+    test_pareto_ladder()
+    test_thinking_detection()
+    test_same_label_distinct_keys()
     test_spine()
     print("\nALL DETERMINISTIC SPINE TESTS PASSED ($0, no network)")

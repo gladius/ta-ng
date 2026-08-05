@@ -199,6 +199,16 @@ class LangSmithAdapter(Adapter):
         usage = {"input_tokens": pt if pt is not None else um.get("prompt_tokens", 0),
                  "output_tokens": ct if ct is not None else um.get("completion_tokens", 0),
                  "cached_tokens": int(cached or 0), "cache_write_tokens": int(written or 0)}
+        # THINKING / extended-reasoning detection — multi-signal so it works native AND through a litellm gateway
+        # (litellm normalizes usage to the OpenAI shape, where reasoning shows up as reasoning_tokens). The token
+        # COUNT is the strongest signal: >0 means the model actually reasoned, regardless of provider.
+        det = (um.get("completion_tokens_details") or rec.get("completion_tokens_details")
+               or ((rec.get("outputs") or {}).get("llm_output") or {}).get("completion_tokens_details") or {})
+        reasoning_tok = int((det.get("reasoning_tokens") if isinstance(det, dict) else 0)
+                            or um.get("reasoning_tokens") or 0)
+        thinking_enabled = bool(reasoning_tok) or bool(
+            inv.get("reasoning_effort") or inv.get("thinking") or inv.get("thinking_budget")
+            or inv.get("reasoning") or (inv.get("extra_body") or {}).get("thinking"))
         agent_id, node_id = _callsite(rec, meta, project, group_by)
         t = schema.build_trace(
             trace_id=rec.get("trace_id") or rec.get("id"),
@@ -210,6 +220,8 @@ class LangSmithAdapter(Adapter):
             output=schema.render_behavior(rec.get("outputs")),   # text + the original's tool call(with args) — the audit reference
             tools_defined=schema.norm_tools(inv.get("tools") or inv.get("functions")),
             tools_called=schema.tool_calls_from_output(rec.get("outputs")),
+            tool_choice=inv.get("tool_choice"),          # replayed so a FORCED tool call is reproduced, not lost
+            thinking_enabled=thinking_enabled,           # so replay reproduces extended reasoning (native or via litellm)
             usage=usage,
             error=rec.get("error") or "",
             runtime_ms=_runtime_ms(rec),

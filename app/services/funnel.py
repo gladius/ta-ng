@@ -1,12 +1,12 @@
 """Funnel — merge the two deterministic detectors into one ranked, priced view of an agent's call-sites.
 
 Detection is $0: for every call-site we already know the cache verdict (cache.detect) and whether a cheaper tier
-applies (downgrade.candidates). This joins them by node, prices both on ONE assumed monthly volume so the numbers
+applies (downgrade.candidates). This joins them by node, prices both on ONE fixed calls basis so the numbers
 reconcile, and ranks costliest-first — the shortlist the user proves. Nothing here is paid; proof is prove.py.
 """
 from auditor.util import PRICE, canonical_model
 from app.services import cache, downgrade
-from app.config import DISPLAY_CALLS, lever_on
+from app.config import CALLS_BASIS, lever_on
 
 
 def _price(model):
@@ -17,7 +17,7 @@ def build(source_id, ws_id, project, calls=None):
     """Ranked opportunities for an agent. Deterministic, $0. Shape is what the report/select pages render."""
     from connectors.datasource import get_source
     from app.services import graph, store
-    calls = calls or DISPLAY_CALLS
+    calls = calls or CALLS_BASIS
 
     g = store.get_or_build((source_id, ws_id, project, "graph"),
                            lambda: graph.build(source_id, ws_id, project))
@@ -29,18 +29,18 @@ def build(source_id, ws_id, project, calls=None):
             d = cache.detect(b, model=b[0].get("model"))
             if d:
                 cache_by[k.split("/")[-1]] = d
-    dg_by = {c["node"]: c for c in downgrade.candidates(g["nodes"], per_calls=calls)} if lever_on("downgrade") else {}
+    dg_by = {c["key"]: c for c in downgrade.candidates(g["nodes"], per_calls=calls)} if lever_on("downgrade") else {}
 
     rows = []
     for n in g["nodes"]:
-        node, p = n["node"], _price(n["model"])
+        node, p = n["node"], _price(n["model"])              # node = display label (may repeat across call-sites)
         cost = round((n["avg_in"] * p.get("input", 0) + n["avg_out"] * p.get("output", 0)) / 1e6 * calls, 2)
-        cd = cache_by.get(node)
+        cd = cache_by.get(node)          # NOTE: cache lever is off; if re-enabled, key cache_by by n["key"] too
         cache_usd = round(cd["save_per_1k"] * calls / 1000, 2) if (cd and cd["cacheable"]) else 0.0
-        dg = dg_by.get(node)
+        dg = dg_by.get(n["key"])                             # join by the UNIQUE key, never the label
         dg_usd = round(dg["usd"], 2) if dg else 0.0                       # already priced at `calls`
         rows.append({
-            "key": node, "node": node, "model": n["model"], "calls": n["calls"], "cost": cost,
+            "key": n["key"], "node": node, "model": n["model"], "calls": n["calls"], "cost": cost,
             "graph_path": n.get("graph_path", ""),                 # subgraph nesting — drives the graph filter
             "cache": cd, "cache_usd": cache_usd,
             "cache_verdict": cd["verdict"] if cd else "NONE",

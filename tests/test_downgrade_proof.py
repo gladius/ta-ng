@@ -1,15 +1,28 @@
-"""Proof-path logic — the DETERMINISTIC parts of the repeat-and-vote downgrade audit, no network ($0).
+"""Proof-path logic — the DETERMINISTIC verdict math of the downgrade audit, no network ($0).
 
-We stub the two paid calls (`replay`, `judge_preserved`) and assert the verdict math:
-  - cheaper always preserves  -> every input K/K  -> node SAFE
-  - cheaper always drifts      -> every input 0/K -> node NOT-SAFE
-  - one input flips run-to-run -> that input 1..K-1 -> node BORDERLINE (the anti-flip guarantee)
-  - too few distinct inputs    -> LOW-EVIDENCE, and nothing is replayed
-Plus the behavior renderer (tool call folded into the output the ONE judge sees).
+We stub the two paid calls (`replay`, `judge_preserved`). `replay` returns the MODEL NAME so the judge stub can
+tell which model produced an answer (cheaper vs. the original re-runs of the self-variance baseline), and each side
+gets its own preserve/drift pattern. Then we assert the two-stage verdict:
+
+  Stage 1 (cheaper, N x K): cheaper PERFECT (K/K) -> SAFE, and the baseline never runs (cost-free on clean nodes).
+  Stage 2 (self-variance, DOUBTFUL inputs only): re-run the ORIGINAL to get its own noise floor, judge cheaper
+                                                 RELATIVE to it. recorded output = the free +1 anchor.
+    - original steady, cheaper one worse   -> BORDERLINE   (tightens a would-be false SAFE)
+    - cheaper as steady as a noisy original-> SAFE         (the drift was noise, not the downgrade)
+    - original can't reproduce itself      -> BORDERLINE   (unreliable anchor)
+    - cheaper clearly worse than original  -> NOT-SAFE
+  Plus the fallback (baseline OFF -> flat AUDIT_SAFE_RATIO), low-evidence abstain, and the behavior renderer.
 
 Run: python -m tests.test_downgrade_proof   (from repo root)
 """
+import json
+from contextlib import contextmanager
+
+from auditor.util import canonical_model, next_cheaper
 from app.services import audit
+
+ORIG = canonical_model("claude-sonnet-5") or "claude-sonnet-5"
+CHEAP = next_cheaper(ORIG)                    # claude-haiku-4-5
 
 
 def _trace(user, model="claude-sonnet-5"):
@@ -24,6 +37,87 @@ _BUCKET = [_trace("charge on order 123 double billed"), _trace("cannot login sso
            _trace("refund for subscription renewal i cancelled")]
 
 
+def _every(mod):
+    """Stateful predicate: preserve EVERY call EXCEPT every `mod`-th one (which drifts). With max_parallel=1 the
+    tasks run in per-input order, so _every(k) drifts exactly once per k-run input."""
+    st = {"n": 0}
+    def f():
+        st["n"] += 1
+        return (st["n"] % mod) != 0
+    return f
+
+
+_ALWAYS = lambda: True
+_NEVER = lambda: False
+
+
+@contextmanager
+def _patch(cheap_pred, self_pred, baseline=True):
+    """Stub replay -> model name, and judge -> per-side predicate. Sequential (max_parallel=1) for determinism."""
+    saved = (audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL, audit.AUDIT_SELF_BASELINE)
+    audit.replay = lambda t, m, max_tokens=None: m
+    audit.judge_preserved = lambda req, a, b, model=None: ((self_pred if b == ORIG else cheap_pred)(), "why")
+    audit.AUDIT_MAX_PARALLEL = 1
+    audit.AUDIT_SELF_BASELINE = baseline
+    try:
+        yield
+    finally:
+        audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL, audit.AUDIT_SELF_BASELINE = saved
+
+
+def test_tool_schema_both_formats():
+    # Replay must bind the tool's REAL parameter schema whether the trace stored it Anthropic-style (input_schema)
+    # or OpenAI/LangChain-style (parameters). If we only read input_schema, an OpenAI-format tool binds EMPTY and
+    # the cheaper model can't reproduce the recorded call -> false 'wrong tool/args' drift on production traces.
+    oai = json.dumps({"name": "issue_refund", "description": "refund",
+                      "parameters": {"type": "object", "properties": {"id": {"type": "string"},
+                                                                      "amount": {"type": "number"}}, "required": ["id"]}})
+    anth = json.dumps({"name": "set_category", "description": "triage",
+                       "input_schema": {"type": "object", "properties": {"category": {"type": "string"}}}})
+    out = audit._tools({"tools_defined": [["issue_refund", oai], ["set_category", anth]]})
+    by = {t["name"]: t for t in out}
+    assert set(by["issue_refund"]["schema"]["properties"]) == {"id", "amount"}, "OpenAI `parameters` must bind"
+    assert set(by["set_category"]["schema"]["properties"]) == {"category"}, "Anthropic `input_schema` still works"
+    # neither key present -> safe empty fallback (no crash)
+    empty = audit._tools({"tools_defined": [["x", json.dumps({"name": "x"})]]})
+    assert empty[0]["schema"] == {"type": "object", "properties": {}}
+    print("[ok] tool schema binds from BOTH input_schema (Anthropic) and parameters (OpenAI/LangChain)")
+
+
+def test_tool_choice_conversion():
+    tc = audit._tool_choice          # -> NEUTRAL form (llm_client translates to the provider)
+    assert tc("required") == "any" and tc({"type": "required"}) == "any"
+    assert tc("auto") is None and tc(None) is None and tc("none") is None
+    assert tc({"type": "function", "function": {"name": "issue_refund"}}) == {"tool": "issue_refund"}
+    assert tc({"type": "tool", "name": "x"}) == {"tool": "x"}
+    assert tc("issue_refund") == {"tool": "issue_refund"}                           # bare tool-name form
+    # the provider boundary maps neutral -> Anthropic
+    assert audit.llm_client._anthropic_tool_choice("any") == {"type": "any"}
+    assert audit.llm_client._anthropic_tool_choice({"tool": "x"}) == {"type": "tool", "name": "x"}
+    print("[ok] tool_choice -> neutral (auto/none -> don't force); llm_client maps neutral -> Anthropic")
+
+
+def test_replay_forwards_tools_and_choice():
+    # End-to-end wiring: replay must bind the tool with its REAL schema AND forward a forced tool_choice, so a
+    # node that forced a tool reproduces the call instead of drifting. Stub the client to capture the kwargs.
+    captured = {}
+    class _R:
+        content = []
+    orig = audit.llm_client.complete
+    audit.llm_client.complete = lambda **kw: (captured.update(kw), _R())[1]
+    try:
+        tr = {"model": "claude-sonnet-5", "input_messages": [{"role": "user", "content": "refund order 1"}],
+              "tools_defined": [["issue_refund", json.dumps({"name": "issue_refund",
+                    "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}})]],
+              "tool_choice": "required", "usage": {"output_tokens": 5}}
+        audit.replay(tr, "claude-haiku-4-5")
+    finally:
+        audit.llm_client.complete = orig
+    assert captured.get("tool_choice") == {"type": "any"}, captured.get("tool_choice")
+    assert captured.get("tools") and set(captured["tools"][0]["input_schema"]["properties"]) == {"id"}, "real schema bound"
+    print("[ok] replay binds real tool schema + forwards forced tool_choice")
+
+
 def test_render():
     r = audit._render("Looking it up.", [{"name": "set_category", "args": {"category": "billing"}}])
     assert "Looking it up." in r and "set_category" in r and '"category": "billing"' in r
@@ -31,77 +125,87 @@ def test_render():
     print("[ok] behavior renderer folds tool call into output")
 
 
-def _run(judge_fn):
-    orig = (audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL)
-    audit.replay = lambda t, m, max_tokens=None: "CHEAPER"
-    audit.judge_preserved = judge_fn
-    audit.AUDIT_MAX_PARALLEL = 1                 # sequential -> deterministic order for the alternating-judge case
-    try:
-        return audit.audit_node("node", _BUCKET, n=5, k=5)
-    finally:
-        audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL = orig
-
-
-def test_safe():
-    r = _run(lambda req, a, b, model=None: (True, "same decision"))
+def test_safe_no_baseline():
+    # cheaper is PERFECT on every input -> SAFE, and the baseline must NOT run (self_kept stays None).
+    with _patch(_ALWAYS, _NEVER):        # self_pred would fail if ever consulted; it must not be
+        r = audit.audit_node("node", _BUCKET, n=5, k=3)
     assert r["verdict"] == "SAFE", r["verdict"]
-    assert r["safe_inputs"] == 5 and all(i["kept"] == 5 for i in r["inputs"])
-    print("[ok] all preserved -> SAFE (5 inputs x 5/5)")
+    assert r["safe_inputs"] == 5 and all(i["kept"] == 3 and i["self_kept"] is None for i in r["inputs"])
+    print("[ok] cheaper perfect -> SAFE, baseline skipped (no extra cost)")
 
 
 def test_not_safe():
-    r = _run(lambda req, a, b, model=None: (False, "dropped policy"))
+    # cheaper always drifts, original is rock-steady -> clearly worse than the noise floor -> NOT-SAFE.
+    with _patch(_NEVER, _ALWAYS):
+        r = audit.audit_node("node", _BUCKET, n=5, k=3)
     assert r["verdict"] == "NOT-SAFE", r["verdict"]
-    assert all(i["kept"] == 0 for i in r["inputs"])
-    print("[ok] all drift -> NOT-SAFE")
+    bad = r["inputs"][0]
+    assert bad["kept"] == 0 and bad["self_kept"] == 3, bad
+    print("[ok] cheaper 0/3 vs original 3/3 -> NOT-SAFE")
 
 
-def test_borderline_flip():
-    # one input flips (alternating verdicts) -> lands between 0 and K -> BORDERLINE node (this is the anti-flip fix)
-    state = {"n": 0}
-    def judge(req, a, b, model=None):
-        state["n"] += 1
-        return (state["n"] % 2 == 0, "flip")
-    r = _run(judge)
+def test_deterministic_tightens_to_borderline():
+    # THE no-false-SAFE fix: original is deterministic (3/3), cheaper drifts once (2/3). The flat 0.66 rule would
+    # call 2/3 SAFE; relative to a model that NEVER drifts, that one drift is real -> BORDERLINE.
+    with _patch(_every(3), _ALWAYS):
+        r = audit.audit_node("node", _BUCKET, n=5, k=3)
     assert r["verdict"] == "BORDERLINE", r["verdict"]
-    assert any(0 < i["kept"] < i["k"] for i in r["inputs"]), "at least one input flipped mid-range"
-    print("[ok] a flipping input -> BORDERLINE (not a coin-flip SAFE/NOT-SAFE)")
+    i0 = r["inputs"][0]
+    assert i0["kept"] == 2 and i0["self_kept"] == 3 and i0["verdict"] == "BORDERLINE", i0
+    print("[ok] original 3/3 vs cheaper 2/3 -> BORDERLINE (tightens a would-be false SAFE)")
 
 
-def test_safe_tolerates_one_drift():
-    # 2/3 rule: an input where the cheaper model preserved in >=2/3 of re-runs is SAFE (one drift tolerated).
-    state = {"n": 0}
-    def judge(req, a, b, model=None):
-        state["n"] += 1
-        return (state["n"] % 3 != 0, "one-in-three drift")   # per input's 3 re-runs (n=1,2,3): keep, keep, DRIFT -> 2/3
-    orig = (audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL)
-    audit.replay = lambda t, m, max_tokens=None: "CHEAPER"; audit.judge_preserved = judge; audit.AUDIT_MAX_PARALLEL = 1
-    try:
-        r = audit.audit_node("node", _BUCKET, n=5, k=3)      # k=3 so 2/3 = one drift tolerated
-    finally:
-        audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL = orig
+def test_matches_noise_is_safe():
+    # cheaper drifts once (2/3), but the original is ITSELF noisy and also lands 2/3 -> cheaper is no worse than the
+    # model's own noise -> SAFE. (self: recorded +1, then _every(2) drifts one of the 2 re-runs -> 1+1 = 2/3.)
+    with _patch(_every(3), _every(2)):
+        r = audit.audit_node("node", _BUCKET, n=5, k=3)
     assert r["verdict"] == "SAFE", r["verdict"]
-    print("[ok] 2/3 rule: one drift in three -> input still SAFE")
+    i0 = r["inputs"][0]
+    assert i0["kept"] == 2 and i0["self_kept"] == 2 and i0["verdict"] == "SAFE", i0
+    print("[ok] cheaper 2/3 vs equally-noisy original 2/3 -> SAFE (drift was noise, not the downgrade)")
+
+
+def test_noisy_anchor_is_borderline():
+    # original can barely reproduce its own recorded output (self 1/3 < floor) -> the recorded anchor is unreliable,
+    # so we refuse a confident SAFE/NOT-SAFE even though the cheaper looks okay (2/3) -> BORDERLINE.
+    with _patch(_every(3), _NEVER):      # self: recorded +1, both re-runs drift -> self_kept = 1
+        r = audit.audit_node("node", _BUCKET, n=5, k=3)
+    assert r["verdict"] == "BORDERLINE", r["verdict"]
+    i0 = r["inputs"][0]
+    assert i0["self_kept"] == 1 and i0["verdict"] == "BORDERLINE", i0
+    print("[ok] original 1/3 (unreliable anchor) -> BORDERLINE regardless of cheaper")
+
+
+def test_fallback_ratio_when_baseline_off():
+    # baseline disabled -> flat AUDIT_SAFE_RATIO rule: 2/3 >= 0.66 -> SAFE, and no self_kept is ever computed.
+    with _patch(_every(3), _NEVER, baseline=False):
+        r = audit.audit_node("node", _BUCKET, n=5, k=3)
+    assert r["verdict"] == "SAFE", r["verdict"]
+    assert all(i["self_kept"] is None for i in r["inputs"]), "baseline off -> no self-variance calls"
+    print("[ok] baseline OFF -> falls back to flat 0.66 ratio (2/3 -> SAFE)")
 
 
 def test_low_evidence():
     calls = {"n": 0}
-    orig_r = audit.replay
-    audit.replay = lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), "x")[1]
-    try:
-        r = audit.audit_node("node", [_trace("only one ticket")], n=5, k=5)   # 1 distinct < MIN_EVIDENCE
-    finally:
-        audit.replay = orig_r
+    with _patch(_ALWAYS, _ALWAYS):
+        audit.replay = lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), "x")[1]
+        r = audit.audit_node("node", [_trace("only one ticket")], n=5, k=3)   # 1 distinct < MIN_EVIDENCE
     assert r["verdict"] == "LOW-EVIDENCE", r["verdict"]
     assert calls["n"] == 0, "abstain must NOT spend any replay"
     print("[ok] < min evidence -> LOW-EVIDENCE, zero spend")
 
 
 if __name__ == "__main__":
+    test_tool_schema_both_formats()
+    test_tool_choice_conversion()
+    test_replay_forwards_tools_and_choice()
     test_render()
-    test_safe()
+    test_safe_no_baseline()
     test_not_safe()
-    test_borderline_flip()
-    test_safe_tolerates_one_drift()
+    test_deterministic_tightens_to_borderline()
+    test_matches_noise_is_safe()
+    test_noisy_anchor_is_borderline()
+    test_fallback_ratio_when_baseline_off()
     test_low_evidence()
     print("\nALL PROOF-PATH TESTS PASSED ($0, no network)")

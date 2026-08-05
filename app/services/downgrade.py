@@ -22,7 +22,7 @@ def candidates(nodes, per_calls=1000):
                  + n["avg_out"] * (p["output"] - cp["output"])) / 1e6) * per_calls
         if save <= 0:
             continue
-        out.append({"node": n["node"], "model": model, "cheaper": cheaper,
+        out.append({"key": n["key"], "node": n["node"], "model": model, "cheaper": cheaper,
                     "avg_out": n["avg_out"], "calls": n["calls"],
                     "usd": round(save, 2), "per_calls": per_calls})
     return sorted(out, key=lambda x: -x["usd"])

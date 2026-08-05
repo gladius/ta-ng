@@ -60,8 +60,11 @@ def _node_md(x, d):
         return "\n".join(L + [d.get("reason", "")]) + "\n"
     L.append("Tested %d distinct inputs × %d re-runs each on %s.\n" % (d.get("n", 0), d.get("k", 0), d.get("cheaper", "-")))
     for i, r in enumerate(d["inputs"], 1):
-        L.append("## input-%d — %s (%d/%d kept)" % (i, r["verdict"], r["kept"], r["k"]))
-        L.append("- reason: %s" % r.get("reason", ""))
+        rate = "cheaper %d/%d" % (r["kept"], r["k"])
+        if r.get("self_kept") is not None:
+            rate += ", baseline %d/%d" % (r["self_kept"], r["k"])
+        L.append("## input-%d — %s (%s)" % (i, r["verdict"], rate))
+        L.append("- reason: %s" % (r.get("note") or r.get("reason", "")))
         L.append("- request: %s" % (r.get("input", "")[:200] + ("…" if len(r.get("input", "")) > 200 else "")))
         L.append("- files: `input-%d/original.txt` vs `input-%d/run-*.txt` (filenames marked kept/drift)" % (i, i))
         L.append("")
@@ -77,8 +80,8 @@ def build_zip(f, proof):
             d = x.get("downgrade")
             if not d:
                 continue
-            node = _slug(x["node"])
-            z.writestr("%s/nodes/%s/verdicts.md" % (_ROOT, node), _node_md(x, d))
+            node = _slug(x.get("key") or x["node"])          # slug the UNIQUE key so two same-labelled call-sites
+            z.writestr("%s/nodes/%s/verdicts.md" % (_ROOT, node), _node_md(x, d))   # get distinct folders, not one
             for i, r in enumerate(d.get("inputs", []), 1):
                 base = "%s/nodes/%s/input-%d" % (_ROOT, node, i)
                 z.writestr("%s/input.txt" % base, r.get("input", ""))
@@ -86,4 +89,7 @@ def build_zip(f, proof):
                 for j, s in enumerate(r.get("samples", []), 1):
                     tag = "kept" if s.get("preserved") else "drift"
                     z.writestr("%s/run-%d.%s.txt" % (base, j, tag), s.get("output", ""))
+                for j, s in enumerate(r.get("baseline", []), 1):   # original's own re-runs (self-variance)
+                    tag = "kept" if s.get("preserved") else "drift"
+                    z.writestr("%s/baseline-%d.%s.txt" % (base, j, tag), s.get("output", ""))
     return buf.getvalue()
