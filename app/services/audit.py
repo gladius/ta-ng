@@ -21,7 +21,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from auditor.util import canonical_model, next_cheaper, tier, release, max_output
 from app.services import llm_client
-from app.config import AUDIT_SAMPLES, AUDIT_REPEATS, AUDIT_MIN_EVIDENCE, AUDIT_MAX_PARALLEL, AUDIT_JUDGE_MAX_CHARS
+from app.config import (AUDIT_SAMPLES, AUDIT_REPEATS, AUDIT_MIN_EVIDENCE, AUDIT_MAX_PARALLEL,
+                        AUDIT_JUDGE_MAX_CHARS, AUDIT_SAFE_RATIO)
 
 JUDGE_MODEL = "claude-sonnet-5"        # a capable judge — judge quality is the crux
 
@@ -174,11 +175,12 @@ def _distinct(traces, n):
 
 
 def _one_repeat(trace, cheaper):
-    """One independent proof: the ORIGINAL's recorded behavior vs ONE fresh cheaper re-run. -> {preserved, reason,
-    output}. These are order-independent, so a node's N x K of them parallelize safely."""
+    """One independent proof: the ORIGINAL's recorded behavior vs ONE fresh cheaper re-run, judged once.
+    -> {preserved, reason, output}. Order-independent, so a node's N x K of these parallelize safely.
+    (Robustness to a single bad call comes from the 2/3 aggregation OVER re-runs, not from re-judging one.)"""
     b = replay(trace, cheaper)
     ok, why = judge_preserved(_user_text(trace), _recorded(trace), b)
-    return {"preserved": ok, "reason": why, "output": b[:AUDIT_JUDGE_MAX_CHARS]}   # full output (safety ceiling only); UI scrolls
+    return {"preserved": ok, "reason": why, "output": b[:AUDIT_JUDGE_MAX_CHARS]}   # full output; UI scrolls
 
 
 def audit_node(node_name, bucket, n=AUDIT_SAMPLES, k=AUDIT_REPEATS, min_evidence=AUDIT_MIN_EVIDENCE):
@@ -208,10 +210,11 @@ def audit_node(node_name, bucket, n=AUDIT_SAMPLES, k=AUDIT_REPEATS, min_evidence
     for idx, t in enumerate(sample):
         s = by_idx.get(idx, [])
         kept = sum(1 for x in s if x["preserved"])
-        v = "SAFE" if kept == k else ("NOT-SAFE" if kept == 0 else "BORDERLINE")   # unanimity for SAFE
-        inputs.append({"input": _user_text(t)[:300], "kept": kept, "k": k, "verdict": v,
-                       "recorded": _recorded(t)[:6000], "samples": s,        # display cap only
-                       "reason": s[0]["reason"] if s else ""})
+        v = "SAFE" if (s and kept >= AUDIT_SAFE_RATIO * k) else ("NOT-SAFE" if kept == 0 else "BORDERLINE")   # 2/3 -> tolerate one drift
+        drift_reason = next((x["reason"] for x in s if not x["preserved"]), "")    # surface WHY it drifted, if it did
+        inputs.append({"input": _user_text(t)[:AUDIT_JUDGE_MAX_CHARS], "kept": kept, "k": k, "verdict": v,
+                       "recorded": _recorded(t)[:AUDIT_JUDGE_MAX_CHARS], "samples": s,   # full text kept for the DOWNLOAD record
+                       "reason": drift_reason or (s[0]["reason"] if s else "same decision")})
 
     if any(r["verdict"] == "NOT-SAFE" for r in inputs):
         verdict = "NOT-SAFE"

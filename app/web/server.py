@@ -73,14 +73,14 @@ def prove_clear(source: str, ws_id: str, project: str):
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/report/download")
 def report_download(source: str, ws_id: str, project: str):
-    """Download the proven report as Markdown the exec can forward. Built only from the frozen proof."""
+    """Download the audit record as a ZIP (folder of small files) — scales for large agents. Frozen proof only."""
     from fastapi.responses import Response
     from app.services import funnel, prove, store, report_doc
     proof = store.peek(prove.proof_key(source, ws_id, project))
     f = funnel.build(source, ws_id, project)
-    md = report_doc.build_md(f, proof)
-    return Response(md, media_type="text/markdown; charset=utf-8",
-                    headers={"Content-Disposition": 'attachment; filename="token-audit-%s.md"' % project})
+    data = report_doc.build_zip(f, proof)
+    return Response(data, media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="token-audit-%s.zip"' % project})
 
 
 if __name__ == "__main__":

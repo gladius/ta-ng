@@ -20,9 +20,10 @@ def lever_on(name):
 #   SAMPLES  = distinct real inputs per node (the DIVERSITY axis — different tickets)
 #   REPEATS  = re-runs of the cheaper model per input (the STABILITY axis — kills run-to-run flipping)
 #   MIN_EVIDENCE = fewer distinct inputs than this -> ABSTAIN (don't judge from thin data)
-# A downgrade is SAFE only if EVERY input is preserved in ALL repeats (unanimous). Anything that flips -> BORDERLINE.
+# An INPUT is SAFE if at least AUDIT_SAFE_RATIO of its re-runs preserved behavior; a NODE is SAFE only if EVERY
+# input is SAFE. NOT-SAFE if it never preserved; anything in between -> BORDERLINE.
 AUDIT_SAMPLES = int(os.environ.get("AUDIT_SAMPLES", "5"))
-AUDIT_REPEATS = int(os.environ.get("AUDIT_REPEATS", "5"))
+AUDIT_REPEATS = int(os.environ.get("AUDIT_REPEATS", "3"))
 AUDIT_MIN_EVIDENCE = int(os.environ.get("AUDIT_MIN_EVIDENCE", "3"))
 # Per-node concurrency cap for the paid replay+judge calls. The N x K checks are independent so they parallelize
 # safely; this bounds how many run at once so we never hammer the provider (llm_client also backs off on 429).
@@ -32,3 +33,6 @@ AUDIT_MAX_PARALLEL = int(os.environ.get("AUDIT_MAX_PARALLEL", "8"))
 # fraction of the judge model's context (~200k tokens); an output that STILL exceeds it is treated as unverifiable
 # -> DRIFT (never SAFE from a partial view). Tune here, in one place.
 AUDIT_JUDGE_MAX_CHARS = int(os.environ.get("AUDIT_JUDGE_MAX_CHARS", "120000"))
+# An input is SAFE if at least this FRACTION of its re-runs preserved behavior. 2/3 tolerates one drift in three
+# (noise, or occasional model drift). Raise toward 1.0 for a stricter "never tolerate any drift" bar.
+AUDIT_SAFE_RATIO = float(os.environ.get("AUDIT_SAFE_RATIO", "0.66"))

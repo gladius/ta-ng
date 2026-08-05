@@ -10,14 +10,7 @@
   --off-bg: #f1efec; --off-ink: #8a8378;    /* neutral — "no win" */
   --bad-bg: #fbe9e7; --bad-ink: #b3231d;    /* red — breaks / drift */
   --radius: 10px;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #161514; --panel: #1e1c1b; --ink: #ececee; --muted: #9a9aa2;
-    --line: #2c2a28; --accent: #e15a4f; --accent-weak: #2a1a18;
-    --ok-bg: #16261d; --ok-ink: #7fd3a0; --off-bg: #24211d; --off-ink: #b0a596;
-    --bad-bg: #2c1a18; --bad-ink: #e8918a;
-  }
+  color-scheme: light;          /* force the light, professional enterprise theme — no OS auto-dark */
 }
 
 * { box-sizing: border-box; }
@@ -125,7 +118,6 @@ td.name { font-weight: 500; }
 
 /* ── savings report ─────────────────────────────────────────────────────── */
 :root { --hi-bg: #fff6e6; --hi-ink: #8a5a00; }
-@media (prefers-color-scheme: dark) { :root { --hi-bg: #2c2410; --hi-ink: #e6c07a; } }
 
 .hero { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 26px 28px; margin-bottom: 20px; }
 .hero .eyebrow { text-transform: uppercase; letter-spacing: .06em; font-size: 11.5px; font-weight: 700; color: var(--muted); margin: 0 0 12px; }

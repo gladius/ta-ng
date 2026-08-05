@@ -32,14 +32,14 @@ def test_render():
 
 
 def _run(judge_fn):
-    orig_r, orig_j, orig_p = audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL
+    orig = (audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL)
     audit.replay = lambda t, m, max_tokens=None: "CHEAPER"
     audit.judge_preserved = judge_fn
     audit.AUDIT_MAX_PARALLEL = 1                 # sequential -> deterministic order for the alternating-judge case
     try:
         return audit.audit_node("node", _BUCKET, n=5, k=5)
     finally:
-        audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL = orig_r, orig_j, orig_p
+        audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL = orig
 
 
 def test_safe():
@@ -68,6 +68,22 @@ def test_borderline_flip():
     print("[ok] a flipping input -> BORDERLINE (not a coin-flip SAFE/NOT-SAFE)")
 
 
+def test_safe_tolerates_one_drift():
+    # 2/3 rule: an input where the cheaper model preserved in >=2/3 of re-runs is SAFE (one drift tolerated).
+    state = {"n": 0}
+    def judge(req, a, b, model=None):
+        state["n"] += 1
+        return (state["n"] % 3 != 0, "one-in-three drift")   # per input's 3 re-runs (n=1,2,3): keep, keep, DRIFT -> 2/3
+    orig = (audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL)
+    audit.replay = lambda t, m, max_tokens=None: "CHEAPER"; audit.judge_preserved = judge; audit.AUDIT_MAX_PARALLEL = 1
+    try:
+        r = audit.audit_node("node", _BUCKET, n=5, k=3)      # k=3 so 2/3 = one drift tolerated
+    finally:
+        audit.replay, audit.judge_preserved, audit.AUDIT_MAX_PARALLEL = orig
+    assert r["verdict"] == "SAFE", r["verdict"]
+    print("[ok] 2/3 rule: one drift in three -> input still SAFE")
+
+
 def test_low_evidence():
     calls = {"n": 0}
     orig_r = audit.replay
@@ -86,5 +102,6 @@ if __name__ == "__main__":
     test_safe()
     test_not_safe()
     test_borderline_flip()
+    test_safe_tolerates_one_drift()
     test_low_evidence()
     print("\nALL PROOF-PATH TESTS PASSED ($0, no network)")

@@ -1,34 +1,48 @@
-"""Report export — a clean Markdown report the reviewer can forward, ZERO dependencies.
+"""Report export — a downloadable ZIP (a folder of small files), so the audit record scales even for large
+agents (a single .md would balloon to megabytes). Built ONLY from the frozen proof — measured, nothing invented.
 
-Built ONLY from the frozen proof, so the file says exactly what the page says — measured, nothing invented.
-Unlike the page (scannable), the download carries the FULL evidence: every input, every re-run, and the original
-recorded behavior vs each cheaper re-run — so a downgrade call can be audited offline. Markdown renders everywhere.
+Unpacks to:
+  model-tier-downgrade/
+    summary.md                              ranked verdicts + $ (skim first)
+    nodes/<node>/verdicts.md                per-input rate + reason (the index for that node)
+    nodes/<node>/input-<i>/input.txt        the request
+    nodes/<node>/input-<i>/original.txt     the recorded original  ("before")
+    nodes/<node>/input-<i>/run-<j>.kept.txt   each cheaper re-run   ("after")  — filename says kept/drift
+    nodes/<node>/input-<i>/run-<j>.drift.txt
+
+Every instance (N) and every re-run (K) is its own small file, so you can diff original.txt vs run-*.txt and see
+run-to-run agreement. Under a `model-tier-downgrade/` root so other strategies can add sibling folders later.
+stdlib zipfile only — zero dependencies.
 """
+import io
+import re
+import zipfile
+
+_ROOT = "model-tier-downgrade"
+_VERDICT = {"SAFE": "safe to downgrade", "BORDERLINE": "borderline — flips, don't downgrade",
+            "NOT-SAFE": "not safe — keep current", "LOW-EVIDENCE": "needs more data",
+            "N/A": "already cheapest tier"}
 
 
 def _fmt(n):
     return "{:,.0f}".format(n)
 
 
-_VERDICT = {"SAFE": "✅ safe to downgrade", "BORDERLINE": "⚠ borderline — flips, don't downgrade",
-            "NOT-SAFE": "❌ not safe — keep current", "LOW-EVIDENCE": "⚠ needs more data",
-            "N/A": "already cheapest tier"}
+def _slug(s):
+    return re.sub(r"[^a-zA-Z0-9._-]+", "-", str(s)).strip("-")[:60] or "node"
 
 
-def build_md(f, proof):
+def _summary_md(f, proof):
     calls = f["calls"]
     unit = "%s calls" % _fmt(calls)
     total = (proof["downgrade_usd"] if proof else f["downgrade_total"])
     rows = [x for x in (proof["results"] if proof else []) if x.get("downgrade")]
-
     L = ["# Token Audit — %s · model-tier downgrade" % f["agent"], ""]
     L.append("**$%s per %s** %s" % (_fmt(total), unit, "· proven live" if proof else "· detected, not yet proven"))
     L.append("")
-    L.append("> Advisory, out-of-path, read-only. Each candidate is tested on real recorded inputs, and each input "
-             "is **re-run K times** on the cheaper model — a downgrade is called SAFE only if every input preserved "
-             "behavior in **every** re-run (unanimous), so verdicts don't flip between audits. **All $ are per %s** "
-             "(a fixed basis; multiply by your real call volume)." % unit)
-
+    L.append("> Advisory, out-of-path, read-only. Each input is re-run K times on the cheaper model; a downgrade is "
+             "SAFE only if every input preserved behavior in every re-run (so verdicts don't flip between audits). "
+             "All $ are per %s. Open a node's folder for its per-input evidence (original.txt vs run-*.txt)." % unit)
     L += ["", "| Call-site | Downgrade | Verdict | Inputs safe | $ / %s |" % unit, "|---|---|---|---|---|"]
     for x in rows:
         d = x["downgrade"]
@@ -36,20 +50,40 @@ def build_md(f, proof):
         safe = "%s/%s" % (d.get("safe_inputs", 0), d.get("n", 0)) if d.get("inputs") else "—"
         L.append("| `%s` | %s → %s | %s | %s | %s |" % (
             x["node"], d.get("model", "?"), d.get("cheaper", "-"), _VERDICT.get(d["verdict"], d["verdict"]), safe, amt))
+    return "\n".join(L) + "\n"
 
-    L += ["", "## Evidence — every input, every re-run", ""]
-    for x in rows:
-        d = x["downgrade"]
-        L.append("### `%s` — %s → %s · %s" % (x["node"], d.get("model", "?"), d.get("cheaper", "-"),
-                                              _VERDICT.get(d["verdict"], d["verdict"])))
-        if not d.get("inputs"):
-            L += ["_%s_" % d.get("reason", ""), ""]
-            continue
-        for r in d["inputs"]:
-            L.append("**[%s %d/%d]** input: %s" % (r["verdict"], r["kept"], r["k"], r.get("input", "")))
-            L.append("- _original (%s, recorded):_ %s" % (d.get("model", "?"), r.get("recorded", "")))
-            for i, s in enumerate(r.get("samples", []), 1):
-                L.append("- _cheaper run %d (%s):_ %s — %s" % (
-                    i, "kept" if s["preserved"] else "DRIFT", s.get("reason", ""), s.get("output", "")))
-            L.append("")
-    return "\n".join(L)
+
+def _node_md(x, d):
+    L = ["# %s — %s → %s · %s" % (x["node"], d.get("model", "?"), d.get("cheaper", "-"),
+                                  _VERDICT.get(d["verdict"], d["verdict"])), ""]
+    if not d.get("inputs"):
+        return "\n".join(L + [d.get("reason", "")]) + "\n"
+    L.append("Tested %d distinct inputs × %d re-runs each on %s.\n" % (d.get("n", 0), d.get("k", 0), d.get("cheaper", "-")))
+    for i, r in enumerate(d["inputs"], 1):
+        L.append("## input-%d — %s (%d/%d kept)" % (i, r["verdict"], r["kept"], r["k"]))
+        L.append("- reason: %s" % r.get("reason", ""))
+        L.append("- request: %s" % (r.get("input", "")[:200] + ("…" if len(r.get("input", "")) > 200 else "")))
+        L.append("- files: `input-%d/original.txt` vs `input-%d/run-*.txt` (filenames marked kept/drift)" % (i, i))
+        L.append("")
+    return "\n".join(L) + "\n"
+
+
+def build_zip(f, proof):
+    """Return the audit record as ZIP bytes (folder of small files under model-tier-downgrade/)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("%s/summary.md" % _ROOT, _summary_md(f, proof))
+        for x in (proof["results"] if proof else []):
+            d = x.get("downgrade")
+            if not d:
+                continue
+            node = _slug(x["node"])
+            z.writestr("%s/nodes/%s/verdicts.md" % (_ROOT, node), _node_md(x, d))
+            for i, r in enumerate(d.get("inputs", []), 1):
+                base = "%s/nodes/%s/input-%d" % (_ROOT, node, i)
+                z.writestr("%s/input.txt" % base, r.get("input", ""))
+                z.writestr("%s/original.txt" % base, r.get("recorded", ""))
+                for j, s in enumerate(r.get("samples", []), 1):
+                    tag = "kept" if s.get("preserved") else "drift"
+                    z.writestr("%s/run-%d.%s.txt" % (base, j, tag), s.get("output", ""))
+    return buf.getvalue()

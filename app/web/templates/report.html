@@ -12,21 +12,14 @@
   .verdict.na{background:#555;color:#fff}
   .subtle{color:var(--muted,#888);font-size:.9rem}
   .samples{margin:.5rem 0 0;border-top:1px solid rgba(128,128,128,.25)}
-  .samp{padding:.55rem 0;border-bottom:1px solid rgba(128,128,128,.18)}
-  .samp-head{display:flex;gap:.6rem;align-items:baseline}
+  .samp-row{display:flex;gap:.6rem;align-items:baseline;padding:.4rem 0;border-bottom:1px solid rgba(128,128,128,.18)}
   .tag{font-weight:700;font-size:.68rem;padding:1px 7px;border-radius:4px;white-space:nowrap}
   .tag.kept{background:rgba(15,122,61,.15);color:#0f7a3d}
   .tag.drift{background:rgba(179,35,29,.15);color:var(--accent,#b3231d)}
   .tag.flip{background:rgba(122,106,18,.18);color:#8a7712}
-  .run{margin:.35rem 0;padding:.3rem 0;border-top:1px dashed rgba(128,128,128,.2)}
-  .run-why{font-size:.8rem;color:var(--muted,#888)}
   .samp-in{flex:1;font-size:.92rem}
   .samp-why{color:var(--muted,#888);font-size:.85rem}
-  .ba{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-top:.45rem}
-  .ba .col{border:1px solid rgba(128,128,128,.25);border-radius:6px;padding:.5rem}
-  .ba .lbl{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#888);margin-bottom:.25rem}
-  .ba pre{white-space:pre-wrap;font-size:.82rem;margin:0;max-height:180px;overflow:auto}
-  .howto{font-size:.86rem;color:var(--muted,#888);margin:.3rem 0 0}
+  .dl-note{font-size:.82rem;color:var(--muted,#888);margin:.5rem 0 0}
   .gfilter{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.2rem 0 .8rem;font-size:.85rem}
   .gfilter .glabel{color:var(--muted,#888);text-transform:uppercase;letter-spacing:.04em;font-size:.72rem}
   .gfilter select{padding:.25rem .5rem;border:1px solid rgba(128,128,128,.35);border-radius:6px;background:transparent;color:inherit;font:inherit}
@@ -116,23 +109,16 @@
           {% if d.verdict == 'SAFE' %}All held across all repeats, so this drop is safe here.{% elif d.verdict == 'BORDERLINE' %}At least one input <b>flips</b> between runs — genuinely uncertain, so we don't recommend it.{% else %}At least one input reliably changes behavior, so keep the current model.{% endif %}</p>
         <div class="samples">
           {% for r in d.inputs %}
-          <details class="samp">
-            <summary class="samp-head">
-              {% if r.verdict == 'SAFE' %}<span class="tag kept">safe {{ r.kept }}/{{ r.k }}</span>
-              {% elif r.verdict == 'NOT-SAFE' %}<span class="tag drift">drifts {{ r.kept }}/{{ r.k }}</span>
-              {% else %}<span class="tag flip">flips {{ r.kept }}/{{ r.k }}</span>{% endif %}
-              <span class="samp-in">{{ r.input or '(input)' }}</span>
-              <span class="samp-why">{{ r.reason }}</span>
-            </summary>
-            <div class="ba">
-              <div class="col"><div class="lbl">original · {{ d.model }} (recorded)</div><pre>{{ r.recorded }}</pre></div>
-              <div class="col"><div class="lbl">cheaper · {{ d.cheaper }} · {{ r.k }} re-runs</div>
-                {% for s in r.samples %}<div class="run"><span class="tag {{ 'kept' if s.preserved else 'drift' }}">{{ '✓' if s.preserved else '✗' }}</span> <span class="run-why">{{ s.reason }}</span><pre>{{ s.output }}</pre></div>{% endfor %}
-              </div>
-            </div>
-          </details>
+          <div class="samp-row">
+            {% if r.verdict == 'SAFE' %}<span class="tag kept">safe {{ r.kept }}/{{ r.k }}</span>
+            {% elif r.verdict == 'NOT-SAFE' %}<span class="tag drift">drifts {{ r.kept }}/{{ r.k }}</span>
+            {% else %}<span class="tag flip">flips {{ r.kept }}/{{ r.k }}</span>{% endif %}
+            <span class="samp-in">{{ (r.input or '(input)') | truncate(100, true) }}</span>
+            <span class="samp-why">{{ r.reason }}</span>
+          </div>
           {% endfor %}
         </div>
+        <p class="dl-note">Reasons only, on screen. The full before/after for every input is in the <a href="{{ base }}/report/download">downloadable report</a>.</p>
       {% else %}
         <p class="subtle">{{ d.reason }}</p>
       {% endif %}
@@ -141,7 +127,7 @@
   {% endfor %}
 
   <div class="actions">
-    <a class="btn" href="{{ base }}/report/download">Download report (.md)</a>
+    <a class="btn" href="{{ base }}/report/download">Download report (.zip)</a>
     <button type="button" class="btn ghost" onclick="window.print()">Print / PDF</button>
     <button type="button" class="btn ghost" onclick="reaudit()">Re-audit fresh</button>
   </div>
