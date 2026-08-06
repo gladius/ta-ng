@@ -141,7 +141,7 @@
   {% endfor %}
 
   <div class="actions">
-    <a class="btn" href="{{ base }}/report/download">Download report (.zip)</a>
+    <a class="btn" href="{{ base }}/report/download?snap={{ snap | urlencode }}">Download report (.zip)</a>
     <button type="button" class="btn ghost" onclick="window.print()">Print / PDF</button>
     <button type="button" class="btn ghost" onclick="reaudit()">Re-audit fresh</button>
   </div>
@@ -150,6 +150,7 @@
 
 <script>
   const BASE = {{ base | tojson }};
+  const SNAP = {{ snap | tojson }};                 // the pinned snapshot this report is bound to
   const selKeys = () => [...document.querySelectorAll('.sel:checked')].map(b => b.value);
   const note = () => { document.getElementById('selnote').textContent = selKeys().length + ' call-site(s) selected'; };
   document.querySelectorAll('.sel').forEach(b => b.addEventListener('change', note)); note();
@@ -195,7 +196,7 @@
     btn.disabled = true; btn.textContent = 'Proving…';
     const li = {};
     keys.forEach(k => { const el = document.createElement('li'); el.textContent = k; steps.appendChild(el); li[k] = el; });
-    const es = new EventSource(BASE + '/prove-stream?keys=' + encodeURIComponent(keys.join(',')));
+    const es = new EventSource(BASE + '/prove-stream?keys=' + encodeURIComponent(keys.join(',')) + '&snap=' + encodeURIComponent(SNAP));
     let done = 0;
     es.addEventListener('step', e => { const d = JSON.parse(e.data); const el = li[d.key]; if (el) { el.className = 'on'; el.textContent = d.node + ' — ' + d.msg; } });
     es.addEventListener('done_node', e => { const d = JSON.parse(e.data); const el = li[d.key]; if (el) { el.className = 'ok'; el.textContent = d.node + ' — proven'; } fill.style.width = Math.round(++done / keys.length * 100) + '%'; });
@@ -211,7 +212,11 @@
     });
     es.onerror = () => { es.close(); prog.hidden = true; btn.disabled = false; btn.textContent = 'Prove selected →'; alert('Proof stream interrupted — check the server log.'); };
   }
-  function reaudit() { fetch(BASE + '/prove-clear', { method: 'POST' }).then(() => location.reload()); }
+  function reaudit() {                               // fresh data = a NEW snapshot: clear this one, go to report w/o snap
+    const c = document.getElementById('cacheToggle');
+    fetch(BASE + '/prove-clear?snap=' + encodeURIComponent(SNAP), { method: 'POST' })
+      .then(() => { location.href = BASE + '/report' + (c && c.checked ? '?cache=1' : ''); });
+  }
   function toggleCache() { const u = new URL(location.href); document.getElementById('cacheToggle').checked ? u.searchParams.set('cache', '1') : u.searchParams.delete('cache'); location.href = u.toString(); }
 </script>
 {% endblock %}

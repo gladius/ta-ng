@@ -13,31 +13,33 @@ def _price(model):
     return PRICE.get(canonical_model(model) or model, {})
 
 
-def build(source_id, ws_id, project, calls=None, levers=None):
+def build(source_id, ws_id, project, calls=None, levers=None, g=None):
     """Ranked opportunities for an agent. Deterministic, no LLM. Shape is what the report/select pages render.
-    `levers` overrides which levers are active for THIS view (e.g. the report's cache checkbox); default = config."""
-    from connectors.datasource import get_source
-    from app.services import graph, store
+    `levers` overrides which levers are active for THIS view (e.g. the report's cache checkbox); default = config.
+    `g` = a PINNED snapshot graph (the report holds one, from app.services.snapshot). When given, the funnel derives
+    EVERYTHING from it — call-sites, per-call-site buckets, cache detection — and never re-fetches, so identity can't
+    drift between rendering and proving. Only non-report callers (cli) let it build a fresh graph."""
+    from app.services import graph
     calls = calls or CALLS_BASIS
     active = set(levers) if levers is not None else set(x for x in ("downgrade", "cache") if lever_on(x))
 
-    g = store.get_or_build((source_id, ws_id, project, "graph"),
-                           lambda: graph.build(source_id, ws_id, project))
-    buckets, _ = get_source(source_id).pull(ws_id, project, limit=300)
+    if g is None:
+        g = graph.build(source_id, ws_id, project)
+    buckets = g.get("buckets", {})                           # per-call-site traces, keyed by the UNIQUE node key
 
     cache_by = {}
-    if "cache" in active:
-        for k, b in buckets.items():
-            d = cache.detect(b, model=b[0].get("model"))
+    if "cache" in active:                                    # cache detection off the SNAPSHOT buckets, keyed by key
+        for n in g["nodes"]:
+            d = cache.detect(buckets.get(n["key"], []), model=n["model"])
             if d:
-                cache_by[k.split("/")[-1]] = d
+                cache_by[n["key"]] = d
     dg_by = {c["key"]: c for c in downgrade.candidates(g["nodes"], per_calls=calls)} if "downgrade" in active else {}
 
     rows = []
     for n in g["nodes"]:
         node, p = n["node"], _price(n["model"])              # node = display label (may repeat across call-sites)
         cost = round((n["avg_in"] * p.get("input", 0) + n["avg_out"] * p.get("output", 0)) / 1e6 * calls, 2)
-        cd = cache_by.get(node)          # NOTE: cache_by is keyed by label; a same-label collision is a known gap
+        cd = cache_by.get(n["key"])                          # keyed by the UNIQUE key — no same-label collision
         # only a BREAKER is OUR win (reorg). CACHEABLE/AUTO is handled by the gateway/provider -> not a claimed saving.
         cache_usd = round(cd["save_per_1k"] * calls / 1000, 2) if (cd and cd.get("verdict") == "BREAKER") else 0.0
         dg = dg_by.get(n["key"])                             # join by the UNIQUE key, never the label

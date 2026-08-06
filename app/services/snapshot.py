@@ -1,0 +1,51 @@
+"""Immutable per-report SNAPSHOT — the ONE honest source of a report's data for its whole lifecycle.
+
+Problem it solves: an agent's traces are fetched LIVE from the platform. If we re-fetch/rebuild between rendering
+the report and proving it, the call-site set and their keys drift under the user (new traces arrive, the fetch
+window shifts), the selected keys go stale, the proof matches nothing, and every $ resets to 0. So we capture the
+graph ONCE, pin it under a snapshot id that the report URL carries, and every step — view, prove, reprove, download
+— reads THAT snapshot by id. Nothing re-derives from the platform mid-flow, so identity can't move under the user.
+A NEW snapshot (fresh data) is minted only on an explicit re-audit.
+
+No TTL: an immutable snapshot can't go stale, so there is nothing to expire — we simply keep the most-recent MAX
+and evict the oldest (LRU). (In-memory + per-process: fine for a single worker. Multi-worker deployments need a
+shared/disk-backed store — flagged in the system review, not assumed here.)
+"""
+import secrets
+import threading
+from collections import OrderedDict
+
+_SNAPS = OrderedDict()          # snap_id -> {"source", "ws", "project", "graph"}
+_LOCK = threading.Lock()
+MAX = 64                        # bound memory: keep the most-recent N snapshots
+
+
+def new_id():
+    return secrets.token_urlsafe(9)
+
+
+def create(source, ws, project):
+    """Fetch + build the graph ONCE and pin it under a fresh snapshot id. Returns (snap_id, graph)."""
+    from app.services import graph
+    g = graph.build(source, ws, project)
+    sid = new_id()
+    with _LOCK:
+        _SNAPS[sid] = {"source": source, "ws": ws, "project": project, "graph": g}
+        _SNAPS.move_to_end(sid)
+        while len(_SNAPS) > MAX:
+            _SNAPS.popitem(last=False)
+    return sid, g
+
+
+def get(snap_id, source=None, ws=None, project=None):
+    """The pinned graph for `snap_id`, or None (unknown/evicted). If source/ws/project are given they must match —
+    guards a stale or cross-agent id pasted from a bookmarked URL."""
+    with _LOCK:
+        s = _SNAPS.get(snap_id)
+        if s:
+            _SNAPS.move_to_end(snap_id)
+    if not s:
+        return None
+    if project is not None and (s["source"], s["ws"], s["project"]) != (source, ws, project):
+        return None
+    return s["graph"]

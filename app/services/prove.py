@@ -9,11 +9,11 @@ report reads identical numbers on every reload. Nothing is asserted here that is
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app.services import audit, funnel, graph, store, cache_reorg
+from app.services import audit, funnel, store, cache_reorg, snapshot
 
 
-def proof_key(source, ws, project):
-    return (source, ws, project, "proof")
+def proof_key(source, ws, project, snap=""):
+    return (source, ws, project, "proof", snap)             # proof is tied to the SNAPSHOT it was run against
 
 
 def _step_msg(r):
@@ -50,21 +50,23 @@ def _prove_one(key, r, b, calls):
     return out
 
 
-def stream(source, ws, project, keys, calls=None):
+def stream(source, ws, project, keys, snap, calls=None):
     """Generator: yields SSE progress while proving the selected nodes CONCURRENTLY (bounded pool), then stores
-    the frozen result. Nodes prove in parallel and each downgrade fans its inputs out too, so wall-clock is the
-    slowest single node, not the sum. Paid — same number of calls as sequential, just overlapped."""
-    f = funnel.build(source, ws, project, calls=calls, levers=["downgrade", "cache"])   # prove both levers for selected
+    the frozen result keyed by the SNAPSHOT. Everything — rows AND per-call-site buckets — comes from the ONE pinned
+    snapshot graph, so the keys the checkboxes captured can't drift here. Paid; overlapped."""
+    g = snapshot.get(snap, source, ws, project)
+    if g is None:                                                          # snapshot evicted -> don't clobber; reload
+        yield {"type": "start", "total": 0, "agent": project}
+        yield {"type": "complete", "total_usd": 0.0, "stale": True}
+        return
+    f = funnel.build(source, ws, project, calls=calls, levers=["downgrade", "cache"], g=g)   # both levers, pinned graph
     rows = {r["key"]: r for r in f["rows"] if r["key"] in keys}            # identity = UNIQUE key, never the label
     order = [k for k in keys if k in rows]
     if not order:                                                          # selection went stale (no key matched) —
         yield {"type": "start", "total": 0, "agent": project}              # do NOT store an all-zero proof (that
         yield {"type": "complete", "total_usd": 0.0, "stale": True}        # would reset the hero to $0); keep prior
         return                                                             # state and let the user re-select
-    # Per-call-site traces come from the graph's OWN buckets, keyed by the SAME unique key — so two call-sites that
-    # share a display label (e.g. two 'supervisor' nodes) neither collide nor audit each other's traces.
-    g = store.get_or_build((source, ws, project, "graph"), lambda: graph.build(source, ws, project))
-    by_key = g.get("buckets", {})
+    by_key = g.get("buckets", {})                                          # same pinned graph -> keys always match
 
     yield {"type": "start", "total": len(order), "agent": project}
     for k in order:                                                        # announce every call-site (all in flight)
@@ -89,5 +91,5 @@ def stream(source, ws, project, keys, calls=None):
            "cache_usd": round(sum(x.get("cache_usd", 0) for x in results), 2),
            "downgrade_usd": round(sum(x.get("downgrade_usd", 0) for x in results), 2),
            "total": round(sum(x.get("cache_usd", 0) + x.get("downgrade_usd", 0) for x in results), 2)}
-    store.put(proof_key(source, ws, project), res)
+    store.put(proof_key(source, ws, project, snap), res)
     yield {"type": "complete", "total_usd": res["total"]}
