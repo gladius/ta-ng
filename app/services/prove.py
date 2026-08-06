@@ -57,6 +57,10 @@ def stream(source, ws, project, keys, calls=None):
     f = funnel.build(source, ws, project, calls=calls, levers=["downgrade", "cache"])   # prove both levers for selected
     rows = {r["key"]: r for r in f["rows"] if r["key"] in keys}            # identity = UNIQUE key, never the label
     order = [k for k in keys if k in rows]
+    if not order:                                                          # selection went stale (no key matched) —
+        yield {"type": "start", "total": 0, "agent": project}              # do NOT store an all-zero proof (that
+        yield {"type": "complete", "total_usd": 0.0, "stale": True}        # would reset the hero to $0); keep prior
+        return                                                             # state and let the user re-select
     # Per-call-site traces come from the graph's OWN buckets, keyed by the SAME unique key — so two call-sites that
     # share a display label (e.g. two 'supervisor' nodes) neither collide nor audit each other's traces.
     g = store.get_or_build((source, ws, project, "graph"), lambda: graph.build(source, ws, project))
