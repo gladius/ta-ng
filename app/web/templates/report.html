@@ -27,6 +27,11 @@
   .gfilter select{padding:.25rem .5rem;border:1px solid rgba(128,128,128,.35);border-radius:6px;background:transparent;color:inherit;font:inherit}
   .modebar{display:flex;flex-wrap:wrap;gap:1.2rem;margin:.2rem 0 .7rem;font-size:.9rem}
   .modebar label{display:inline-flex;gap:.35rem;align-items:center;cursor:pointer}
+  .chip.cache{background:rgba(37,99,235,.14);color:#2563eb}
+  .cache-box{margin-top:.7rem;padding:.55rem .7rem;border:1px solid rgba(37,99,235,.25);border-radius:6px;background:rgba(37,99,235,.05)}
+  .cache-box .ba{font-variant-numeric:tabular-nums;font-size:.92rem;margin:.15rem 0}
+  .cache-box .ba b{color:var(--fg,#222)}
+  .cache-box .arrow{color:#2563eb;font-weight:700;margin:0 .35rem}
 </style>
 
 <section class="hero">
@@ -52,6 +57,9 @@
     <label><input type="radio" name="mode" value="auto" checked onchange="setMode()"> <b>Auto</b> — prove the top 5 costliest</label>
     <label><input type="radio" name="mode" value="manual" onchange="setMode()"> <b>Manual</b> — choose graph &amp; nodes</label>
   </div>
+  <div class="modebar">
+    <label><input type="checkbox" id="cacheToggle"{% if cache_on %} checked{% endif %} onchange="toggleCache()"> <b>Include cacheable-prefix</b> <span class="muted">— reorg breaker prompts so repeated calls cache (opt-in; adds a paid reorg proof)</span></label>
+  </div>
   {% if f.graphs %}
   {% set has_top = f.rows | selectattr('graph_path','equalto','') | list | length %}
   <div class="gfilter" id="gfwrap">
@@ -74,7 +82,7 @@
         <td class="subtle">{{ r.graph_path or '—' }}</td>
         <td class="mono">{{ r.model }}</td>
         <td class="num">${{ '{:,.0f}'.format(r.cost) }}</td>
-        <td>{% if r.downgrade_usd > 0 %}<span class="chip down">→ {{ r.downgrade_to }}</span>{% else %}<span class="chip none">no cheaper tier</span>{% endif %}</td>
+        <td>{% if r.downgrade_usd > 0 %}<span class="chip down">↓ {{ r.downgrade_to }}</span>{% endif %}{% if r.cache_usd > 0 %}<span class="chip cache">⚡ cache-prefix</span>{% endif %}{% if r.downgrade_usd <= 0 and r.cache_usd <= 0 %}<span class="chip none">no lever</span>{% endif %}</td>
         <td class="num money">{{ '${:,.0f}'.format(r.opportunity) if r.opportunity > 0 else '—' }}</td>
       </tr>
     {% endfor %}
@@ -91,39 +99,42 @@
 </section>
 
 <div id="results" class="{{ 'reveal' if proven else '' }}">
-  {% if proven %}{% for x in proof.results if x.downgrade %}{% set d = x.downgrade %}
+  {% if proven %}{% for x in proof.results if x.downgrade or (x.cache and x.cache.verdict and not x.cache.get('informational')) %}
+  {% set total = (x.downgrade_usd or 0) + (x.cache_usd or 0) %}
   <details class="node"{{ ' open' if loop.first else '' }}>
     <summary class="node-sum">
       <span class="node">{{ x.node }}</span>{% if x.graph_path %}<span class="subtle"> · {{ x.graph_path }}</span>{% endif %}
-      <span class="mono">{{ d.model }} → {{ d.cheaper or '—' }}</span>
-      {% if d.from_tier and d.to_tier %}<span class="subtle">{{ d.from_tier }} → {{ d.to_tier }}</span>{% endif %}
+      <span class="mono">{{ x.model }}</span>
       <span class="spacer"></span>
-      {% if d.verdict == 'SAFE' %}<span class="verdict safe">safe to downgrade</span>
-      {% elif d.verdict == 'BORDERLINE' %}<span class="verdict thin">borderline — don't downgrade</span>
-      {% elif d.verdict == 'NOT-SAFE' %}<span class="verdict unsafe">not safe — keep current</span>
-      {% elif d.verdict == 'LOW-EVIDENCE' %}<span class="verdict thin">needs more data</span>
-      {% else %}<span class="verdict na">already cheapest</span>{% endif %}
-      <span class="amt">{{ '${:,.0f} / {}k'.format(x.downgrade_usd, f.calls // 1000) if d.verdict == 'SAFE' else '—' }}</span>
+      {% if x.downgrade and x.downgrade.verdict == 'SAFE' %}<span class="verdict safe">↓ downgrade</span>{% endif %}
+      {% if x.cache and x.cache.recommend %}<span class="verdict safe">⚡ cache</span>{% endif %}
+      <span class="amt">{{ '${:,.0f} / {}k'.format(total, f.calls // 1000) if total > 0 else '—' }}</span>
     </summary>
     <div class="node-body">
-      {% if d.inputs %}
-        <p class="subtle">Tested <b>{{ d.n }} distinct inputs × {{ d.k }} re-runs each</b> on <b>{{ d.cheaper }}</b>{% if d.to_tier %} ({{ d.to_tier }} tier{% if d.to_release %}, rel. {{ d.to_release }}{% endif %}){% endif %} — <b>{{ d.safe_inputs }}/{{ d.n }}</b> inputs preserved in <b>every</b> re-run.
-          {% if d.verdict == 'SAFE' %}Every input held up as well as the original model does on its own re-runs, so this drop is safe here.{% elif d.verdict == 'BORDERLINE' %}At least one input is uncertain — the cheaper model drifted more than the original does on its own, or the recorded output isn't reliably reproducible — so we don't recommend it.{% else %}At least one input reliably changed behavior beyond the original's own noise, so keep the current model.{% endif %}</p>
+      {% if x.downgrade %}{% set d = x.downgrade %}
+        <p class="subtle"><b>Model-tier downgrade</b> · {{ d.model }} → {{ d.cheaper or '—' }}{% if d.from_tier and d.to_tier %} ({{ d.from_tier }} → {{ d.to_tier }}){% endif %} —
+          {% if d.verdict == 'SAFE' %}<span class="verdict safe">safe to downgrade</span>{% elif d.verdict == 'BORDERLINE' %}<span class="verdict thin">borderline — don't</span>{% elif d.verdict == 'NOT-SAFE' %}<span class="verdict unsafe">not safe</span>{% elif d.verdict == 'LOW-EVIDENCE' %}<span class="verdict thin">needs more data</span>{% else %}<span class="verdict na">already cheapest</span>{% endif %}
+          {{ '· ${:,.0f} / {}k'.format(x.downgrade_usd, f.calls // 1000) if d.verdict == 'SAFE' else '' }}</p>
+        {% if d.inputs %}
         <div class="samples">
           {% for r in d.inputs %}
           <div class="samp-row">
-            {% if r.verdict == 'SAFE' %}<span class="tag kept">safe</span>
-            {% elif r.verdict == 'NOT-SAFE' %}<span class="tag drift">not safe</span>
-            {% else %}<span class="tag flip">borderline</span>{% endif %}
+            {% if r.verdict == 'SAFE' %}<span class="tag kept">safe</span>{% elif r.verdict == 'NOT-SAFE' %}<span class="tag drift">not safe</span>{% else %}<span class="tag flip">borderline</span>{% endif %}
             <span class="samp-rate">cheaper <b>{{ r.kept }}/{{ r.k }}</b>{% if r.self_kept is not none %} · baseline <b>{{ r.self_kept }}/{{ r.k }}</b>{% endif %}</span>
             <span class="samp-in">{{ (r.input or '(input)') | truncate(90, true) }}</span>
             <span class="samp-why">{{ r.note or r.reason }}</span>
           </div>
           {% endfor %}
         </div>
-        <p class="dl-note"><b>baseline</b> = how often the original model reproduced its own recorded output on re-run; the cheaper model is judged against that noise floor, not a fixed bar (shown only where the cheaper model wasn't already perfect). Reasons only, on screen — the full before/after for every input is in the <a href="{{ base }}/report/download">downloadable report</a>.</p>
-      {% else %}
-        <p class="subtle">{{ d.reason }}</p>
+        {% else %}<p class="subtle">{{ d.reason }}</p>{% endif %}
+      {% endif %}
+      {% if x.cache and x.cache.verdict and not x.cache.get('informational') %}{% set c = x.cache %}
+      <div class="cache-box">
+        <b>⚡ Cacheable-prefix (reorg)</b> —
+        {% if c.recommend %}<span class="verdict safe">safe + cache-proven</span>{% elif c.verdict in ('BORDERLINE','NOT-SAFE') %}<span class="verdict unsafe">reorg changes behavior — not recommended</span>{% elif c.verdict == 'SAFE' %}<span class="verdict thin">behavior safe, caching not confirmed</span>{% else %}<span class="verdict thin">{{ c.verdict | lower }}</span>{% endif %}
+        <div class="ba">cached prefix <b>{{ (c.before.read if c.before else 0) or 0 }}</b> tok <span class="arrow">→</span> <b>{{ (c.after.read if c.after else 0) or 0 }}</b> tok{% if c.recovered_tok %} · <b>+{{ c.recovered_tok }}</b> recovered/call{% endif %}</div>
+        {% if c.recommend %}<div class="ba">saving <b>${{ '{:,.0f}'.format(x.cache_usd) }}</b> / {{ f.calls // 1000 }}k calls · behavior preserved on <b>{{ c.safe_inputs }}/{{ c.n }}</b> inputs · provider-verified round-trip</div>{% else %}<div class="subtle">{{ c.reason or 'a reorg must both preserve behavior and cache to be recommended' }}</div>{% endif %}
+      </div>
       {% endif %}
     </div>
   </details>
@@ -201,5 +212,6 @@
     es.onerror = () => { es.close(); prog.hidden = true; btn.disabled = false; btn.textContent = 'Prove selected →'; alert('Proof stream interrupted — check the server log.'); };
   }
   function reaudit() { fetch(BASE + '/prove-clear', { method: 'POST' }).then(() => location.reload()); }
+  function toggleCache() { const u = new URL(location.href); document.getElementById('cacheToggle').checked ? u.searchParams.set('cache', '1') : u.searchParams.delete('cache'); location.href = u.toString(); }
 </script>
 {% endblock %}

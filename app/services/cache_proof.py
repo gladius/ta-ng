@@ -20,20 +20,26 @@ def _usage(model, system_blocks, user):
             getattr(u, "cache_read_input_tokens", 0) or 0)
 
 
-def prove(bucket, model=None):
-    """Round-trip the recovered prefix on the real provider. Paid: exactly 2 completions, max_tokens=1 each
-    (~a few thousand input tok total, cents). Returns {write, read, prefix_tok, model, proven}."""
-    if not bucket:
-        return None
-    model = canonical_model(model or bucket[0].get("model")) or (model or bucket[0].get("model"))
-    prefix = _recoverable_text([_prefix_text(t) for t in bucket])          # the reorged, byte-stable prefix
+def prove_prefix(model, prefix, cmin=None):
+    """Round-trip an EXPLICIT prefix (e.g. a REORGED one) on the real provider: 1st call writes it to cache, 2nd
+    (different user turn) reads it back. Paid: exactly 2 completions, max_tokens=1 each (cents). The returned
+    `cache_read_input_tokens` is provider ground truth that THIS exact prefix caches. -> {write, read, prefix_tok,
+    proven}."""
+    model = canonical_model(model) or model
     prefix_tok = approx_tokens(prefix)
-    cmin = cache_min(model)
+    cmin = cache_min(model) if cmin is None else cmin
     if prefix_tok < cmin:                                                  # honest: below the min, nothing caches
         return {"model": model, "write": 0, "read": 0, "prefix_tok": prefix_tok, "proven": False,
                 "reason": "prefix %d tok < model minimum %d" % (prefix_tok, cmin)}
-
     blocks = [{"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}]
     write, _ = _usage(model, blocks, "ping")                              # 1st call writes the prefix to cache
     _, read = _usage(model, blocks, "pong")                               # 2nd (diff user turn) reads it back
     return {"model": model, "write": write, "read": read, "prefix_tok": prefix_tok, "proven": read > 0}
+
+
+def prove(bucket, model=None):
+    """Round-trip the byte-compare recovered prefix (the current cache lever). Delegates to prove_prefix."""
+    if not bucket:
+        return None
+    model = canonical_model(model or bucket[0].get("model")) or (model or bucket[0].get("model"))
+    return prove_prefix(model, _recoverable_text([_prefix_text(t) for t in bucket]))

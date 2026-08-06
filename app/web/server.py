@@ -42,12 +42,13 @@ def agents(request: Request, source: str, ws_id: str):
 
 # ── Savings report: the deliverable. Funnel (free) → prove selected (paid, SSE) → frozen report → download ──
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/report", response_class=HTMLResponse)
-def report_view(request: Request, source: str, ws_id: str, project: str):
+def report_view(request: Request, source: str, ws_id: str, project: str, cache: int = 0):
     from app.services import funnel, prove, store
-    f = funnel.build(source, ws_id, project)                                      # recompute every view: $0,
-    #                                                    deterministic → always fresh, never a stagnant snapshot
+    levers = ["downgrade"] + (["cache"] if cache else [])       # cacheable-prefix is OPT-IN via the checkbox (?cache=1)
+    f = funnel.build(source, ws_id, project, levers=levers)                       # recompute every view: deterministic
     proof = store.peek(prove.proof_key(source, ws_id, project))                   # paid; shown only if explicitly run
-    return _page(request, "report.html", source=source, ws_id=ws_id, project=project, f=f, proof=proof)
+    return _page(request, "report.html", source=source, ws_id=ws_id, project=project,
+                 f=f, proof=proof, cache_on=bool(cache))
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/prove-stream")

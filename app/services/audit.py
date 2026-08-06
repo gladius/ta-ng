@@ -194,11 +194,12 @@ def _distinct(traces, n):
     return kept
 
 
-def _one_repeat(trace, cheaper):
-    """One independent proof: the ORIGINAL's recorded behavior vs ONE fresh cheaper re-run, judged once.
-    -> {preserved, reason, output}. Order-independent, so a node's N x K of these parallelize safely.
-    (Robustness to a single bad call comes from the 2/3 aggregation OVER re-runs, not from re-judging one.)"""
-    b = replay(trace, cheaper)
+def _one_repeat(trace, produce):
+    """One independent proof: the ORIGINAL's recorded behavior vs ONE fresh candidate re-run, judged once.
+    `produce(trace) -> behavior string` is the TRANSFORM under test — cheaper-model replay (downgrade) OR
+    reordered-prompt replay on the same model (cache). -> {preserved, reason, output}. Order-independent, so a
+    node's N x K parallelize safely. (Robustness to a single bad call comes from the aggregation OVER re-runs.)"""
+    b = produce(trace)
     ok, why = judge_preserved(_user_text(trace), _recorded(trace), b)
     return {"preserved": ok, "reason": why, "output": b[:AUDIT_JUDGE_MAX_CHARS]}   # full output; UI scrolls
 
@@ -227,6 +228,57 @@ def _verdict(cheap_kept, self_kept, k):
     return "NOT-SAFE", "cheaper consistently changed the decision vs the original's own noise"
 
 
+def prove_transform(sample, produce, model, k=AUDIT_REPEATS):
+    """The verdict ENGINE, transform-agnostic and REUSED by both levers. For each of the N sampled inputs, run K
+    independent `produce(trace) -> behavior` candidates and judge each vs the recorded output; then, on the DOUBTFUL
+    inputs only, measure the ORIGINAL model's own run-to-run noise floor (replay the ORIGINAL prompt on the ORIGINAL
+    model) and judge the candidate RELATIVE to it. Returns (inputs, node_verdict, safe_count).
+
+      downgrade: produce = replay(trace, cheaper_model)      (cheaper model, same prompt)
+      cache:     produce = replay(reorder(trace), model)     (same model, reordered prompt)
+
+    The self-variance baseline is lever-agnostic — always the original model on the original prompt."""
+    tasks = [(idx, t) for idx, t in enumerate(sample) for _ in range(k)]         # N x K, all independent
+    with ThreadPoolExecutor(max_workers=min(AUDIT_MAX_PARALLEL, len(tasks))) as ex:
+        done = list(ex.map(lambda it: (it[0], _one_repeat(it[1], produce)), tasks))
+    by_idx = {}
+    for idx, res in done:
+        by_idx.setdefault(idx, []).append(res)
+    cand_kept = {idx: sum(1 for x in by_idx.get(idx, []) if x["preserved"]) for idx in range(len(sample))}
+
+    # self-variance baseline — ONLY on doubtful inputs (candidate wasn't perfect). recorded output = free +1 anchor.
+    self_kept, base_runs = {}, {}
+    if AUDIT_SELF_BASELINE and k > 1:
+        doubtful = [idx for idx in range(len(sample)) if cand_kept[idx] < k]
+        btasks = [(idx, sample[idx]) for idx in doubtful for _ in range(k - 1)]
+        if btasks:
+            with ThreadPoolExecutor(max_workers=min(AUDIT_MAX_PARALLEL, len(btasks))) as ex:
+                bdone = list(ex.map(lambda it: (it[0], _one_repeat(it[1], lambda t: replay(t, model))), btasks))
+            for idx, res in bdone:
+                base_runs.setdefault(idx, []).append(res)
+            for idx in doubtful:
+                self_kept[idx] = 1 + sum(1 for x in base_runs.get(idx, []) if x["preserved"])   # +1 = recorded anchor
+
+    inputs = []
+    for idx, t in enumerate(sample):
+        s = by_idx.get(idx, [])
+        ck = cand_kept[idx]
+        sk = self_kept.get(idx)                       # None unless this input was doubtful and the baseline ran
+        v, note = _verdict(ck, sk, k)
+        drift_reason = next((x["reason"] for x in s if not x["preserved"]), "")    # surface WHY it drifted, if it did
+        inputs.append({"input": _user_text(t)[:AUDIT_JUDGE_MAX_CHARS], "kept": ck, "k": k, "self_kept": sk,
+                       "verdict": v, "note": note, "recorded": _recorded(t)[:AUDIT_JUDGE_MAX_CHARS],
+                       "samples": s, "baseline": base_runs.get(idx, []),
+                       "reason": drift_reason or (s[0]["reason"] if s else "same decision")})
+    if any(r["verdict"] == "NOT-SAFE" for r in inputs):
+        verdict = "NOT-SAFE"
+    elif all(r["verdict"] == "SAFE" for r in inputs):
+        verdict = "SAFE"
+    else:
+        verdict = "BORDERLINE"
+    return inputs, verdict, sum(1 for r in inputs if r["verdict"] == "SAFE")
+
+
 def audit_node(node_name, bucket, n=AUDIT_SAMPLES, k=AUDIT_REPEATS, min_evidence=AUDIT_MIN_EVIDENCE):
     """Prove (or refute) a downgrade for one call-site across N inputs x K repeats. Returns the verdict dict.
     Verdicts: SAFE (recommend) · BORDERLINE (flips — don't) · NOT-SAFE (don't) · LOW-EVIDENCE (abstain) · N/A."""
@@ -240,54 +292,8 @@ def audit_node(node_name, bucket, n=AUDIT_SAMPLES, k=AUDIT_REPEATS, min_evidence
     if len(sample) < min_evidence:
         return {**base, "verdict": "LOW-EVIDENCE", "n": len(sample), "inputs": [],
                 "reason": "only %d distinct input(s), need %d" % (len(sample), min_evidence)}
-
-    # PASS 1 — cheaper model, N inputs x K repeats, ALL independent. Flatten into ONE bounded pool (not nested
-    # pools) so concurrency stays capped at AUDIT_MAX_PARALLEL; llm_client's 429 backoff self-throttles.
-    tasks = [(idx, t) for idx, t in enumerate(sample) for _ in range(k)]
-    with ThreadPoolExecutor(max_workers=min(AUDIT_MAX_PARALLEL, len(tasks))) as ex:
-        done = list(ex.map(lambda it: (it[0], _one_repeat(it[1], cheaper)), tasks))
-    by_idx = {}
-    for idx, res in done:
-        by_idx.setdefault(idx, []).append(res)
-    cheap_kept = {idx: sum(1 for x in by_idx.get(idx, []) if x["preserved"]) for idx in range(len(sample))}
-
-    # PASS 2 — self-variance baseline, ONLY on DOUBTFUL inputs (cheaper wasn't perfect). Re-runs the ORIGINAL model
-    # to measure its OWN run-to-run consistency, so we can judge the cheaper RELATIVE to that noise floor instead of
-    # a flat bar. The recorded output is the original's free sample #1 (the anchor, trivially preserved), so we add
-    # only k-1 fresh original re-runs and count recorded as the +1 -> self_kept out of k, comparable to cheap_kept.
-    self_kept, base_runs = {}, {}
-    if AUDIT_SELF_BASELINE and k > 1:
-        doubtful = [idx for idx in range(len(sample)) if cheap_kept[idx] < k]
-        btasks = [(idx, sample[idx]) for idx in doubtful for _ in range(k - 1)]
-        if btasks:
-            with ThreadPoolExecutor(max_workers=min(AUDIT_MAX_PARALLEL, len(btasks))) as ex:
-                bdone = list(ex.map(lambda it: (it[0], _one_repeat(it[1], model)), btasks))
-            for idx, res in bdone:
-                base_runs.setdefault(idx, []).append(res)
-            for idx in doubtful:
-                self_kept[idx] = 1 + sum(1 for x in base_runs.get(idx, []) if x["preserved"])   # +1 = recorded anchor
-
-    inputs = []
-    for idx, t in enumerate(sample):
-        s = by_idx.get(idx, [])
-        ck = cheap_kept[idx]
-        sk = self_kept.get(idx)                       # None unless this input was doubtful and the baseline ran
-        v, note = _verdict(ck, sk, k)
-        drift_reason = next((x["reason"] for x in s if not x["preserved"]), "")    # surface WHY it drifted, if it did
-        inputs.append({"input": _user_text(t)[:AUDIT_JUDGE_MAX_CHARS], "kept": ck, "k": k, "self_kept": sk,
-                       "verdict": v, "note": note, "recorded": _recorded(t)[:AUDIT_JUDGE_MAX_CHARS],
-                       "samples": s,   # cheaper re-runs — full text kept for the DOWNLOAD record
-                       "baseline": base_runs.get(idx, []),   # original re-runs (self-variance), doubtful inputs only
-                       "reason": drift_reason or (s[0]["reason"] if s else "same decision")})
-
-    if any(r["verdict"] == "NOT-SAFE" for r in inputs):
-        verdict = "NOT-SAFE"
-    elif all(r["verdict"] == "SAFE" for r in inputs):
-        verdict = "SAFE"
-    else:
-        verdict = "BORDERLINE"
-    return {**base, "verdict": verdict, "n": len(inputs), "k": k,
-            "safe_inputs": sum(1 for r in inputs if r["verdict"] == "SAFE"), "inputs": inputs}
+    inputs, verdict, safe = prove_transform(sample, lambda t: replay(t, cheaper), model, k)
+    return {**base, "verdict": verdict, "n": len(inputs), "k": k, "safe_inputs": safe, "inputs": inputs}
 
 
 def run(source_id, ws_id, project, n=AUDIT_SAMPLES, k=AUDIT_REPEATS):

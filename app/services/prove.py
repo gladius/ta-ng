@@ -9,56 +9,40 @@ report reads identical numbers on every reload. Nothing is asserted here that is
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app.services import cache_proof, audit, funnel, graph, store
-from app.services.cache import _prefix_text, annotate_prompt
+from app.services import audit, funnel, graph, store, cache_reorg
 
 
 def proof_key(source, ws, project):
     return (source, ws, project, "proof")
 
 
-def _reorg(bucket, cd):
-    """The concrete cache-expansion fix for a BREAKER: the per-call line that breaks the byte-prefix, and the
-    static tokens that become cacheable once it moves to the end."""
-    lines = [l for l in _prefix_text(bucket[0]).split("\n") if l.strip()]
-    return {"moved": (lines[0] if lines else "").strip(), "recover_tok": cd["recoverable_tok"]}
-
-
 def _step_msg(r):
     parts = []
-    if r["cache"] and r["cache"]["verdict"] in ("CACHEABLE", "BREAKER"):
-        parts.append("caching")
+    if r["cache"] and r["cache"].get("verdict") == "BREAKER":
+        parts.append("cache reorg")
     if r["downgrade"]:
         parts.append("downgrade → %s" % r["downgrade_to"])
     return " + ".join(parts) + " · proving live" if parts else "proving live"
 
 
-def _prove_one(key, r, b):
+def _prove_one(key, r, b, calls):
     """Prove ONE call-site (both levers if it has both). Runs in a worker thread → paid calls happen concurrently.
-    Identified by the UNIQUE key; `node` is the display label (may repeat across call-sites). The $ only counts what
-    actually PROVED — an unproven cache or a drifted downgrade is $0."""
+    Identified by the UNIQUE key; `node` is the display label (may repeat across call-sites). `calls` is the $-basis.
+    The $ only counts what actually PROVED — an unproven cache reorg or a drifted downgrade is $0."""
     node = r["node"]
     out = {"key": key, "node": node, "graph_path": r.get("graph_path", ""),
            "model": r["model"], "cost": r["cost"], "cache_usd": 0.0, "downgrade_usd": 0.0}
     cd = r["cache"]
-    if cd and cd["verdict"] in ("CACHEABLE", "BREAKER") and b:
-        if cd.get("mode") == "explicit":
-            p = cache_proof.prove(b)                                       # Anthropic: live write→read round-trip
-            out["cache"] = {"verdict": cd["verdict"], "recoverable_tok": cd["recoverable_tok"], "mode": "explicit",
-                            "method": "live", "read": p["read"], "write": p["write"], "proven": p["proven"],
-                            "prefix_tok": p["prefix_tok"], "lines": annotate_prompt(b)}
-            proven = p["proven"]
-        else:
-            # auto provider (OpenAI/Google): no breakpoint exists to round-trip. But the recovered static lines are
-            # byte-identical across every sample, so once the per-call prefix moves the provider's AUTOMATIC cache
-            # covers them — provable by construction, no paid call.
-            proven = True
-            out["cache"] = {"verdict": cd["verdict"], "recoverable_tok": cd["recoverable_tok"], "mode": "auto",
-                            "method": "structural", "read": cd["recoverable_tok"], "write": 0, "proven": True,
-                            "prefix_tok": cd["recoverable_tok"], "lines": annotate_prompt(b)}
-        if cd["verdict"] == "BREAKER":
-            out["cache"]["reorg"] = _reorg(b, cd)
-        out["cache_usd"] = r["cache_usd"] if proven else 0.0              # honest: no proof → no claimed saving
+    if cd and b and cd.get("verdict") == "BREAKER":
+        # the unique win: a prompt whose dynamic content breaks the prefix -> reorg it, then PROVE both behaviour
+        # (judge) and caching (before/after round-trip). $ only when SAFE + cache-proven.
+        cr = cache_reorg.prove(node, b)
+        out["cache"] = cr
+        out["cache_usd"] = round((cr.get("save_per_1k") or 0) * calls / 1000, 2) if cr.get("recommend") else 0.0
+    elif cd and cd.get("verdict") in ("CACHEABLE", "AUTO"):
+        # already a contiguous static prefix — a gateway (litellm) or auto-caching provider handles this. Not our win.
+        out["cache"] = {"verdict": cd["verdict"], "informational": True,
+                        "note": "already cacheable — a gateway or the provider caches this prefix automatically"}
     if r["downgrade"] and b:
         a = audit.audit_node(node, b)               # N distinct inputs x K repeats (central config); rate-based verdict
         out["downgrade"] = a
@@ -70,7 +54,7 @@ def stream(source, ws, project, keys, calls=None):
     """Generator: yields SSE progress while proving the selected nodes CONCURRENTLY (bounded pool), then stores
     the frozen result. Nodes prove in parallel and each downgrade fans its inputs out too, so wall-clock is the
     slowest single node, not the sum. Paid — same number of calls as sequential, just overlapped."""
-    f = funnel.build(source, ws, project, calls=calls)
+    f = funnel.build(source, ws, project, calls=calls, levers=["downgrade", "cache"])   # prove both levers for selected
     rows = {r["key"]: r for r in f["rows"] if r["key"] in keys}            # identity = UNIQUE key, never the label
     order = [k for k in keys if k in rows]
     # Per-call-site traces come from the graph's OWN buckets, keyed by the SAME unique key — so two call-sites that
@@ -84,7 +68,7 @@ def stream(source, ws, project, keys, calls=None):
 
     done = {}
     with ThreadPoolExecutor(max_workers=min(4, len(order) or 1)) as ex:
-        futs = {ex.submit(_prove_one, k, rows[k], by_key.get(k, [])): k for k in order}
+        futs = {ex.submit(_prove_one, k, rows[k], by_key.get(k, []), f["calls"]): k for k in order}
         for fut in as_completed(futs):
             k = futs[fut]
             try:
