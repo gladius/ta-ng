@@ -15,7 +15,7 @@
 - Separate REMAINING problem = **DATA COMPLETENESS**: our fetch grabs a shifting WINDOW of the most-recent `limit` RUNS (`list_runs`, no `is_root`) → can slice trace trees in half → incomplete trees → node identity/graph_path mis-resolved, call-sites missing/`untagged`. A snapshot won't drift, but it may be built from a partial slice. Snapshot = one capture per report/audit-run (pinned by id; "Re-audit fresh" mints a new one).
 
 ## HIGH — do next (in order)
-### #1 Complete-trace fetch via ROOT RUNS  (VALIDATED against LangSmith docs)
+### #1 Complete-trace fetch via ROOT RUNS  (VALIDATED against docs · IMPLEMENTED in adapter.fetch live path · PENDING live prod verification — offline/tests unaffected)
 - **Now:** `connectors/langsmith/adapter.fetch` → `client.list_runs(project, select=_SELECT)` no `is_root`, paginate to `limit` (source.py pull/pull_graph `limit=500` RUNS). Grabs most-recent 500 runs (mixed types, partial trees).
 - **VALIDATED approach:** (a) `client.list_runs(project_name, is_root=True, limit=N)` -> N most-recent complete TRACES (returns one root run per trace; select id+trace_id, cheap). (b) for each trace, `client.list_runs(trace_id=<id>)` -> ALL runs of that trace (documented: fetches every run in the trace) -> a COMPLETE tree. Parallelize (b) with a bounded ThreadPoolExecutor. (c) feed whole-tree records to `connectors/graph.build_graph`.
 - **Why this and not "fetch llm runs + trust metadata":** docs do NOT confirm `langgraph_node`/`checkpoint_ns` metadata is inherited by the child LLM run — and our prod `untagged`/drift proves it isn't reliable. So we NEED the tree for node/graph_path resolution. `is_root` + `trace_id=` are both documented; the batch `in(trace_id,[...])` filter syntax is unconfirmed -> avoid, use per-trace.
@@ -25,8 +25,9 @@
 
 ### #2 Worker-safe snapshot/proof store (user OK'd adding a dependency)
 - **Now:** `snapshot.py` + `store.py` are in-process module dicts → break with >1 uvicorn/gunicorn worker (page-load vs prove hit different workers → `snapshot.get` None). Fail-safe prevents a $0 reset but nothing proves.
-- **DECIDED: SQLite** (stdlib, no dependency, worker-safe, persists). diskcache rejected (old, low adoption). Snapshots are immutable + JSON-serializable -> one table `snap_id -> json`; proofs similarly. Simple, no server.
-- **Files:** `snapshot.py` (back with a small sqlite module), `store.py` (proofs too, keyed by proof_key tuple -> json). Watch: snapshot holds full traces (buckets) — JSON blob can be MBs; fine for SQLite. Serialize the graph dict (contract traces are JSON-safe).
+- **DECIDED: simple IN-MEMORY store + Cloud Run `--max-instances=1`** (optionally `--min-instances=1` for no cold starts). Rationale: user deploys on Cloud Run (ephemeral + per-instance FS, autoscales) — so ANY per-instance store (memory OR SQLite) fails cross-instance, and GCS/Redis is over-engineering for a low-traffic advisory tool. The simple fix is to NOT need cross-instance sharing: one instance serves a user's whole flow (view->prove->re-fetch); in-memory works; a container restart just means the user re-audits (mints a new snapshot). SQLite was reverted.
+- **`store.py` = in-memory `put/peek/clear` (LRU, no TTL). `snapshot.py` delegates.** Store stays a swappable put/peek/clear, so IF horizontal scale is ever truly needed, swap ONLY this module's backend for GCS/Redis — a one-file change, not now.
+- **Ops note to give the user:** deploy with `gcloud run deploy --max-instances=1` (and `--min-instances=1` to avoid cold-start snapshot loss).
 - **Immediate mitigation:** confirm prod launch command; run SINGLE worker until the shared store lands.
 
 ## DEFERRED — medium/low, revisit AFTER high

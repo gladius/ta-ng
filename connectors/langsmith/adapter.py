@@ -156,6 +156,8 @@ class LangSmithAdapter(Adapter):
         except ImportError as e:
             raise RuntimeError("langsmith not installed: `pip install langsmith` "
                                "(or pass runs=<dicts/path> for offline mode)") from e
+        import os
+        from concurrent.futures import ThreadPoolExecutor
         import credentials                                     # the ONE .env loader + alias normalization
         credentials.load()
         # Client reads LANGSMITH_WORKSPACE_ID from env and sends it as X-Tenant-Id (org-scoped keys need it).
@@ -163,19 +165,30 @@ class LangSmithAdapter(Adapter):
                                                                   aliases=("LANGCHAIN_API_KEY", "LANGSMITH_KEY")),
                         api_url=api_url or credentials.get_config("LANGSMITH_ENDPOINT", None,
                                                                   aliases=("LANGCHAIN_ENDPOINT",)))
-        kw = {"project_name": project, "select": _SELECT}
-        if run_type:                                           # None -> all run types (the whole tree)
-            kw["run_type"] = run_type
+        # Fetch COMPLETE TRACES, not a shifting run-window. A window of the most-recent N runs slices trace trees in
+        # half -> node identity/subgraph can't resolve -> the graph drifts/becomes partial. Instead: (1) take the
+        # most-recent N ROOT runs (is_root -> one per trace); (2) hydrate each trace's FULL tree via
+        # list_runs(trace_id=). Whole trees are what the graph layer needs (langgraph_node metadata is NOT reliably
+        # inherited by the child llm run). `limit` now bounds TRACES; env AUDIT_TRACES is the default.
+        n_traces = int(limit or os.environ.get("AUDIT_TRACES", "500"))
+        root_kw = {"project_name": project, "is_root": True}
         if since_hours:
-            kw["start_time"] = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-        # NOTE: the API caps a single query's `limit` at 100. To bound a LARGER fetch we let list_runs
-        # paginate and stop after `limit` records — so we never pull an agent's entire history.
-        n = 0
-        for r in client.list_runs(**kw):
-            yield _run_to_dict(r)
-            n += 1
-            if limit and n >= limit:
+            root_kw["start_time"] = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+        trace_ids, seen = [], set()
+        for r in client.list_runs(**root_kw):                  # roots newest-first; one per trace
+            tid = str(getattr(r, "trace_id", None) or getattr(r, "id", "") or "")
+            if tid and tid not in seen:
+                seen.add(tid); trace_ids.append(tid)
+            if len(trace_ids) >= n_traces:
                 break
+
+        def _hydrate(tid):                                     # every run of ONE trace = a complete tree
+            return [_run_to_dict(r) for r in client.list_runs(project_name=project, trace_id=tid, select=_SELECT)]
+
+        with ThreadPoolExecutor(max_workers=8) as ex:          # trees are independent -> hydrate in parallel
+            for tree in ex.map(_hydrate, trace_ids):
+                for rd in tree:
+                    yield rd
 
     def to_trace(self, rec, *, project=None, group_by=None, **_):
         rec = _run_to_dict(rec)

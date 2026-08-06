@@ -15,5 +15,3 @@ venv/
 .claude/settings.local.json
 .DS_Store
 
-# local durable store (snapshots/proofs)
-.audit_store.sqlite*
