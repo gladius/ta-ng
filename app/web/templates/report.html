@@ -32,22 +32,37 @@
   .cache-box .ba{font-variant-numeric:tabular-nums;font-size:.92rem;margin:.15rem 0}
   .cache-box .ba b{color:var(--fg,#222)}
   .cache-box .arrow{color:#2563eb;font-weight:700;margin:0 .35rem}
+  .hero-lead{font-size:1.7rem;font-weight:700;letter-spacing:-.01em}
 </style>
 
 <section class="hero">
   <p class="eyebrow">Model-tier downgrade · advisory, out-of-path · read-only</p>
-  <div class="hero-num" id="heroNum">
-    ${{ '{:,.0f}'.format(proof.downgrade_usd if proven else f.downgrade_total) }}<span class="per">per {{ '{:,}'.format(f.calls) }} calls</span>
-    {% if proven %}<span class="hero-chip proven">✓ proven live</span>{% else %}<span class="hero-chip detected">candidates · not yet proven</span>{% endif %}
-  </div>
-  <p class="hero-sub">{{ f.agent }} · {{ f.rows | length }} call-sites.
-    {% if proven %}Each figure is earned by re-running the cheaper model on real recorded inputs and checking the decision + facts held — not an estimate.{% else %}We rank every call-site by cost and audit the costliest ones that can drop a tier. Prove the shortlist with a live re-run.{% endif %}
-    <b>All $ figures are per {{ '{:,}'.format(f.calls) }} calls</b> (a fixed basis — the per-call saving is exact, so multiply by your real call volume).</p>
-  <div class="stats" id="heroStats">
-    <div class="stat"><div class="k">Provable downgrades</div><div class="v">${{ '{:,.0f}'.format(proof.downgrade_usd if proven else f.downgrade_total) }}</div></div>
-    <div class="stat"><div class="k">{{ 'Safe to downgrade' if proven else 'Candidates' }}</div><div class="v">{% if proven %}{{ proof.results | selectattr('downgrade') | selectattr('downgrade.verdict','equalto','SAFE') | list | length }}{% else %}{{ f.wins }}{% endif %}</div></div>
-    <div class="stat"><div class="k">Call-sites</div><div class="v">{{ f.rows | length }}</div></div>
-  </div>
+  {% if proven %}
+    {% set proved = proof.results | length %}
+    {% set safe = proof.results | selectattr('downgrade') | selectattr('downgrade.verdict', 'equalto', 'SAFE') | list | length %}
+    <div class="hero-num" id="heroNum">
+      ${{ '{:,.0f}'.format(proof.downgrade_usd) }}<span class="per">per {{ '{:,}'.format(f.calls) }} calls</span>
+      <span class="hero-chip proven">✓ proven live</span>
+    </div>
+    <p class="hero-sub">{{ f.agent }} · <b>{{ safe }} of {{ proved }} proved call-sites are safe to downgrade.</b>
+      {% if proof.downgrade_usd <= 0 %}None held up under a live re-run — the potential wasn't confirmed. That's the honest result, not an error.{% else %}Each $ is earned by re-running the cheaper model on real recorded inputs and checking the decision + facts held.{% endif %}
+      <b>Per {{ '{:,}'.format(f.calls) }} calls.</b></p>
+    <div class="stats" id="heroStats">
+      <div class="stat"><div class="k">Proven savings</div><div class="v">${{ '{:,.0f}'.format(proof.downgrade_usd) }}</div></div>
+      <div class="stat"><div class="k">Safe to downgrade</div><div class="v">{{ safe }} / {{ proved }}</div></div>
+      <div class="stat"><div class="k">Call-sites{% if f.traces %} · {{ f.traces }} traces{% endif %}</div><div class="v">{{ f.rows | length }}</div></div>
+    </div>
+  {% else %}
+    <div class="hero-num" id="heroNum"><span class="hero-lead">{{ f.agent }}</span><span class="hero-chip detected">not yet proven</span></div>
+    <p class="hero-sub"><b>{{ f.rows | length }} call-sites</b>{% if f.traces %} from <b>{{ f.traces }} traces</b>{% endif %}, ranked by potential below.
+      Select the ones to check and <b>prove them with a live re-run</b> — we only report savings we can verify, so nothing here is a promise yet.
+      <span class="muted">Up to ${{ '{:,.0f}'.format(f.downgrade_total) }}/{{ '{:,}'.format(f.calls) }} calls in <i>unproven</i> potential — the real number lands after you prove.</span></p>
+    <div class="stats" id="heroStats">
+      <div class="stat"><div class="k">Call-sites{% if f.traces %} · {{ f.traces }} traces{% endif %}</div><div class="v">{{ f.rows | length }}</div></div>
+      <div class="stat"><div class="k">Downgrade candidates</div><div class="v">{{ f.wins }}</div></div>
+      <div class="stat"><div class="k">Potential <span class="muted">(unproven)</span></div><div class="v muted">${{ '{:,.0f}'.format(f.downgrade_total) }}</div></div>
+    </div>
+  {% endif %}
 </section>
 
 <section class="panel" id="selector">

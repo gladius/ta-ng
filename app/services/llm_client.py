@@ -20,8 +20,14 @@ def client():
     if _client is None:
         with _lock:
             if _client is None:
+                # base_url points at the real Anthropic API by default, OR at a litellm gateway when set — litellm's
+                # /v1/messages is Anthropic-format and translates the SAME request to OpenAI/Gemini/etc., so replay
+                # can PROVE non-Anthropic call-sites through the gateway (no code change per provider). None => default.
                 _client = anthropic.Anthropic(
-                    api_key=credentials.get_secret("ANTHROPIC_API_KEY", aliases=("ANTHROPIC_KEY", "CLAUDE_API_KEY")))
+                    api_key=credentials.get_secret("ANTHROPIC_API_KEY",
+                                                   aliases=("ANTHROPIC_KEY", "CLAUDE_API_KEY", "LITELLM_API_KEY")),
+                    base_url=credentials.get_config("ANTHROPIC_BASE_URL", None,
+                                                    aliases=("LITELLM_BASE_URL", "LLM_BASE_URL")))
     return _client
 
 

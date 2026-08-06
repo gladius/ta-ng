@@ -54,7 +54,7 @@ def build(source_id, ws_id, project, calls=None, levers=None, g=None):
         })
     rows.sort(key=lambda r: (-r["opportunity"], -r["cost"]))
     return {
-        "agent": project, "calls": calls, "rows": rows,
+        "agent": project, "calls": calls, "rows": rows, "traces": g.get("traces", 0),   # sample size (# traces)
         "graphs": g.get("graphs", []),                             # distinct subgraphs, for the filter control
         "total": round(sum(r["opportunity"] for r in rows), 2),
         "cache_total": round(sum(r["cache_usd"] for r in rows), 2),

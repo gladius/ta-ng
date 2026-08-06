@@ -52,5 +52,5 @@ def build(source_id, ws_id, project, limit=300):
         m.pop("_in", None); m.pop("_out", None)
     nodes.sort(key=lambda x: -x["avg_out"])
     graphs = sorted({n["graph_path"] for n in nodes if n["graph_path"]})
-    return {"agent": g.agent, "nodes": nodes, "edges": g.edges, "graphs": graphs,
-            "buckets": buckets, "skipped": len(skipped)}
+    return {"agent": g.agent, "nodes": nodes, "edges": g.edges, "graphs": graphs, "buckets": buckets,
+            "traces": getattr(g, "trace_count", 0), "skipped": len(skipped)}    # sample size = # of traces
