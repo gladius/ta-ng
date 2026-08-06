@@ -17,13 +17,20 @@ def new_id():
     return secrets.token_urlsafe(9)
 
 
-def create(source, ws, project):
-    """Fetch + build the graph ONCE and pin it under a fresh snapshot id. Returns (snap_id, graph)."""
+def build_into(sid, source, ws, project):
+    """Fetch + build the graph ONCE and pin it under the GIVEN snapshot id; returns the graph. Splitting the
+    id from the build lets the web layer mint an id, render a progress page immediately, then run this in the
+    background under that same id (see server.build_stream) — so the multi-second fetch isn't a frozen page."""
     from app.services import graph, store
     g = graph.build(source, ws, project)
-    sid = new_id()
     store.put(("snapshot", sid), {"source": source, "ws": ws, "project": project, "graph": g})
-    return sid, g
+    return g
+
+
+def create(source, ws, project):
+    """Fetch + build the graph ONCE and pin it under a fresh snapshot id. Returns (snap_id, graph)."""
+    sid = new_id()
+    return sid, build_into(sid, source, ws, project)
 
 
 def get(snap_id, source=None, ws=None, project=None):

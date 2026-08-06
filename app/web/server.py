@@ -26,6 +26,10 @@ def _page(request, name, **ctx):
     return templates.TemplateResponse(request, name, ctx)   # Starlette signature: (request, name, context)
 
 
+def _sse(event, data):
+    return "event: %s\ndata: %s\n\n" % (event, json.dumps(data))
+
+
 @app.get("/", response_class=HTMLResponse)
 def datasources(request: Request):
     return _page(request, "datasource.html", datasources=nav.datasources())
@@ -47,15 +51,39 @@ def agents(request: Request, source: str, ws_id: str):
 def report_view(request: Request, source: str, ws_id: str, project: str, snap: str = "", cache: int = 0):
     from app.services import funnel, prove, store, snapshot
     g = snapshot.get(snap, source, ws_id, project) if snap else None
-    if g is None:                        # no/unknown/evicted snap -> mint ONE immutable snapshot and pin it in the URL
-        sid, g = snapshot.create(source, ws_id, project)
-        base = "/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe=""))
-        return RedirectResponse("%s?snap=%s%s" % (base, sid, "&cache=1" if cache else ""), status_code=303)
+    if g is None:                        # no/unknown/evicted snap -> mint an id, show a PROGRESS page, build via SSE.
+        sid = snapshot.new_id()          # (the multi-second fetch used to block here as a frozen page — now it streams)
+        return _page(request, "building.html", source=source, ws_id=ws_id, project=project,
+                     snap=sid, cache=int(cache), agent=project)
     levers = ["downgrade"] + (["cache"] if cache else [])       # cacheable-prefix is OPT-IN via the checkbox (?cache=1)
     f = funnel.build(source, ws_id, project, levers=levers, g=g)                  # derived from the PINNED snapshot
     proof = store.peek(prove.proof_key(source, ws_id, project, snap))             # paid; tied to THIS snapshot
     return _page(request, "report.html", source=source, ws_id=ws_id, project=project,
                  f=f, proof=proof, cache_on=bool(cache), snap=snap)
+
+
+@app.get("/s/{source}/ws/{ws_id}/agent/{project}/build-stream")
+def build_stream(source: str, ws_id: str, project: str, snap: str, cache: int = 0):
+    """SSE — fetch + build the graph ONCE, pinned under `snap`, streaming coarse progress so the wait is visible
+    (not a frozen page). Ends with `done` carrying the report URL for the SAME snap; a build error ends with
+    `failed`. The heavy work is one bulk pull (~3 paginated calls) + fold; sync endpoint => runs in the threadpool,
+    so it never blocks the event loop."""
+    from app.services import snapshot
+
+    def gen():
+        yield _sse("stage", {"msg": "Fetching traces & grouping call-sites…", "pct": 20})
+        try:
+            g = snapshot.build_into(snap, source, ws_id, project)
+        except Exception as e:                                       # surface the real reason, don't 500 a blank page
+            yield _sse("failed", {"msg": str(e)[:300]})
+            return
+        yield _sse("stage", {"msg": "Priced %d call-sites across %d traces"
+                             % (len(g.get("nodes", [])), g.get("traces", 0)), "pct": 92})
+        base = "/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe=""))
+        yield _sse("done", {"url": "%s?snap=%s%s" % (base, snap, "&cache=1" if cache else "")})
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/prove-stream")

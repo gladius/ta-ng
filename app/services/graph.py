@@ -37,19 +37,24 @@ def build(source_id, ws_id, project, limit=300):
         s, ai, ao = n["samples"], n["avg_in"], n["avg_out"]
         if sk not in merged:
             merged[sk] = {"node": n["node"], "key": sk, "variant": n.get("variant", ""),
-                          "calls": s, "traces": n["traces"], "avg_in": ai, "avg_out": ao, "model": n["model"],
+                          "calls": s, "avg_in": ai, "avg_out": ao, "model": n["model"],
                           "models": n.get("models_list") or [{"name": n["model"], "calls": s}],
                           "mixed": n.get("mixed_model", False), "graph_path": n.get("graph_path", ""),
                           "out_type": n.get("out_type"), "untagged": n.get("untagged", False),
-                          "_in": ai * s, "_out": ao * s}
+                          "_in": ai * s, "_out": ao * s, "_tsum": n["traces"]}
         else:                                               # merge a content-variant into the stable call-site
             m = merged[sk]
-            m["calls"] += s; m["traces"] += n["traces"]; m["_in"] += ai * s; m["_out"] += ao * s
+            m["calls"] += s; m["_in"] += ai * s; m["_out"] += ao * s; m["_tsum"] += n["traces"]
             m["avg_in"] = round(m["_in"] / max(1, m["calls"])); m["avg_out"] = round(m["_out"] / max(1, m["calls"]))
             m["mixed"] = m["mixed"] or n.get("mixed_model", False)
     nodes = list(merged.values())
     for m in nodes:
-        m.pop("_in", None); m.pop("_out", None)
+        # DISTINCT traces from the merged bucket. Variants of ONE call-site (a ReAct node's pre/post-tool calls)
+        # recur in the SAME traces, so summing per-variant counts double-counts (handler read 22 across only 12
+        # traces). Count distinct trace_ids in the bucket; fall back to the summed count only if traces carry no id.
+        distinct = len({t.get("trace_id") for t in buckets.get(m["key"], []) if t.get("trace_id")})
+        m["traces"] = distinct if distinct else m["_tsum"]
+        m.pop("_tsum", None); m.pop("_in", None); m.pop("_out", None)
     nodes.sort(key=lambda x: -x["avg_out"])
     graphs = sorted({n["graph_path"] for n in nodes if n["graph_path"]})
     return {"agent": g.agent, "nodes": nodes, "edges": g.edges, "graphs": graphs, "buckets": buckets,
