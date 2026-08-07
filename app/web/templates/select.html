@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% set base = '/s/' ~ source ~ '/ws/' ~ ws_id ~ '/agent/' ~ (project | urlencode) %}
+{% block title %}{{ f.agent }} · choose what to audit{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · select</b>{% endblock %}
+{% block content %}
+<style>
+  .sel-hero{margin-bottom:var(--s5)}
+  .sel-top{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+  .sel-top .eyebrow{text-transform:uppercase;letter-spacing:.1em;font-size:11px;font-weight:700;color:var(--faint)}
+  .v-agent{font-family:'Plex Mono',ui-monospace,monospace;font-size:13px;color:var(--muted)}
+  .sel-hero h1{font-size:26px;font-weight:700;letter-spacing:-.02em;margin:0 0 6px}
+  .sel-hero .sub{color:var(--muted);font-size:15px;margin:0;max-width:66ch}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:var(--s5) var(--s5) var(--s4)}
+  .modebar{display:flex;flex-wrap:wrap;gap:var(--s6);margin-bottom:var(--s4);padding-bottom:var(--s4);border-bottom:1px solid var(--line)}
+  .modebar label{display:inline-flex;gap:8px;align-items:center;cursor:pointer;font-size:14px}
+  .muted{color:var(--muted)}
+  .filterbar{display:flex;align-items:center;gap:10px;margin-bottom:var(--s4);font-size:13px;flex-wrap:wrap}
+  .filterbar[hidden]{display:none}
+  .filterbar input,.filterbar select{padding:6px 10px;border:1px solid var(--line-strong);border-radius:7px;background:var(--panel);color:inherit;font:inherit}
+  .filterbar .fsearch{min-width:220px}
+  .sel-grid{width:100%;border-collapse:collapse}
+  .sel-grid th,.sel-grid td{text-align:left;padding:11px 10px;border-bottom:1px solid var(--line);font-size:14px}
+  .sel-grid thead th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600}
+  .sel-grid tbody tr:last-child td{border-bottom:none}
+  .sel-grid tr.dim{opacity:.42}
+  .sel-grid .num{text-align:right;font-variant-numeric:tabular-nums}
+  .sel-grid td .sel{width:15px;height:15px;cursor:pointer;accent-color:var(--accent)}
+  .s-name{font-weight:600}
+  .s-graph{color:var(--faint);font-size:12px;margin-left:8px}
+  .s-model{color:var(--muted);font-size:12px}
+  .s-none{color:var(--faint);font-size:12px}
+  .chip{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:6px;white-space:nowrap;margin-right:5px}
+  .chip--dg{background:var(--hold-weak);color:var(--hold)}
+  .chip--ca{background:var(--accent-weak);color:var(--accent)}
+  .selbar{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-top:var(--s4)}
+</style>
+
+<section class="sel-hero">
+  <div class="sel-top"><span class="eyebrow">Token audit</span><span class="v-agent">{{ f.agent }}</span></div>
+  <h1>Choose what to audit</h1>
+  <p class="sub"><b>{{ f.rows | length }} call-sites</b> from <b>{{ f.traces }} traces</b>, costliest first. Pick the call-sites to re-run live, then Audit — only what you pick is proven.</p>
+</section>
+
+<section class="panel">
+  <div class="modebar">
+    <label><input type="radio" name="mode" value="auto" checked onchange="setMode()"> <b>Top 5 costliest</b> <span class="muted">— the biggest opportunities</span></label>
+    <label><input type="radio" name="mode" value="manual" onchange="setMode()"> <b>Choose manually</b></label>
+  </div>
+  {% if f.graphs or f.rows | length > 12 %}
+  <div class="filterbar" id="fbar" hidden>
+    {% if f.rows | length > 12 %}<input type="search" id="qbox" class="fsearch" placeholder="Filter call-sites by name…" oninput="applyFilters()" autocomplete="off">{% endif %}
+    {% if f.graphs %}<select id="gfsel" onchange="applyFilters()"><option value="__all">All graphs</option>{% for gp in f.graphs %}<option value="{{ gp }}">{{ gp }}</option>{% endfor %}</select>{% endif %}
+  </div>
+  {% endif %}
+  <table class="sel-grid">
+    <thead><tr><th style="width:30px"></th><th>Call-site</th><th>Model</th><th class="num">Cost / {{ (f.calls // 1000) }}k</th><th>Opportunity</th></tr></thead>
+    <tbody>
+    {% for r in f.rows %}
+      <tr data-graph="{{ r.graph_path }}" class="{{ '' if r.opportunity > 0 else 'dim' }}">
+        <td><input type="checkbox" class="sel" value="{{ r.key }}"{% if loop.index <= 5 and r.opportunity > 0 %} checked data-top5="1"{% endif %}{% if r.opportunity <= 0 %} disabled{% endif %}></td>
+        <td><span class="s-name">{{ r.node }}</span>{% if r.graph_path %}<span class="s-graph">{{ r.graph_path }}</span>{% endif %}</td>
+        <td class="mono s-model">{{ r.model }}</td>
+        <td class="num">${{ '{:,.0f}'.format(r.cost) }}</td>
+        <td>
+          {% if r.downgrade_to %}<span class="chip chip--dg">&darr; {{ r.downgrade_to }}</span>{% endif %}
+          {% if r.cache_verdict == 'BREAKER' %}<span class="chip chip--ca">&#9889; cache</span>{% endif %}
+          {% if r.opportunity <= 0 %}<span class="s-none">&mdash; nothing to test</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="selbar">
+    <span class="muted" id="selnote"></span>
+    <button class="btn" id="auditBtn" onclick="audit()">Audit selected →</button>
+  </div>
+</section>
+
+<script>
+  const BASE = {{ base | tojson }}, SNAP = {{ snap | tojson }};
+  const sel = () => [...document.querySelectorAll('.sel:checked')].map(b => b.value);
+  function note() { const n = sel().length; document.getElementById('selnote').textContent = n ? (n + ' selected') : 'none selected'; document.getElementById('auditBtn').disabled = !n; }
+  function setMode() {
+    const auto = document.querySelector('input[name=mode]:checked').value === 'auto';
+    const fb = document.getElementById('fbar'); if (fb) fb.hidden = auto;
+    if (auto) document.querySelectorAll('.sel').forEach(cb => { if (!cb.disabled) cb.checked = cb.hasAttribute('data-top5'); });
+    note();
+  }
+  function applyFilters() {
+    const qb = document.getElementById('qbox'), gs = document.getElementById('gfsel');
+    const q = (qb ? qb.value : '').trim().toLowerCase(), gv = gs ? gs.value : '__all';
+    document.querySelectorAll('tbody tr').forEach(tr => {
+      const okGraph = (gv === '__all' || tr.dataset.graph === gv);
+      const nameEl = tr.querySelector('.s-name'); const name = (nameEl ? nameEl.textContent : '').toLowerCase();
+      tr.style.display = (okGraph && (!q || name.indexOf(q) !== -1)) ? '' : 'none';
+    });
+  }
+  document.querySelectorAll('.sel').forEach(cb => cb.addEventListener('change', note));
+  setMode();
+  function audit() {
+    const keys = sel(); if (!keys.length) { alert('Select at least one call-site to audit.'); return; }
+    location.href = BASE + '/auditing?snap=' + encodeURIComponent(SNAP) + '&keys=' + encodeURIComponent(keys.join(','));
+  }
+</script>
+{% endblock %}

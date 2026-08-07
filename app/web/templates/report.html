@@ -1,237 +1,250 @@
 {% extends "base.html" %}
 {% set base = '/s/' ~ source ~ '/ws/' ~ ws_id ~ '/agent/' ~ (project | urlencode) %}
-{% set proven = proof is not none %}
-{% block title %}{{ f.agent }} · downgrade report{% endblock %}
-{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · Downgrade report</b>{% endblock %}
+{% block title %}{{ f.agent }} · token audit{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · audit</b>{% endblock %}
 {% block content %}
 <style>
-  .verdict{font-weight:700;font-size:.72rem;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase}
-  .verdict.safe{background:#0f7a3d;color:#fff}
-  .verdict.unsafe{background:var(--accent,#b3231d);color:#fff}
-  .verdict.thin{background:#7a6a12;color:#fff}
-  .verdict.na{background:#555;color:#fff}
-  .subtle{color:var(--muted,#888);font-size:.9rem}
-  .samples{margin:.5rem 0 0;border-top:1px solid rgba(128,128,128,.25)}
-  .samp-row{display:flex;gap:.6rem;align-items:baseline;padding:.4rem 0;border-bottom:1px solid rgba(128,128,128,.18)}
-  .tag{font-weight:700;font-size:.68rem;padding:1px 7px;border-radius:4px;white-space:nowrap}
-  .tag.kept{background:rgba(15,122,61,.15);color:#0f7a3d}
-  .tag.drift{background:rgba(179,35,29,.15);color:var(--accent,#b3231d)}
-  .tag.flip{background:rgba(122,106,18,.18);color:#8a7712}
-  .samp-in{flex:1;font-size:.92rem}
-  .samp-rate{font-variant-numeric:tabular-nums;font-size:.8rem;color:var(--muted,#888);white-space:nowrap}
-  .samp-rate b{color:var(--fg,#222);font-weight:600}
-  .samp-why{color:var(--muted,#888);font-size:.85rem}
-  .dl-note{font-size:.82rem;color:var(--muted,#888);margin:.5rem 0 0}
-  .gfilter{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.2rem 0 .8rem;font-size:.85rem}
-  .gfilter .glabel{color:var(--muted,#888);text-transform:uppercase;letter-spacing:.04em;font-size:.72rem}
-  .gfilter select{padding:.25rem .5rem;border:1px solid rgba(128,128,128,.35);border-radius:6px;background:transparent;color:inherit;font:inherit}
-  .modebar{display:flex;flex-wrap:wrap;gap:1.2rem;margin:.2rem 0 .7rem;font-size:.9rem}
-  .modebar label{display:inline-flex;gap:.35rem;align-items:center;cursor:pointer}
-  .chip.cache{background:rgba(37,99,235,.14);color:#2563eb}
-  .cache-box{margin-top:.7rem;padding:.55rem .7rem;border:1px solid rgba(37,99,235,.25);border-radius:6px;background:rgba(37,99,235,.05)}
-  .cache-box .ba{font-variant-numeric:tabular-nums;font-size:.92rem;margin:.15rem 0}
-  .cache-box .ba b{color:var(--fg,#222)}
-  .cache-box .arrow{color:#2563eb;font-weight:700;margin:0 .35rem}
-  .hero-lead{font-size:1.7rem;font-weight:700;letter-spacing:-.01em}
+  .verdict{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:var(--s6) var(--s6) var(--s5) calc(var(--s6) + 4px);overflow:hidden;margin-bottom:var(--s5)}
+  .verdict::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px}
+  .verdict--neutral::before{background:var(--hold)}
+  .verdict--win::before{background:var(--ok)}
+  .verdict-top{display:flex;align-items:center;gap:var(--s3);margin-bottom:var(--s4)}
+  .verdict-top .eyebrow{text-transform:uppercase;letter-spacing:.1em;font-size:11px;font-weight:700;color:var(--faint)}
+  .v-agent{font-family:'Plex Mono',ui-monospace,monospace;font-weight:500;font-size:13px;color:var(--muted)}
+  .badge{margin-left:auto;font-size:12px;font-weight:600;padding:5px 12px;border-radius:999px;background:var(--ok-weak);color:var(--ok);white-space:nowrap}
+  .verdict-headline{font-size:30px;font-weight:700;line-height:1.15;max-width:26ch;letter-spacing:-.02em}
+  .verdict-sub{color:var(--muted);font-size:15px;margin:var(--s3) 0 0;max-width:66ch}
+  .metrics{display:flex;gap:var(--s7);flex-wrap:wrap;margin-top:var(--s5);padding-top:var(--s5);border-top:1px solid var(--line)}
+  .m-k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);font-weight:600}
+  .m-v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:var(--s1);letter-spacing:-.02em}
+  .m-v.pos{color:var(--ok)}
+  .m-u{font-size:13px;font-weight:500;color:var(--muted);margin-left:5px;letter-spacing:0}
+  .m-split{font-size:12.5px;color:var(--muted);margin-top:7px;font-variant-numeric:tabular-nums}
+  .verdict--error::before{background:var(--bad)}
+  .badge--err{background:var(--bad-weak);color:var(--bad)}
+  .audit-error{background:var(--bad-weak);border:1px solid rgba(179,35,29,.3);border-radius:var(--radius);padding:var(--s4) var(--s5);margin-bottom:var(--s4)}
+  .ae-head{font-weight:700;color:var(--bad);font-size:14px}
+  .ae-body{color:var(--ink);font-size:13.5px;margin-top:6px}
+  .ae-body a{font-weight:600}
+  .ae-det{margin-top:9px}
+  .ae-det summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+  .ae-det pre{white-space:pre-wrap;font-size:11.5px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:6px;max-height:200px;overflow:auto}
+
+  .strat-sec{margin-top:var(--s6)}
+  .ssec-head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);margin:0 2px var(--s3);padding-bottom:var(--s2);border-bottom:2px solid var(--line-strong)}
+  .ssec-title{font-size:16px;font-weight:700;letter-spacing:-.01em}
+  .ssec-title .ico{color:var(--accent);margin-right:7px;font-weight:700}
+  .ssec-sub{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .ssec-sub b{color:var(--ok);font-weight:700}
+  .ssec-empty{color:var(--faint);font-size:14px;padding:var(--s2) 2px;margin:0}
+
+  .findings{display:flex;flex-direction:column;gap:var(--s3)}
+  .finding{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  .finding[open]{border-color:var(--line-strong)}
+  .finding-head{list-style:none;cursor:pointer;display:flex;align-items:center;gap:var(--s3);padding:var(--s4) var(--s5)}
+  .finding-head::-webkit-details-marker{display:none}
+  .finding-head:hover{background:#faf9f7}
+  .f-caret{color:var(--faint);font-size:10px;transition:transform .15s;flex-shrink:0}
+  .finding[open] .f-caret{transform:rotate(90deg)}
+  .f-name{font-weight:600;font-size:16px}
+  .f-model{font-family:'Plex Mono',ui-monospace,monospace;font-size:12px;color:var(--muted);background:var(--hold-weak);padding:2px 8px;border-radius:6px;white-space:nowrap}
+  .f-spacer{flex:1}
+  .chip{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:6px;white-space:nowrap}
+  .chip--bad{background:var(--bad-weak);color:var(--bad)}
+  .chip--ok{background:var(--ok-weak);color:var(--ok)}
+  .chip--muted{background:var(--hold-weak);color:var(--hold)}
+  .chip--warn{background:#fdf3e0;color:#8a5a00}
+  .f-amt{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:88px;text-align:right}
+  .f-amt .per{font-size:11px;font-weight:400;color:var(--faint);margin-left:2px}
+  .ssec-sub .per{color:var(--faint);font-weight:400}
+  .f-amt.pos{color:var(--ok)}
+  .f-amt.none{color:var(--faint)}
+
+  .finding-body{padding:2px var(--s5) var(--s5) 34px;display:flex;flex-direction:column;gap:var(--s3)}
+  .strat-note{color:var(--muted);font-size:13px;margin:0}
+  .strat-note .to{font-family:'Plex Mono',ui-monospace,monospace;font-size:12.5px;color:var(--ink)}
+  .subtle{color:var(--faint)}
+  .evidence{list-style:none;margin:0;padding:0}
+  .ev-row{display:grid;grid-template-columns:74px minmax(0,1fr) minmax(0,1.3fr);gap:var(--s3);align-items:baseline;padding:var(--s2) 0;border-top:1px solid var(--line)}
+  .ev-row:first-child{border-top:none}
+  .ev-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:2px 0;border-radius:5px;text-align:center}
+  .ev-drift{background:var(--bad-weak);color:var(--bad)}
+  .ev-warn{background:#fdf3e0;color:#8a5a00}
+  .ev-kept{background:var(--ok-weak);color:var(--ok)}
+  .ev-in{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ev-why{font-size:13px;color:var(--muted)}
+  .ev-rate{color:var(--ink);font-variant-numeric:tabular-nums}
+
+  .ba-grid{display:flex;align-items:center;gap:var(--s4);max-width:520px}
+  .ba-col{flex:1;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .ba-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:5px 11px}
+  .ba-before{background:var(--bad-weak);color:var(--bad)}
+  .ba-after{background:var(--ok-weak);color:var(--ok)}
+  .ba-metric{padding:10px 11px;font-size:13px}
+  .ba-metric b{font-size:18px;font-variant-numeric:tabular-nums}
+  .ba-arrow{color:var(--ok);font-weight:700;font-size:18px}
+
+  .actions{display:flex;gap:10px;align-items:center;margin-top:var(--s6)}
+  .foot-note{color:var(--faint);font-size:12px;line-height:1.65;margin:var(--s5) 2px 0;max-width:84ch}
+  @media (max-width:640px){
+    .verdict-headline{font-size:24px}.metrics{gap:var(--s5)}
+    .ev-row{grid-template-columns:48px 1fr;grid-template-areas:"tag in" "tag why"}
+    .ev-tag{grid-area:tag}.ev-in{grid-area:in}.ev-why{grid-area:why}
+    .f-model{display:none}
+  }
 </style>
 
-<section class="hero">
-  <p class="eyebrow">Model-tier downgrade · advisory, out-of-path · read-only</p>
-  {% if proven %}
-    {% set proved = proof.results | length %}
-    {% set safe = proof.results | selectattr('downgrade') | selectattr('downgrade.verdict', 'equalto', 'SAFE') | list | length %}
-    <div class="hero-num" id="heroNum">
-      ${{ '{:,.0f}'.format(proof.downgrade_usd) }}<span class="per">per {{ '{:,}'.format(f.calls) }} calls</span>
-      <span class="hero-chip proven">✓ proven live</span>
-    </div>
-    <p class="hero-sub">{{ f.agent }} · <b>{{ safe }} of {{ proved }} proved call-sites are safe to downgrade.</b>
-      {% if proof.downgrade_usd <= 0 %}None held up under a live re-run — the potential wasn't confirmed. That's the honest result, not an error.{% else %}Each $ is earned by re-running the cheaper model on real recorded inputs and checking the decision + facts held.{% endif %}
-      <b>Per {{ '{:,}'.format(f.calls) }} calls.</b></p>
-    <div class="stats" id="heroStats">
-      <div class="stat"><div class="k">Proven savings</div><div class="v">${{ '{:,.0f}'.format(proof.downgrade_usd) }}</div></div>
-      <div class="stat"><div class="k">Safe to downgrade</div><div class="v">{{ safe }} / {{ proved }}</div></div>
-      <div class="stat"><div class="k">Call-sites{% if f.traces %} · {{ f.traces }} traces{% endif %}</div><div class="v">{{ f.rows | length }}</div></div>
-    </div>
+{% set save = (proof.total or 0) %}
+{% set win = save > 0 %}
+{% set audited = proof.results | length %}
+{% set dg_total = (proof.downgrade_usd or 0) %}
+{% set ca_total = (proof.cache_usd or 0) %}
+{% set errored = proof.results | selectattr('error') | list %}
+{% set all_failed = (errored | length == audited and audited > 0) %}
+{% set ns = namespace(safe=0) %}
+{% for r in proof.results %}{% if ((r.downgrade_usd or 0) + (r.cache_usd or 0)) > 0 %}{% set ns.safe = ns.safe + 1 %}{% endif %}{% endfor %}
+
+{% if errored %}
+<div class="audit-error">
+  <div class="ae-head">&#9888; The live re-run failed for {{ errored | length }} of {{ audited }} call-site{{ 's' if audited != 1 }}{% if all_failed %} &mdash; nothing was verified{% endif %}.</div>
+  <div class="ae-body">Those call-sites weren&rsquo;t counted. The usual cause is the model API being unavailable or out of credits. Fix it, then <a href="#" onclick="event.preventDefault();reaudit()">re-audit</a>.</div>
+  <details class="ae-det"><summary>Show error</summary><pre>{{ errored[0].error }}</pre></details>
+</div>
+{% endif %}
+
+<section class="verdict {{ 'verdict--error' if all_failed else ('verdict--win' if win else 'verdict--neutral') }}">
+  <div class="verdict-top">
+    <span class="eyebrow">Token audit</span>
+    <span class="v-agent">{{ f.agent }}</span>
+    {% if all_failed %}<span class="badge badge--err">audit incomplete</span>{% else %}<span class="badge">&#10003; audited &middot; live re-run</span>{% endif %}
+  </div>
+  {% if all_failed %}
+    <h1 class="verdict-headline">The audit couldn&rsquo;t complete.</h1>
+    <p class="verdict-sub">All {{ audited }} selected call-site{{ 's' if audited != 1 }} failed to re-run live, so nothing could be verified. This is an execution error, not a result &mdash; resolve it (usually API credits) and re-audit.</p>
+  {% elif win %}
+    <h1 class="verdict-headline">${{ '{:,.0f}'.format(save) }} in verified savings.</h1>
+    <p class="verdict-sub">{{ ns.safe }} of {{ audited }} audited call-site{{ 's' if audited != 1 }} proved safe on a live re-run of real recorded inputs &mdash; behavior held on every sampled call.</p>
   {% else %}
-    <div class="hero-num" id="heroNum"><span class="hero-lead">{{ f.agent }}</span><span class="hero-chip detected">not yet proven</span></div>
-    <p class="hero-sub"><b>{{ f.rows | length }} call-sites</b>{% if f.traces %} from <b>{{ f.traces }} traces</b>{% endif %}, ranked by potential below.
-      Select the ones to check and <b>prove them with a live re-run</b> — we only report savings we can verify, so nothing here is a promise yet.
-      <span class="muted">Up to ${{ '{:,.0f}'.format(f.downgrade_total) }}/{{ '{:,}'.format(f.calls) }} calls in <i>unproven</i> potential — the real number lands after you prove.</span></p>
-    <div class="stats" id="heroStats">
-      <div class="stat"><div class="k">Call-sites{% if f.traces %} · {{ f.traces }} traces{% endif %}</div><div class="v">{{ f.rows | length }}</div></div>
-      <div class="stat"><div class="k">Downgrade candidates</div><div class="v">{{ f.wins }}</div></div>
-      <div class="stat"><div class="k">Potential <span class="muted">(unproven)</span></div><div class="v muted">${{ '{:,.0f}'.format(f.downgrade_total) }}</div></div>
+    <h1 class="verdict-headline">No safe savings on the audited call-sites.</h1>
+    <p class="verdict-sub">All {{ audited }} re-ran live against real recorded inputs and each genuinely needs its current setup. That&rsquo;s a verified result, not an empty one.</p>
+  {% endif %}
+  {% if not all_failed %}
+  <div class="metrics">
+    <div class="metric">
+      <div class="m-k">Verified savings</div>
+      <div class="m-v{{ ' pos' if win }}">${{ '{:,.0f}'.format(save) }}<span class="m-u">per {{ '{:,}'.format(f.calls) }} calls</span></div>
+      {% if win %}<div class="m-split">{% if dg_total > 0 %}&darr; ${{ '{:,.0f}'.format(dg_total) }} downgrade{% endif %}{% if dg_total > 0 and ca_total > 0 %} &middot; {% endif %}{% if ca_total > 0 %}&#9889; ${{ '{:,.0f}'.format(ca_total) }} cache{% endif %}</div>{% endif %}
     </div>
+    <div class="metric"><div class="m-k">Safe to change</div><div class="m-v">{{ ns.safe }}<span class="m-u">/ {{ audited }} audited</span></div></div>
+    <div class="metric"><div class="m-k">Sampled</div><div class="m-v">{{ f.traces }}<span class="m-u">traces</span></div></div>
+  </div>
   {% endif %}
 </section>
 
-<section class="panel" id="selector">
-  <h2>Call-sites — costliest first</h2>
-  <p class="hint">Detection is free and deterministic. Choose how to pick what to prove:</p>
-  <div class="modebar">
-    <label><input type="radio" name="mode" value="auto" checked onchange="setMode()"> <b>Auto</b> — prove the top 5 costliest</label>
-    <label><input type="radio" name="mode" value="manual" onchange="setMode()"> <b>Manual</b> — choose graph &amp; nodes</label>
+<!-- ── Model-tier downgrade ── -->
+<div class="strat-sec">
+  <div class="ssec-head">
+    <span class="ssec-title"><span class="ico">&darr;</span>Model-tier downgrade</span>
+    <span class="ssec-sub">{% if dg %}{% if dg_total > 0 %}<b>${{ '{:,.0f}'.format(dg_total) }}</b><span class="per">/{{ (f.calls // 1000) }}k</span> &middot; {% endif %}{{ dg | length }} audited{% else %}none audited{% endif %}</span>
   </div>
-  <div class="modebar">
-    <label><input type="checkbox" id="cacheToggle"{% if cache_on %} checked{% endif %} onchange="toggleCache()"> <b>Include cacheable-prefix</b> <span class="muted">— reorg breaker prompts so repeated calls cache (opt-in; adds a paid reorg proof)</span></label>
-  </div>
-  {% if f.graphs %}
-  {% set has_top = f.rows | selectattr('graph_path','equalto','') | list | length %}
-  <div class="gfilter" id="gfwrap">
-    <label class="glabel" for="gfsel">graph / subgraph:</label>
-    <select id="gfsel" onchange="filterGraph()">
-      <option value="__all">All graphs ({{ f.rows | length }} call-sites)</option>
-      {% if has_top %}<option value="__top">(top level)</option>{% endif %}
-      {% for gp in f.graphs %}<option value="{{ gp }}">{{ gp }}</option>{% endfor %}
-    </select>
-    <span class="muted" id="gfcount"></span>
-  </div>
-  {% endif %}
-  <table class="grid">
-    <thead><tr><th style="width:34px"></th><th>call-site</th><th>graph</th><th>current model</th><th class="num">cost / {{ (f.calls // 1000) }}k</th><th>candidate</th><th class="num">saving / {{ (f.calls // 1000) }}k</th></tr></thead>
-    <tbody>
-    {% for r in f.rows %}
-      <tr data-graph="{{ r.graph_path }}" class="{{ '' if r.opportunity > 0 else 'dim' }}">
-        <td><input type="checkbox" class="sel" value="{{ r.key }}"{% if loop.index <= 5 and r.opportunity > 0 %} checked data-default="1"{% endif %}{% if r.opportunity <= 0 %} disabled{% endif %}></td>
-        <td class="name">{{ r.node }}</td>
-        <td class="subtle">{{ r.graph_path or '—' }}</td>
-        <td class="mono">{{ r.model }}</td>
-        <td class="num">${{ '{:,.0f}'.format(r.cost) }}</td>
-        <td>{% if r.downgrade_usd > 0 %}<span class="chip down">↓ {{ r.downgrade_to }}</span>{% endif %}{% if r.cache_usd > 0 %}<span class="chip cache">⚡ cache-prefix</span>{% endif %}{% if r.downgrade_usd <= 0 and r.cache_usd <= 0 %}<span class="chip none">no lever</span>{% endif %}</td>
-        <td class="num money">{{ '${:,.0f}'.format(r.opportunity) if r.opportunity > 0 else '—' }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  <div class="selbar">
-    <span class="muted" id="selnote"></span>
-    <button class="btn" id="proveBtn" onclick="prove()">{{ 'Re-prove selected →' if proven else 'Prove selected →' }}</button>
-  </div>
-  <div class="prog" id="prog" hidden>
-    <div class="bar"><i id="barfill"></i></div>
-    <ul class="steps" id="steps"></ul>
-  </div>
-</section>
-
-<div id="results" class="{{ 'reveal' if proven else '' }}">
-  {% if proven %}{% for x in proof.results if x.downgrade or (x.cache and x.cache.verdict and not x.cache.get('informational')) %}
-  {% set total = (x.downgrade_usd or 0) + (x.cache_usd or 0) %}
-  <details class="node"{{ ' open' if loop.first else '' }}>
-    <summary class="node-sum">
-      <span class="node">{{ x.node }}</span>{% if x.graph_path %}<span class="subtle"> · {{ x.graph_path }}</span>{% endif %}
-      <span class="mono">{{ x.model }}</span>
-      <span class="spacer"></span>
-      {% if x.downgrade and x.downgrade.verdict == 'SAFE' %}<span class="verdict safe">↓ downgrade</span>{% endif %}
-      {% if x.cache and x.cache.recommend %}<span class="verdict safe">⚡ cache</span>{% endif %}
-      <span class="amt">{{ '${:,.0f} / {}k'.format(total, f.calls // 1000) if total > 0 else '—' }}</span>
-    </summary>
-    <div class="node-body">
-      {% if x.downgrade %}{% set d = x.downgrade %}
-        <p class="subtle"><b>Model-tier downgrade</b> · {{ d.model }} → {{ d.cheaper or '—' }}{% if d.from_tier and d.to_tier %} ({{ d.from_tier }} → {{ d.to_tier }}){% endif %} —
-          {% if d.verdict == 'SAFE' %}<span class="verdict safe">safe to downgrade</span>{% elif d.verdict == 'BORDERLINE' %}<span class="verdict thin">borderline — don't</span>{% elif d.verdict == 'NOT-SAFE' %}<span class="verdict unsafe">not safe</span>{% elif d.verdict == 'LOW-EVIDENCE' %}<span class="verdict thin">needs more data</span>{% else %}<span class="verdict na">already cheapest</span>{% endif %}
-          {{ '· ${:,.0f} / {}k'.format(x.downgrade_usd, f.calls // 1000) if d.verdict == 'SAFE' else '' }}</p>
+  {% if dg %}
+  <div class="findings">
+    {% for r in dg %}{% set d = r.downgrade %}
+    <details class="finding">
+      <summary class="finding-head">
+        <span class="f-caret">&#9654;</span>
+        <span class="f-name">{{ r.node }}</span>
+        <span class="f-model">{{ r.model }}</span>
+        <span class="f-spacer"></span>
+        {% if d.verdict == 'SAFE' %}<span class="chip chip--ok">safe</span><span class="f-amt pos">&minus;${{ '{:,.0f}'.format(r.downgrade_usd) }}<span class="per">/{{ (f.calls // 1000) }}k</span></span>
+        {% elif d.verdict == 'NOT-SAFE' %}<span class="chip chip--bad">not safe</span><span class="f-amt none">&mdash;</span>
+        {% elif d.verdict == 'BORDERLINE' %}<span class="chip chip--warn">borderline</span><span class="f-amt none">&mdash;</span>
+        {% else %}<span class="chip chip--muted">{{ d.verdict | lower | replace('-',' ') }}</span><span class="f-amt none">&mdash;</span>{% endif %}
+      </summary>
+      <div class="finding-body">
+        <p class="strat-note"><span class="to">{{ r.model }} &rarr; {{ d.cheaper }}</span>{% if d.verdict == 'SAFE' %} &mdash; the cheaper model matched on every sampled input.{% elif d.verdict == 'NOT-SAFE' %} &mdash; the cheaper model drifted on the majority of inputs; keep the current model.{% else %} &mdash; held on most inputs, but some drifted or couldn&rsquo;t be verified &mdash; see the per-input results.{% endif %}</p>
         {% if d.inputs %}
-        <div class="samples">
-          {% for r in d.inputs %}
-          <div class="samp-row">
-            {% if r.verdict == 'SAFE' %}<span class="tag kept">safe</span>{% elif r.verdict == 'NOT-SAFE' %}<span class="tag drift">not safe</span>{% else %}<span class="tag flip">borderline</span>{% endif %}
-            <span class="samp-rate">cheaper <b>{{ r.kept }}/{{ r.k }}</b>{% if r.self_kept is not none %} · baseline <b>{{ r.self_kept }}/{{ r.k }}</b>{% endif %}</span>
-            <span class="samp-in">{{ (r.input or '(input)') | truncate(90, true) }}</span>
-            <span class="samp-why">{{ r.note or r.reason }}</span>
-          </div>
+        <ul class="evidence">
+          {% for iv in d.inputs %}
+          <li class="ev-row">
+            {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% elif iv.verdict == 'NOT-SAFE' %}<span class="ev-tag ev-drift">not safe</span>{% else %}<span class="ev-tag ev-warn">unverified</span>{% endif %}
+            <span class="ev-in">{{ (iv.input or '(input)') | truncate(70, true) }}</span>
+            <span class="ev-why"><b class="ev-rate mono">{{ iv.kept }}/{{ iv.k }}</b>{% if iv.self_kept is not none %} <span class="subtle">&middot; baseline {{ iv.self_kept }}/{{ iv.k }}</span>{% endif %} &middot; {{ iv.note or iv.reason }}</span>
+          </li>
           {% endfor %}
-        </div>
-        {% else %}<p class="subtle">{{ d.reason }}</p>{% endif %}
-      {% endif %}
-      {% if x.cache and x.cache.verdict and not x.cache.get('informational') %}{% set c = x.cache %}
-      <div class="cache-box">
-        <b>⚡ Cacheable-prefix (reorg)</b> —
-        {% if c.recommend %}<span class="verdict safe">safe + cache-proven</span>{% elif c.verdict in ('BORDERLINE','NOT-SAFE') %}<span class="verdict unsafe">reorg changes behavior — not recommended</span>{% elif c.verdict == 'SAFE' %}<span class="verdict thin">behavior safe, caching not confirmed</span>{% else %}<span class="verdict thin">{{ c.verdict | lower }}</span>{% endif %}
-        <div class="ba">cached prefix <b>{{ (c.before.read if c.before else 0) or 0 }}</b> tok <span class="arrow">→</span> <b>{{ (c.after.read if c.after else 0) or 0 }}</b> tok{% if c.recovered_tok %} · <b>+{{ c.recovered_tok }}</b> recovered/call{% endif %}</div>
-        {% if c.recommend %}<div class="ba">saving <b>${{ '{:,.0f}'.format(x.cache_usd) }}</b> / {{ f.calls // 1000 }}k calls · behavior preserved on <b>{{ c.safe_inputs }}/{{ c.n }}</b> inputs · provider-verified round-trip</div>{% else %}<div class="subtle">{{ c.reason or 'a reorg must both preserve behavior and cache to be recommended' }}</div>{% endif %}
+        </ul>
+        {% endif %}
       </div>
-      {% endif %}
-    </div>
-  </details>
-  {% endfor %}
-
-  <div class="actions">
-    <a class="btn" href="{{ base }}/report/download?snap={{ snap | urlencode }}">Download report (.zip)</a>
-    <button type="button" class="btn ghost" onclick="window.print()">Print / PDF</button>
-    <button type="button" class="btn ghost" onclick="reaudit()">Re-audit fresh</button>
+    </details>
+    {% endfor %}
   </div>
+  {% else %}
+  <p class="ssec-empty">None of the audited call-sites had a cheaper model to try.</p>
   {% endif %}
 </div>
 
+<!-- ── Cacheable prefix ── -->
+<div class="strat-sec">
+  <div class="ssec-head">
+    <span class="ssec-title"><span class="ico">&#9889;</span>Cacheable prefix</span>
+    <span class="ssec-sub">{% if ca %}{% if ca_total > 0 %}<b>${{ '{:,.0f}'.format(ca_total) }}</b><span class="per">/{{ (f.calls // 1000) }}k</span> &middot; {% endif %}{{ ca | length }} audited{% else %}none audited{% endif %}</span>
+  </div>
+  {% if ca %}
+  <div class="findings">
+    {% for r in ca %}{% set c = r.cache %}
+    <details class="finding">
+      <summary class="finding-head">
+        <span class="f-caret">&#9654;</span>
+        <span class="f-name">{{ r.node }}</span>
+        <span class="f-model">{{ r.model }}</span>
+        <span class="f-spacer"></span>
+        {% if c.recommend %}<span class="chip chip--ok">safe &middot; proven</span><span class="f-amt pos">&minus;${{ '{:,.0f}'.format(r.cache_usd) }}<span class="per">/{{ (f.calls // 1000) }}k</span></span>
+        {% else %}<span class="chip chip--bad">not recommended</span><span class="f-amt none">&mdash;</span>{% endif %}
+      </summary>
+      <div class="finding-body">
+        {% if c.recommend %}
+        <p class="strat-note">Behavior preserved on {{ c.safe_inputs }}/{{ c.n }} inputs &middot; the provider round-trip confirmed the cache read.</p>
+        {% else %}
+        <p class="strat-note">{{ c.reason or 'the reorg changed behavior or did not cache on the round-trip — not recommended.' }}</p>
+        {% endif %}
+        {% if c.after %}
+        <div class="ba-grid">
+          <div class="ba-col"><div class="ba-tag ba-before">before</div><div class="ba-metric"><b class="mono">{{ (c.before.read if c.before else 0) or 0 }}</b> tok cached / call</div></div>
+          <div class="ba-arrow">&rarr;</div>
+          <div class="ba-col"><div class="ba-tag ba-after">after</div><div class="ba-metric"><b class="mono">{{ (c.after.read if c.after else 0) or 0 }}</b> tok cached / call</div></div>
+        </div>
+        {% endif %}
+        {% if c.inputs %}
+        <ul class="evidence">
+          {% for iv in c.inputs %}
+          <li class="ev-row">
+            {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% elif iv.verdict == 'NOT-SAFE' %}<span class="ev-tag ev-drift">not safe</span>{% else %}<span class="ev-tag ev-warn">unverified</span>{% endif %}
+            <span class="ev-in">{{ (iv.input or '(input)') | truncate(70, true) }}</span>
+            <span class="ev-why"><b class="ev-rate mono">{{ iv.kept }}/{{ iv.k }}</b>{% if iv.self_kept is not none %} <span class="subtle">&middot; baseline {{ iv.self_kept }}/{{ iv.k }}</span>{% endif %} &middot; {{ iv.note or iv.reason }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="ssec-empty">No cacheable-prefix opportunities among the audited call-sites.</p>
+  {% endif %}
+</div>
+
+<div class="actions">
+  <a class="btn" href="{{ base }}/report/download?snap={{ snap | urlencode }}">Download report (.zip)</a>
+  <button type="button" class="btn ghost" onclick="window.print()">Print / PDF</button>
+  <button type="button" class="btn ghost" onclick="reaudit()">Re-audit fresh</button>
+</div>
+
+<p class="foot-note">Audited {{ audited }} of {{ f.rows | length }} call-sites. Detection is deterministic; every dollar is earned by a live re-run of real recorded inputs, and unproven potential is never counted as savings. Figures shown per {{ '{:,}'.format(f.calls) }} calls &mdash; a fixed basis, not a monthly figure; multiply by your agent's real call volume.</p>
+
 <script>
   const BASE = {{ base | tojson }};
-  const SNAP = {{ snap | tojson }};                 // the pinned snapshot this report is bound to
-  const selKeys = () => [...document.querySelectorAll('.sel:checked')].map(b => b.value);
-  const note = () => { document.getElementById('selnote').textContent = selKeys().length + ' call-site(s) selected'; };
-  document.querySelectorAll('.sel').forEach(b => b.addEventListener('change', note)); note();
-
-  function filterGraph() {
-    const sel = document.getElementById('gfsel');
-    const v = sel ? sel.value : '__all';
-    let shown = 0;
-    document.querySelectorAll('#selector tbody tr').forEach(tr => {
-      const g = tr.getAttribute('data-graph') || '';
-      const show = v === '__all' || (v === '__top' && !g) || g === v;
-      tr.style.display = show ? '' : 'none';
-      if (show) shown++; else { const cb = tr.querySelector('.sel'); if (cb) cb.checked = false; }  // don't prove hidden nodes
-    });
-    const c = document.getElementById('gfcount');
-    if (c) c.textContent = v === '__all' ? '' : shown + ' call-site(s) in this graph';
-    note();
-  }
-
-  function setMode() {
-    const m = (document.querySelector('input[name="mode"]:checked') || {}).value || 'auto';
-    const gf = document.getElementById('gfwrap');
-    if (m === 'auto') {                                   // top-5 default: hide the graph filter, restore defaults
-      if (gf) gf.style.display = 'none';
-      document.querySelectorAll('#selector tbody tr').forEach(tr => tr.style.display = '');
-      document.querySelectorAll('.sel').forEach(cb => { if (!cb.disabled) cb.checked = cb.hasAttribute('data-default'); });
-      const sel = document.getElementById('gfsel'); if (sel) sel.value = '__all';
-      const c = document.getElementById('gfcount'); if (c) c.textContent = '';
-    } else {                                              // manual: reveal the graph filter, apply it
-      if (gf) gf.style.display = '';
-      filterGraph();
-    }
-    note();
-  }
-  setMode();
-
-  function prove() {
-    const keys = selKeys();
-    if (!keys.length) { alert('Select at least one call-site to prove.'); return; }
-    const prog = document.getElementById('prog'), steps = document.getElementById('steps');
-    const btn = document.getElementById('proveBtn'), fill = document.getElementById('barfill');
-    prog.hidden = false; steps.innerHTML = ''; fill.style.width = '0%';
-    btn.disabled = true; btn.textContent = 'Proving…';
-    const li = {};
-    keys.forEach(k => { const el = document.createElement('li'); el.textContent = k; steps.appendChild(el); li[k] = el; });
-    const es = new EventSource(BASE + '/prove-stream?keys=' + encodeURIComponent(keys.join(',')) + '&snap=' + encodeURIComponent(SNAP));
-    let done = 0;
-    es.addEventListener('step', e => { const d = JSON.parse(e.data); const el = li[d.key]; if (el) { el.className = 'on'; el.textContent = d.node + ' — ' + d.msg; } });
-    es.addEventListener('done_node', e => { const d = JSON.parse(e.data); const el = li[d.key]; if (el) { el.className = 'ok'; el.textContent = d.node + ' — proven'; } fill.style.width = Math.round(++done / keys.length * 100) + '%'; });
-    es.addEventListener('complete', async () => {
-      es.close(); fill.style.width = '100%';
-      const doc = new DOMParser().parseFromString(await (await fetch(location.href, { cache: 'no-store' })).text(), 'text/html');
-      document.getElementById('results').innerHTML = doc.getElementById('results').innerHTML;
-      document.getElementById('results').classList.add('reveal');
-      document.getElementById('heroNum').innerHTML = doc.getElementById('heroNum').innerHTML;
-      document.getElementById('heroStats').innerHTML = doc.getElementById('heroStats').innerHTML;
-      setTimeout(() => { prog.hidden = true; btn.disabled = false; btn.textContent = 'Re-prove selected →';
-        document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 450);
-    });
-    es.onerror = () => { es.close(); prog.hidden = true; btn.disabled = false; btn.textContent = 'Prove selected →'; alert('Proof stream interrupted — check the server log.'); };
-  }
-  function reaudit() {                               // fresh data = a NEW snapshot: clear this one, go to report w/o snap
-    const c = document.getElementById('cacheToggle');
-    fetch(BASE + '/prove-clear?snap=' + encodeURIComponent(SNAP), { method: 'POST' })
-      .then(() => { location.href = BASE + '/report' + (c && c.checked ? '?cache=1' : ''); });
-  }
-  function toggleCache() { const u = new URL(location.href); document.getElementById('cacheToggle').checked ? u.searchParams.set('cache', '1') : u.searchParams.delete('cache'); location.href = u.toString(); }
+  function reaudit(){ location.href = BASE + '/report'; }
 </script>
 {% endblock %}

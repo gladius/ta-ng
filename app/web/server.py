@@ -22,7 +22,16 @@ app.mount("/static", StaticFiles(directory=os.path.join(_HERE, "static")), name=
 templates = Jinja2Templates(directory=os.path.join(_HERE, "templates"))
 
 
+_CSS_PATH = os.path.join(_HERE, "static", "app.css")
+
+
 def _page(request, name, **ctx):
+    # cache-bust the stylesheet by its mtime: any CSS edit changes the URL, so a browser can never serve a stale
+    # app.css (which would leave var(--token) gaps unresolved). Costs one stat per render — negligible.
+    try:
+        ctx.setdefault("css_v", int(os.path.getmtime(_CSS_PATH)))
+    except OSError:
+        ctx.setdefault("css_v", 1)
     return templates.TemplateResponse(request, name, ctx)   # Starlette signature: (request, name, context)
 
 
@@ -55,35 +64,64 @@ def report_view(request: Request, source: str, ws_id: str, project: str, snap: s
         sid = snapshot.new_id()          # (the multi-second fetch used to block here as a frozen page — now it streams)
         return _page(request, "building.html", source=source, ws_id=ws_id, project=project,
                      snap=sid, cache=int(cache), agent=project)
-    levers = ["downgrade"] + (["cache"] if cache else [])       # cacheable-prefix is OPT-IN via the checkbox (?cache=1)
-    f = funnel.build(source, ws_id, project, levers=levers, g=g)                  # derived from the PINNED snapshot
-    proof = store.peek(prove.proof_key(source, ws_id, project, snap))             # paid; tied to THIS snapshot
+    proof = store.peek(prove.proof_key(source, ws_id, project, snap))             # audited result, tied to THIS snapshot
+    if proof is None:                    # built but not audited yet -> pick call-sites first (report = results only)
+        return RedirectResponse("/s/%s/ws/%s/agent/%s/select?snap=%s"
+                                % (source, ws_id, quote(project, safe=""), snap), status_code=303)
+    f = funnel.build(source, ws_id, project, levers=["downgrade", "cache"], g=g)  # both levers, from the PINNED snapshot
+    results = proof["results"]                                                    # STRATEGY-primary report: one section
+    dg = [r for r in results if r.get("downgrade")]                               # per lever, each listing only the
+    ca = [r for r in results if r.get("cache") and not r["cache"].get("informational")]  # call-sites it applies to
     return _page(request, "report.html", source=source, ws_id=ws_id, project=project,
-                 f=f, proof=proof, cache_on=bool(cache), snap=snap)
+                 f=f, proof=proof, dg=dg, ca=ca, snap=snap)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/build-stream")
-def build_stream(source: str, ws_id: str, project: str, snap: str, cache: int = 0):
-    """SSE — fetch + build the graph ONCE, pinned under `snap`, streaming coarse progress so the wait is visible
-    (not a frozen page). Ends with `done` carrying the report URL for the SAME snap; a build error ends with
-    `failed`. The heavy work is one bulk pull (~3 paginated calls) + fold; sync endpoint => runs in the threadpool,
-    so it never blocks the event loop."""
+def build_stream(source: str, ws_id: str, project: str, snap: str):
+    """SSE — build the graph ONCE (pinned under `snap`), streaming coarse progress so the wait is visible (not a
+    frozen page), then hand back the SELECT url for this snap. `failed` on a build error. Sync endpoint => runs in
+    the threadpool, never blocks the loop. The heavy work is one bulk pull (~3 paginated calls) + fold."""
     from app.services import snapshot
 
     def gen():
-        yield _sse("stage", {"msg": "Fetching traces & grouping call-sites…", "pct": 20})
+        yield _sse("stage", {"msg": "Fetching traces & grouping call-sites…", "pct": 25})
         try:
             g = snapshot.build_into(snap, source, ws_id, project)
         except Exception as e:                                       # surface the real reason, don't 500 a blank page
             yield _sse("failed", {"msg": str(e)[:300]})
             return
-        yield _sse("stage", {"msg": "Priced %d call-sites across %d traces"
+        yield _sse("stage", {"msg": "Found %d call-sites across %d traces"
                              % (len(g.get("nodes", [])), g.get("traces", 0)), "pct": 92})
-        base = "/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe=""))
-        yield _sse("done", {"url": "%s?snap=%s%s" % (base, snap, "&cache=1" if cache else "")})
+        base = "/s/%s/ws/%s/agent/%s/select" % (source, ws_id, quote(project, safe=""))
+        yield _sse("done", {"url": "%s?snap=%s" % (base, snap)})
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/s/{source}/ws/{ws_id}/agent/{project}/select", response_class=HTMLResponse)
+def select_view(request: Request, source: str, ws_id: str, project: str, snap: str = ""):
+    """The selection workbench — pick which call-sites to audit (top-5 costliest or manual graph+nodes), then
+    prove them. Reads the PINNED snapshot so identity can't drift. No snap -> go build one."""
+    from app.services import funnel, snapshot
+    g = snapshot.get(snap, source, ws_id, project) if snap else None
+    if g is None:
+        return RedirectResponse("/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe="")),
+                                status_code=303)
+    f = funnel.build(source, ws_id, project, levers=["downgrade", "cache"], g=g)
+    return _page(request, "select.html", source=source, ws_id=ws_id, project=project, f=f, snap=snap)
+
+
+@app.get("/s/{source}/ws/{ws_id}/agent/{project}/auditing", response_class=HTMLResponse)
+def auditing_view(request: Request, source: str, ws_id: str, project: str, snap: str = "", keys: str = ""):
+    """Audit-progress page — proves the SELECTED `keys` (via prove-stream) with a live N/M list, then redirects to
+    the report. No snap -> go rebuild."""
+    from app.services import snapshot
+    if snapshot.get(snap, source, ws_id, project) is None:
+        return RedirectResponse("/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe="")),
+                                status_code=303)
+    return _page(request, "auditing.html", source=source, ws_id=ws_id, project=project,
+                 snap=snap, keys=keys, agent=project)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/prove-stream")

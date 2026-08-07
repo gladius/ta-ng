@@ -205,27 +205,26 @@ def _one_repeat(trace, produce):
 
 
 def _verdict(cheap_kept, self_kept, k):
-    """Per-input verdict + a short note. If the cheaper model was PERFECT (K/K) -> SAFE (it can't do better; how
-    noisy the original is doesn't matter). Otherwise judge the cheaper RELATIVE to the ORIGINAL's own self-variance
-    on this input — self_kept out of k, where the recorded output is the free +1 anchor:
-      - self below AUDIT_SELF_FLOOR   -> original can't reliably reproduce itself -> unreliable anchor -> BORDERLINE
-      - cheaper as steady as original -> SAFE       (the drift was the model's own noise, not the downgrade)
-      - one repeat worse than original-> BORDERLINE  (just under the noise floor — human check)
-      - >= two worse than original    -> NOT-SAFE    (clearly worse than the model's own noise)
-    self_kept is None when the baseline is off or k==1 -> fall back to the flat AUDIT_SAFE_RATIO rule."""
+    """Per-INPUT verdict — BINARY (SAFE / NOT-SAFE), or UNVERIFIED when there is no trustworthy yardstick. An input
+    is NEVER 'borderline': borderline is a NODE state (some inputs drifted but most held — see prove_transform).
+    Judge the cheaper RELATIVE to the ORIGINAL's own self-variance (self_kept out of k; recorded output = free +1):
+      - cheaper PERFECT (K/K)             -> SAFE        (can't do better; how noisy the original is doesn't matter)
+      - original can't reproduce itself   -> UNVERIFIED  (self below AUDIT_SELF_FLOOR: no reliable reference, so we
+                                                          genuinely can't tell if the cheaper drifted — not a pass/fail)
+      - cheaper as steady as the original -> SAFE        (cheap_kept >= self_kept: the drift is the model's own noise)
+      - cheaper LESS steady than original -> NOT-SAFE    (cheap_kept < self_kept: worse than the model's own noise)
+    self_kept is None when the baseline is off or k==1 -> fall back to the flat AUDIT_SAFE_RATIO rule (still binary)."""
     if cheap_kept >= k:
-        return "SAFE", ""
-    if self_kept is None:                                   # baseline unavailable -> flat ratio fallback
-        if cheap_kept == 0:
-            return "NOT-SAFE", ""
-        return ("SAFE", "") if cheap_kept >= AUDIT_SAFE_RATIO * k else ("BORDERLINE", "flips run-to-run")
-    if self_kept < AUDIT_SELF_FLOOR * k:
-        return "BORDERLINE", "original itself varies run-to-run — recorded output isn't a reliable reference"
-    if cheap_kept >= self_kept:
-        return "SAFE", "cheaper is as consistent as the original's own re-runs"
-    if self_kept - cheap_kept == 1:
-        return "BORDERLINE", "cheaper drifted one more time than the original does"
-    return "NOT-SAFE", "cheaper consistently changed the decision vs the original's own noise"
+        return "SAFE", "held on every re-run"
+    if self_kept is None:                                   # baseline unavailable -> flat ratio fallback (binary)
+        if cheap_kept >= AUDIT_SAFE_RATIO * k:
+            return "SAFE", "held on most re-runs"
+        return "NOT-SAFE", "drifted on most re-runs"
+    if self_kept < AUDIT_SELF_FLOOR * k:                    # the ORIGINAL can't reproduce itself -> no yardstick
+        return "UNVERIFIED", "couldn't verify — the original itself isn't reproducible run-to-run"
+    if cheap_kept >= self_kept:                             # as steady as the original's own re-runs
+        return "SAFE", "as consistent as the original's own re-runs"
+    return "NOT-SAFE", "less consistent than the original's own re-runs"
 
 
 def prove_transform(sample, produce, model, k=AUDIT_REPEATS):
@@ -270,13 +269,19 @@ def prove_transform(sample, produce, model, k=AUDIT_REPEATS):
                        "verdict": v, "note": note, "recorded": _recorded(t)[:AUDIT_JUDGE_MAX_CHARS],
                        "samples": s, "baseline": base_runs.get(idx, []),
                        "reason": drift_reason or (s[0]["reason"] if s else "same decision")})
-    if any(r["verdict"] == "NOT-SAFE" for r in inputs):
-        verdict = "NOT-SAFE"
-    elif all(r["verdict"] == "SAFE" for r in inputs):
+    # NODE verdict from the BINARY per-input results: SAFE only if EVERY input held; NOT-SAFE if drift is the
+    # MAJORITY; else BORDERLINE — some inputs drifted or couldn't be verified, but most held ("mostly safe, your
+    # call"). UNVERIFIED inputs never count as safe, so an all-unverified node (unreproducible original) lands on
+    # BORDERLINE, never a false SAFE. The $ is booked only on SAFE, so borderline/not-safe are both $0 either way.
+    safe = sum(1 for r in inputs if r["verdict"] == "SAFE")
+    notsafe = sum(1 for r in inputs if r["verdict"] == "NOT-SAFE")
+    if notsafe == 0 and safe == len(inputs):
         verdict = "SAFE"
+    elif notsafe > safe:
+        verdict = "NOT-SAFE"
     else:
         verdict = "BORDERLINE"
-    return inputs, verdict, sum(1 for r in inputs if r["verdict"] == "SAFE")
+    return inputs, verdict, safe
 
 
 def audit_node(node_name, bucket, n=AUDIT_SAMPLES, k=AUDIT_REPEATS, min_evidence=AUDIT_MIN_EVIDENCE):

@@ -1,30 +1,28 @@
 {% extends "base.html" %}
 {% set base = '/s/' ~ source ~ '/ws/' ~ ws_id ~ '/agent/' ~ (project | urlencode) %}
-{% block title %}Building {{ agent }} report…{% endblock %}
+{% block title %}Building {{ agent }}…{% endblock %}
 {% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · building…</b>{% endblock %}
 {% block content %}
 <style>
-  .build{max-width:640px;margin:9vh auto 0;text-align:center}
-  .build .eyebrow{color:var(--muted,#888);text-transform:uppercase;letter-spacing:.08em;font-size:.72rem;margin:0 0 1.4rem}
-  .build h1{font-size:1.5rem;font-weight:700;letter-spacing:-.01em;margin:0 0 .3rem}
+  .build{max-width:600px;margin:11vh auto 0;text-align:center}
+  .build .eyebrow{color:var(--faint,#9a9aa2);text-transform:uppercase;letter-spacing:.1em;font-size:11px;font-weight:700;margin:0 0 1.4rem}
+  .build h1{font-size:22px;font-weight:700;letter-spacing:-.015em;margin:0 0 .3rem}
   .build .agent{color:var(--accent,#b3231d)}
-  .spinner{width:38px;height:38px;margin:0 auto 1.6rem;border:3px solid rgba(128,128,128,.25);
-           border-top-color:var(--accent,#b3231d);border-radius:50%;animation:spin .8s linear infinite}
+  .spinner{width:34px;height:34px;margin:0 auto 1.5rem;border:3px solid rgba(128,128,128,.25);border-top-color:var(--accent,#b3231d);border-radius:50%;animation:spin .8s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
   @media (prefers-reduced-motion:reduce){.spinner{animation-duration:2.4s}}
-  .stage{font-size:1.02rem;color:var(--fg,#222);margin:.2rem 0 1.1rem;min-height:1.4em}
-  .bar{height:6px;border-radius:999px;background:rgba(128,128,128,.2);overflow:hidden;margin:0 auto;max-width:420px}
-  .fill{height:100%;width:8%;border-radius:999px;background:var(--accent,#b3231d);transition:width .5s ease}
-  .note{color:var(--muted,#888);font-size:.86rem;margin:1.3rem auto 0;max-width:440px;line-height:1.5}
-  .err{margin:1.2rem auto 0;max-width:460px;color:var(--accent,#b3231d);font-size:.9rem;
-       border:1px solid rgba(179,35,29,.3);border-radius:8px;padding:.7rem .9rem;background:rgba(179,35,29,.05)}
+  .stage{font-size:15px;color:var(--ink,#18181b);margin:.2rem 0 1rem;min-height:1.4em}
+  .bar{height:6px;border-radius:999px;background:rgba(128,128,128,.2);overflow:hidden;max-width:400px;margin:0 auto}
+  .fill{height:100%;width:10%;border-radius:999px;background:var(--accent,#b3231d);transition:width .45s ease}
+  .note{color:var(--muted,#6b6b72);font-size:13.5px;margin:1.3rem auto 0;max-width:420px;line-height:1.5}
+  .err{margin:1.2rem auto 0;max-width:440px;color:var(--accent,#b3231d);font-size:14px;border:1px solid rgba(179,35,29,.3);border-radius:8px;padding:.7rem .9rem;background:rgba(179,35,29,.05)}
   .err a{color:inherit;font-weight:600}
 </style>
 
 <section class="build">
-  <p class="eyebrow">Token audit · advisory, out-of-path · read-only</p>
+  <p class="eyebrow">Token audit · read-only</p>
   <div class="spinner" id="spin"></div>
-  <h1>Building the audit for <span class="agent">{{ project }}</span></h1>
+  <h1>Building <span class="agent">{{ project }}</span></h1>
   <p class="stage" id="stage">Starting…</p>
   <div class="bar"><div class="fill" id="fill"></div></div>
   <p class="note">Pulling recorded traces and grouping the agent's call-sites. A few seconds — a little longer for large agents.</p>
@@ -32,7 +30,7 @@
 </section>
 
 <script>
-  const STREAM = {{ base | tojson }} + '/build-stream?snap=' + encodeURIComponent({{ snap | tojson }}) + '&cache={{ cache }}';
+  const STREAM = {{ base | tojson }} + '/build-stream?snap=' + encodeURIComponent({{ snap | tojson }});
   const stage = document.getElementById('stage'), fill = document.getElementById('fill'),
         err = document.getElementById('err'), spin = document.getElementById('spin');
   let handled = false;

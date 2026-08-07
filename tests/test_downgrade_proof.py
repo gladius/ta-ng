@@ -144,15 +144,16 @@ def test_not_safe():
     print("[ok] cheaper 0/3 vs original 3/3 -> NOT-SAFE")
 
 
-def test_deterministic_tightens_to_borderline():
-    # THE no-false-SAFE fix: original is deterministic (3/3), cheaper drifts once (2/3). The flat 0.66 rule would
-    # call 2/3 SAFE; relative to a model that NEVER drifts, that one drift is real -> BORDERLINE.
+def test_deterministic_one_worse_is_not_safe():
+    # THE no-false-SAFE fix: original is deterministic (3/3), cheaper drifts once (2/3). The flat 0.66 rule would call
+    # 2/3 SAFE; relative to a model that NEVER drifts the cheaper IS less consistent -> per-input NOT-SAFE (binary),
+    # and with every input like that, drift is the majority -> node NOT-SAFE.
     with _patch(_every(3), _ALWAYS):
         r = audit.audit_node("node", _BUCKET, n=5, k=3)
-    assert r["verdict"] == "BORDERLINE", r["verdict"]
+    assert r["verdict"] == "NOT-SAFE", r["verdict"]
     i0 = r["inputs"][0]
-    assert i0["kept"] == 2 and i0["self_kept"] == 3 and i0["verdict"] == "BORDERLINE", i0
-    print("[ok] original 3/3 vs cheaper 2/3 -> BORDERLINE (tightens a would-be false SAFE)")
+    assert i0["kept"] == 2 and i0["self_kept"] == 3 and i0["verdict"] == "NOT-SAFE", i0
+    print("[ok] original 3/3 vs cheaper 2/3 -> NOT-SAFE (binary per-input; less steady than a deterministic original)")
 
 
 def test_matches_noise_is_safe():
@@ -166,15 +167,30 @@ def test_matches_noise_is_safe():
     print("[ok] cheaper 2/3 vs equally-noisy original 2/3 -> SAFE (drift was noise, not the downgrade)")
 
 
-def test_noisy_anchor_is_borderline():
+def test_unreliable_anchor_is_unverified():
     # original can barely reproduce its own recorded output (self 1/3 < floor) -> the recorded anchor is unreliable,
-    # so we refuse a confident SAFE/NOT-SAFE even though the cheaper looks okay (2/3) -> BORDERLINE.
+    # so the input is UNVERIFIED (not a pass/fail), and an all-unverified node rolls up to BORDERLINE (couldn't verify).
     with _patch(_every(3), _NEVER):      # self: recorded +1, both re-runs drift -> self_kept = 1
         r = audit.audit_node("node", _BUCKET, n=5, k=3)
     assert r["verdict"] == "BORDERLINE", r["verdict"]
     i0 = r["inputs"][0]
-    assert i0["self_kept"] == 1 and i0["verdict"] == "BORDERLINE", i0
-    print("[ok] original 1/3 (unreliable anchor) -> BORDERLINE regardless of cheaper")
+    assert i0["self_kept"] == 1 and i0["verdict"] == "UNVERIFIED", i0
+    print("[ok] original 1/3 (unreliable anchor) -> per-input UNVERIFIED -> node BORDERLINE")
+
+
+def test_mixed_node_mostly_safe_is_borderline():
+    # THE new node rule: 3 inputs safe (cheaper perfect) + 2 not-safe (cheaper drifts vs a deterministic original).
+    # Drift is the MINORITY, so the node is BORDERLINE ("mostly safe, your call"), never a hard NOT-SAFE.
+    st = {"n": 0}
+    def cheap():                          # calls 1-9 = inputs 0,1,2 preserve (3/3); 10-15 = inputs 3,4 drift (0/3)
+        st["n"] += 1
+        return st["n"] <= 9
+    with _patch(cheap, _ALWAYS):          # baseline runs only on the 2 doubtful inputs; original deterministic (3/3)
+        r = audit.audit_node("node", _BUCKET, n=5, k=3)
+    assert r["verdict"] == "BORDERLINE", r["verdict"]
+    assert r["safe_inputs"] == 3, r["safe_inputs"]
+    assert sorted(i["verdict"] for i in r["inputs"]) == ["NOT-SAFE", "NOT-SAFE", "SAFE", "SAFE", "SAFE"]
+    print("[ok] 3 safe + 2 not-safe -> node BORDERLINE (mostly safe, minority drift)")
 
 
 def test_fallback_ratio_when_baseline_off():

@@ -80,6 +80,9 @@ def stream(source, ws, project, keys, snap, calls=None):
             try:
                 done[k] = fut.result()
             except Exception as e:                                         # one call-site failing must not kill the run
+                import sys, traceback
+                print("[prove] call-site %r failed: %s" % (k, e), file=sys.stderr)   # SURFACE it (was silent) so the
+                traceback.print_exc()                                      # log shows the real cause (API/credits/etc.)
                 r = rows[k]
                 done[k] = {"key": k, "node": r["node"], "graph_path": r.get("graph_path", ""),
                            "model": r["model"], "cost": r["cost"],

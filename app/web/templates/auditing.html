@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% set base = '/s/' ~ source ~ '/ws/' ~ ws_id ~ '/agent/' ~ (project | urlencode) %}
+{% block title %}Auditing {{ agent }}…{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · auditing…</b>{% endblock %}
+{% block content %}
+<style>
+  .audit{max-width:640px;margin:8vh auto 0}
+  .audit-top{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+  .audit-top .eyebrow{text-transform:uppercase;letter-spacing:.1em;font-size:11px;font-weight:700;color:var(--faint,#9a9aa2)}
+  .spinner{width:15px;height:15px;border:2px solid rgba(128,128,128,.28);border-top-color:var(--accent,#b3231d);border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.spinner{animation-duration:2.4s}}
+  .audit h1{font-size:22px;font-weight:700;letter-spacing:-.015em;margin:0 0 4px}
+  .audit .agent{color:var(--accent,#b3231d)}
+  .stage{color:var(--muted,#6b6b72);font-size:14px;margin:0 0 14px;font-variant-numeric:tabular-nums;min-height:1.3em}
+  .bar{height:6px;border-radius:999px;background:rgba(128,128,128,.2);overflow:hidden;margin-bottom:20px}
+  .fill{height:100%;width:4%;border-radius:999px;background:var(--accent,#b3231d);transition:width .4s ease}
+  .alist{list-style:none;margin:0;padding:0;border:1px solid var(--line,#e5e3e1);border-radius:10px;overflow:hidden;background:var(--panel,#fff)}
+  .alist li{display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--line,#e5e3e1);font-size:14px}
+  .alist li:last-child{border-bottom:none}
+  .st{display:inline-flex;align-items:center;gap:9px}
+  .st.queued{color:var(--faint,#9a9aa2)}
+  .st.run{color:var(--ink,#18181b)}
+  .st.done{color:var(--ok-ink,#2c7a4c);font-weight:600}
+  .st .dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex-shrink:0}
+  .st.run .dot{background:none;width:13px;height:13px;border:2px solid rgba(128,128,128,.3);border-top-color:var(--accent,#b3231d);border-radius:50%;animation:spin .7s linear infinite}
+  .st .why{color:var(--muted,#6b6b72);font-weight:400;font-size:13px}
+  .err{margin:16px 0 0;color:var(--accent,#b3231d);font-size:14px;border:1px solid rgba(179,35,29,.3);border-radius:8px;padding:11px 14px;background:rgba(179,35,29,.05)}
+  .err a{color:inherit;font-weight:600}
+</style>
+
+<section class="audit">
+  <div class="audit-top"><div class="spinner" id="spin"></div><span class="eyebrow">Token audit · live re-run</span></div>
+  <h1>Auditing <span class="agent">{{ project }}</span></h1>
+  <p class="stage" id="stage">Starting…</p>
+  <div class="bar"><div class="fill" id="fill"></div></div>
+  <ul class="alist" id="rows"></ul>
+  <p class="err" id="err" hidden></p>
+</section>
+
+<script>
+  const BASE = {{ base | tojson }}, SNAP = {{ snap | tojson }}, KEYS = {{ keys | tojson }};
+  const stage = document.getElementById('stage'), fill = document.getElementById('fill'),
+        rowsEl = document.getElementById('rows'), err = document.getElementById('err'), spin = document.getElementById('spin');
+  const row = {}; let total = 0, done = 0, handled = false;
+  const esc = s => (s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  function setRow(key, cls, node, why) {
+    let li = row[key];
+    if (!li) { li = document.createElement('li'); rowsEl.appendChild(li); row[key] = li; }
+    li.innerHTML = '<span class="st ' + cls + '"><span class="dot"></span>' + esc(node) + (why ? ' <span class="why">— ' + esc(why) + '</span>' : '') + '</span>';
+  }
+  function fail(headline, detail) {
+    spin.style.animationPlayState = 'paused'; spin.style.borderTopColor = 'var(--muted,#888)';
+    stage.textContent = headline; err.hidden = false;
+    err.innerHTML = esc(detail) + ' &middot; <a href="' + BASE + '/select?snap=' + encodeURIComponent(SNAP) + '">back to select</a>';
+  }
+  const es = new EventSource(BASE + '/prove-stream?keys=' + encodeURIComponent(KEYS) + '&snap=' + encodeURIComponent(SNAP));
+  es.addEventListener('start', e => { total = JSON.parse(e.data).total || 0; stage.textContent = '0 / ' + total + ' audited'; });
+  es.addEventListener('step', e => { const d = JSON.parse(e.data); setRow(d.key, 'run', d.node, d.msg || 'auditing…'); });
+  es.addEventListener('done_node', e => { const d = JSON.parse(e.data); done++; setRow(d.key, 'done', d.node, 'audited'); fill.style.width = (total ? Math.round(done / total * 100) : 100) + '%'; stage.textContent = done + ' / ' + total + ' audited'; });
+  es.addEventListener('complete', e => {
+    handled = true; es.close(); let d = {}; try { d = JSON.parse(e.data); } catch (_) {}
+    if (d.stale) { fail('Selection went stale.', 'Reload the select page and re-audit'); return; }
+    fill.style.width = '100%'; stage.textContent = 'Done — opening report…';
+    location.replace(BASE + '/report?snap=' + encodeURIComponent(SNAP));
+  });
+  es.onerror = () => { if (handled) return; handled = true; es.close(); fail('Audit stream interrupted.', 'The connection dropped'); };
+</script>
+{% endblock %}
