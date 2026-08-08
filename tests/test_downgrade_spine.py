@@ -58,6 +58,24 @@ def test_pareto_ladder():
     print("[ok] pareto ladder: 2.5-pro -> 3-flash (skips pricier-input 3.6-flash); healthy drops unchanged")
 
 
+def test_node_aware_pick():
+    # With a call-site's real token mix, the target is the NEWEST lower-tier model that genuinely net-saves for
+    # THAT mix — not a single fixed Pareto pick. gemini-2.5-pro ($1.25/$10):
+    #   output-heavy node -> gemini-3.6-flash: pricier input ($1.50) but far cheaper output ($7.50) -> net saves,
+    #                        and it's the LATEST flash, so the gentlest capable drop.
+    #   input-heavy node  -> gemini-3-flash: 3.6-flash net-LOSES on all that input, so it falls to the cheaper one.
+    assert next_cheaper("gemini-2.5-pro", 100, 2000) == "gemini-3.6-flash", next_cheaper("gemini-2.5-pro", 100, 2000)
+    assert next_cheaper("gemini-2.5-pro", 5000, 50) == "gemini-3-flash", next_cheaper("gemini-2.5-pro", 5000, 50)
+    # a node with no measurable tokens (unknown volume) yields NO candidate rather than an unprovable saving.
+    assert next_cheaper("gemini-2.5-pro", 0, 0) is None
+    # candidates() threads the node mix through: an output-heavy pro node lands on the latest flash.
+    heavy = [{"key": "a/deep", "node": "deep", "model": "gemini-2.5-pro",
+              "avg_in": 200, "avg_out": 4000, "calls": 10, "graph_path": ""}]
+    c = downgrade.candidates(heavy, per_calls=10000)[0]
+    assert c["cheaper"] == "gemini-3.6-flash" and c["usd"] > 0, c
+    print("[ok] node-aware pick: output-heavy -> latest 3.6-flash, input-heavy -> cheaper 3-flash, no-tokens -> none")
+
+
 def test_thinking_detection():
     ad = LangSmithAdapter()
 
@@ -123,6 +141,7 @@ def test_spine():
 if __name__ == "__main__":
     test_graph_path_parser()
     test_pareto_ladder()
+    test_node_aware_pick()
     test_thinking_detection()
     test_same_label_distinct_keys()
     test_spine()

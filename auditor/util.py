@@ -82,40 +82,61 @@ def is_callable(model):
 _TIER_RANK = {"frontier": 0, "balanced": 1, "small": 2, "nano": 3}     # capability classes, most → least capable
 
 
-def next_cheaper(model):
-    """The gentlest downgrade target that is ACTUALLY cheaper: the most-capable callable model in the nearest
-    lower capability TIER whose price is <= this model's on BOTH input AND output (a real drop on every axis),
-    same provider (or None).
+def next_cheaper(model, avg_in=None, avg_out=None):
+    """The gentlest downgrade CANDIDATE in a lower capability tier, same provider (or None).
 
-    Why the both-axes test: pricing is NOT monotonic with tier — a newer premium 'flash' can cost MORE per input
-    token than an older, soon-retiring 'pro' (e.g. gemini-3.6-flash $1.50-in vs gemini-2.5-pro $1.25-in). Picking
-    'most capable in the next tier' alone then lands on a target that's pricier on input, and an input-heavy node
-    shows a near-zero saving. Requiring Pareto-cheaper skips those and picks the most capable model that genuinely
-    costs less (gemini-2.5-pro -> gemini-3-flash, not 3.6-flash). Falls back to legacy file order for an untier'd
-    model, and keeps a candidate whose price is unknown (can't test it, don't silently drop it)."""
+    Node-aware pick (when a call-site's token mix `avg_in`/`avg_out` is given — the production path): the NEWEST
+    callable model in the nearest lower tier that ACTUALLY net-saves for THAT mix. Pricing is NOT monotonic with
+    tier — a newer premium 'flash' can cost MORE per input token than an older 'pro' (gemini-3.6-flash $1.50-in vs
+    gemini-2.5-pro $1.25-in) yet be cheaper on OUTPUT ($7.50 vs $10.00). Whether it saves depends on the node: an
+    output-heavy node genuinely saves on 3.6-flash (the latest, most-capable drop), while an input-heavy node falls
+    to the cheaper 3-flash. Net-saving on the real mix is strictly more precise than a both-axes Pareto rule (which
+    would wrongly exclude 3.6-flash everywhere), and 'newest' is our capability proxy within a tier. The pick is
+    only a candidate — the paid audit re-runs it and only books $ on SAFE, so a mis-ranked pick fails as NOT-SAFE,
+    never a false save.
+
+    No-mix pick (CLI / tests): the legacy Pareto target — most-capable callable model in the nearest lower tier
+    whose price is <= this model's on BOTH axes. Falls back to legacy file order for an untier'd model."""
     m = canonical_model(model) or model
     info = _ORDER.get(m)
     if not info:
         return None
     cur = _TIER_RANK.get(info.get("tier"))
-    if cur is None:                                                    # untier'd model → legacy next-in-list
+    p0 = PRICE.get(m, {})
+    in0, out0 = p0.get("input"), p0.get("output")
+
+    if cur is None:                                                   # untier'd model → legacy next-in-list
         sibs = info["siblings"]
         for j in range(sibs.index(m) + 1, len(sibs)):
             if _CALLABLE.get(sibs[j], True):
                 return sibs[j]
         return None
-    p0 = PRICE.get(m, {})
-    in0, out0 = p0.get("input"), p0.get("output")
+
+    lower = [s for s in info["siblings"]                              # callable + strictly lower capability tier
+             if _CALLABLE.get(s, True) and _TIER_RANK.get(_ORDER[s].get("tier"), 99) > cur]
+    if not lower:
+        return None
+
+    # ── node-aware: newest genuinely net-saving model in the nearest lower tier ──────────────────────────────
+    if avg_in is not None and avg_out is not None and None not in (in0, out0):
+        def saving(s):                                                # $ delta per call for this node's mix (unscaled)
+            ps = PRICE.get(s, {})
+            return avg_in * (in0 - ps.get("input", in0)) + avg_out * (out0 - ps.get("output", out0))
+        savers = [s for s in lower if saving(s) > 0]
+        if not savers:
+            return None
+        nearest = min(_TIER_RANK.get(_ORDER[s].get("tier"), 99) for s in savers)   # gentlest tier that saves
+        pool = [s for s in savers if _TIER_RANK.get(_ORDER[s].get("tier"), 99) == nearest]
+        return max(pool, key=lambda s: (_ORDER[s].get("release") or "", saving(s)))   # newest, then bigger saving
+
+    # ── no-mix: legacy Pareto-cheaper, most capable in the nearest lower tier ────────────────────────────────
     cands = []
-    for s in info["siblings"]:
-        r = _TIER_RANK.get(_ORDER[s].get("tier"), 99)
-        if not (_CALLABLE.get(s, True) and r > cur):                  # callable + strictly lower capability tier
-            continue
+    for s in lower:
         ps = PRICE.get(s, {})
         si, so = ps.get("input"), ps.get("output")
         if None not in (in0, out0, si, so) and not (si <= in0 and so <= out0 and (si < in0 or so < out0)):
             continue                                                  # not cheaper on both axes -> illusory drop, skip
-        cands.append((s, r, ps.get("input", 0)))
+        cands.append((s, _TIER_RANK.get(_ORDER[s].get("tier"), 99), ps.get("input", 0)))
     if not cands:
         return None
     nearest = min(r for _, r, _ in cands)                             # nearest lower tier that HAS a real-drop model

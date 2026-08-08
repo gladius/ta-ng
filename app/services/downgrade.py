@@ -14,7 +14,7 @@ def candidates(nodes, per_calls=1000):
         if n.get("mixed"):
             continue                                          # routed/mixed -> routing audit, deferred
         model = canonical_model(n["model"]) or n["model"]
-        cheaper = next_cheaper(model)
+        cheaper = next_cheaper(model, n["avg_in"], n["avg_out"])      # node-aware: newest drop that net-saves THIS mix
         p, cp = PRICE.get(model), (PRICE.get(cheaper) if cheaper else None)
         if not (cheaper and p and cp):
             continue

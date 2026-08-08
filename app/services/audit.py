@@ -205,24 +205,24 @@ def _one_repeat(trace, produce):
 
 
 def _verdict(cheap_kept, self_kept, k):
-    """Per-INPUT verdict — BINARY (SAFE / NOT-SAFE), or UNVERIFIED when there is no trustworthy yardstick. An input
-    is NEVER 'borderline': borderline is a NODE state (some inputs drifted but most held — see prove_transform).
-    Judge the cheaper RELATIVE to the ORIGINAL's own self-variance (self_kept out of k; recorded output = free +1):
-      - cheaper PERFECT (K/K)             -> SAFE        (can't do better; how noisy the original is doesn't matter)
-      - original can't reproduce itself   -> UNVERIFIED  (self below AUDIT_SELF_FLOOR: no reliable reference, so we
-                                                          genuinely can't tell if the cheaper drifted — not a pass/fail)
-      - cheaper as steady as the original -> SAFE        (cheap_kept >= self_kept: the drift is the model's own noise)
-      - cheaper LESS steady than original -> NOT-SAFE    (cheap_kept < self_kept: worse than the model's own noise)
+    """Per-INPUT verdict — strictly BINARY: SAFE or NOT-SAFE. Never 'borderline' (that's a NODE state — some inputs
+    drifted but most held; see prove_transform). Judge the cheaper RELATIVE to the ORIGINAL's own self-variance
+    (self_kept out of k; the recorded output is the free +1 anchor):
+      - cheaper PERFECT (K/K)               -> SAFE       (can't do better)
+      - cheaper NEVER matched (0/K)         -> NOT-SAFE   (no evidence it reproduces the behaviour, whatever the
+                                                          original does — this is the low-is-low floor)
+      - cheaper as steady as the original   -> SAFE       (cheap_kept >= self_kept: no worse than the model's own noise
+                                                          — so 2/3 vs a noisy 1/3 original is SAFE, the cheaper is steadier)
+      - cheaper LESS steady than original   -> NOT-SAFE   (cheap_kept < self_kept: worse than the model's own noise)
     self_kept is None when the baseline is off or k==1 -> fall back to the flat AUDIT_SAFE_RATIO rule (still binary)."""
     if cheap_kept >= k:
         return "SAFE", "held on every re-run"
-    if self_kept is None:                                   # baseline unavailable -> flat ratio fallback (binary)
-        if cheap_kept >= AUDIT_SAFE_RATIO * k:
-            return "SAFE", "held on most re-runs"
-        return "NOT-SAFE", "drifted on most re-runs"
-    if self_kept < AUDIT_SELF_FLOOR * k:                    # the ORIGINAL can't reproduce itself -> no yardstick
-        return "UNVERIFIED", "couldn't verify — the original itself isn't reproducible run-to-run"
-    if cheap_kept >= self_kept:                             # as steady as the original's own re-runs
+    if cheap_kept == 0:                                     # never reproduced the recorded behaviour -> unsafe
+        return "NOT-SAFE", "never matched the recorded output"
+    if self_kept is None:                                   # no baseline (k==1 / off) -> flat ratio fallback
+        return ("SAFE", "held on most re-runs") if cheap_kept >= AUDIT_SAFE_RATIO * k \
+            else ("NOT-SAFE", "drifted on most re-runs")
+    if cheap_kept >= self_kept:                             # as steady as (or steadier than) the original's own re-runs
         return "SAFE", "as consistent as the original's own re-runs"
     return "NOT-SAFE", "less consistent than the original's own re-runs"
 
@@ -269,13 +269,11 @@ def prove_transform(sample, produce, model, k=AUDIT_REPEATS):
                        "verdict": v, "note": note, "recorded": _recorded(t)[:AUDIT_JUDGE_MAX_CHARS],
                        "samples": s, "baseline": base_runs.get(idx, []),
                        "reason": drift_reason or (s[0]["reason"] if s else "same decision")})
-    # NODE verdict from the BINARY per-input results: SAFE only if EVERY input held; NOT-SAFE if drift is the
-    # MAJORITY; else BORDERLINE — some inputs drifted or couldn't be verified, but most held ("mostly safe, your
-    # call"). UNVERIFIED inputs never count as safe, so an all-unverified node (unreproducible original) lands on
-    # BORDERLINE, never a false SAFE. The $ is booked only on SAFE, so borderline/not-safe are both $0 either way.
+    # NODE verdict from the BINARY per-input results: SAFE if EVERY input held; NOT-SAFE if drift is the MAJORITY;
+    # else BORDERLINE — some inputs drifted but MOST held ("mostly safe, your call"). $ is booked only on SAFE.
     safe = sum(1 for r in inputs if r["verdict"] == "SAFE")
-    notsafe = sum(1 for r in inputs if r["verdict"] == "NOT-SAFE")
-    if notsafe == 0 and safe == len(inputs):
+    notsafe = len(inputs) - safe
+    if notsafe == 0:
         verdict = "SAFE"
     elif notsafe > safe:
         verdict = "NOT-SAFE"
@@ -284,11 +282,15 @@ def prove_transform(sample, produce, model, k=AUDIT_REPEATS):
     return inputs, verdict, safe
 
 
-def audit_node(node_name, bucket, n=AUDIT_SAMPLES, k=AUDIT_REPEATS, min_evidence=AUDIT_MIN_EVIDENCE):
+def audit_node(node_name, bucket, cheaper=None, n=AUDIT_SAMPLES, k=AUDIT_REPEATS, min_evidence=AUDIT_MIN_EVIDENCE):
     """Prove (or refute) a downgrade for one call-site across N inputs x K repeats. Returns the verdict dict.
-    Verdicts: SAFE (recommend) · BORDERLINE (flips — don't) · NOT-SAFE (don't) · LOW-EVIDENCE (abstain) · N/A."""
+    Verdicts: SAFE (recommend) · BORDERLINE (flips — don't) · NOT-SAFE (don't) · LOW-EVIDENCE (abstain) · N/A.
+
+    `cheaper` is the target the funnel already chose (node-aware net-saving pick) — passed in so the audit re-runs
+    the SAME model the report shows. When absent (CLI / direct callers) it falls back to the legacy no-mix pick."""
     model = canonical_model(bucket[0].get("model")) or bucket[0].get("model")
-    cheaper = next_cheaper(model)
+    if not cheaper:
+        cheaper = next_cheaper(model)
     base = {"node": node_name, "model": model, "cheaper": cheaper,
             "from_tier": tier(model), "to_tier": tier(cheaper), "to_release": release(cheaper)}
     if not cheaper:

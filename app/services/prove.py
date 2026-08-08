@@ -44,7 +44,7 @@ def _prove_one(key, r, b, calls):
         out["cache"] = {"verdict": cd["verdict"], "informational": True,
                         "note": "already cacheable — a gateway or the provider caches this prefix automatically"}
     if r["downgrade"] and b:
-        a = audit.audit_node(node, b)               # N distinct inputs x K repeats (central config); rate-based verdict
+        a = audit.audit_node(node, b, cheaper=r["downgrade_to"])   # re-run the SAME target the funnel picked
         out["downgrade"] = a
         out["downgrade_usd"] = r["downgrade_usd"] if a["verdict"] == "SAFE" else 0.0   # $ only when unanimously safe
     return out

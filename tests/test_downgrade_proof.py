@@ -7,10 +7,10 @@ gets its own preserve/drift pattern. Then we assert the two-stage verdict:
   Stage 1 (cheaper, N x K): cheaper PERFECT (K/K) -> SAFE, and the baseline never runs (cost-free on clean nodes).
   Stage 2 (self-variance, DOUBTFUL inputs only): re-run the ORIGINAL to get its own noise floor, judge cheaper
                                                  RELATIVE to it. recorded output = the free +1 anchor.
-    - original steady, cheaper one worse   -> BORDERLINE   (tightens a would-be false SAFE)
-    - cheaper as steady as a noisy original-> SAFE         (the drift was noise, not the downgrade)
-    - original can't reproduce itself      -> BORDERLINE   (unreliable anchor)
-    - cheaper clearly worse than original  -> NOT-SAFE
+    - cheaper NEVER matched (0/K)                   -> NOT-SAFE  (low is low — no evidence, whatever the original does)
+    - cheaper as steady as / steadier than original -> SAFE      (even vs a noisy original: 2/3 vs 1/3 is SAFE)
+    - cheaper less steady than the original         -> NOT-SAFE
+  Per-input is strictly BINARY (SAFE / NOT-SAFE); BORDERLINE is a NODE rollup (some inputs drifted but most held).
   Plus the fallback (baseline OFF -> flat AUDIT_SAFE_RATIO), low-evidence abstain, and the behavior renderer.
 
 Run: python -m tests.test_downgrade_proof   (from repo root)
@@ -167,15 +167,15 @@ def test_matches_noise_is_safe():
     print("[ok] cheaper 2/3 vs equally-noisy original 2/3 -> SAFE (drift was noise, not the downgrade)")
 
 
-def test_unreliable_anchor_is_unverified():
-    # original can barely reproduce its own recorded output (self 1/3 < floor) -> the recorded anchor is unreliable,
-    # so the input is UNVERIFIED (not a pass/fail), and an all-unverified node rolls up to BORDERLINE (couldn't verify).
-    with _patch(_every(3), _NEVER):      # self: recorded +1, both re-runs drift -> self_kept = 1
+def test_cheaper_steadier_than_noisy_original_is_safe():
+    # original is very noisy (reproduces its own recorded output only 1/3); the cheaper reproduces it MORE (2/3) ->
+    # the cheaper is no worse than the model's own noise, so SAFE. Binary: no "can't verify" state, no floor.
+    with _patch(_every(3), _NEVER):      # cheaper 2/3 ; self: recorded +1, both re-runs drift -> self_kept = 1
         r = audit.audit_node("node", _BUCKET, n=5, k=3)
-    assert r["verdict"] == "BORDERLINE", r["verdict"]
+    assert r["verdict"] == "SAFE", r["verdict"]
     i0 = r["inputs"][0]
-    assert i0["self_kept"] == 1 and i0["verdict"] == "UNVERIFIED", i0
-    print("[ok] original 1/3 (unreliable anchor) -> per-input UNVERIFIED -> node BORDERLINE")
+    assert i0["kept"] == 2 and i0["self_kept"] == 1 and i0["verdict"] == "SAFE", i0
+    print("[ok] cheaper 2/3 vs noisy original 1/3 -> SAFE (cheaper is steadier than the original)")
 
 
 def test_mixed_node_mostly_safe_is_borderline():
