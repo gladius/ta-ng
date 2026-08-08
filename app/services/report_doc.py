@@ -136,8 +136,7 @@ def _report_md(f, proof):
 
 
 # per-INPUT rollup verdict, shown with the system's own words — BORDERLINE is its own state, NOT "not safe".
-_IV = {"SAFE": "safe", "NOT-SAFE": "not safe", "BORDERLINE": "borderline", "LOW-EVIDENCE": "low evidence",
-       "UNVERIFIED": "unverified"}
+_IV = {"SAFE": "safe", "NOT-SAFE": "not safe", "BORDERLINE": "borderline", "LOW-EVIDENCE": "low evidence"}
 
 
 def _rate(inp):

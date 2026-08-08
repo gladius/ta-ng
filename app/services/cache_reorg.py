@@ -159,16 +159,13 @@ def prove(node_name, bucket, n=None, k=None, min_evidence=None):
     recovered = max(0, after.get("read", 0) - before.get("read", 0))    # tokens that cache now but didn't before
     recommend = (verdict == "SAFE" and after.get("proven", False))
     notsafe = sum(1 for r in inputs if r["verdict"] == "NOT-SAFE")
-    unverified = sum(1 for r in inputs if r["verdict"] == "UNVERIFIED")
     if recommend:                                                       # name WHICH gate failed so the report isn't a
         reason = ""                                                     # vague one-liner — the cases are distinct:
     elif verdict == "NOT-SAFE":                                        # (1) the reorg CHANGED behaviour on the majority
         reason = "reorg changed behaviour on the majority of sampled inputs — keep the prompt as-is"
-    elif verdict == "BORDERLINE":                                      # (2) mostly held, but some drifted/unverifiable
-        parts = ([("%d drifted" % notsafe)] if notsafe else []) + \
-                ([("%d couldn't be verified" % unverified)] if unverified else [])
-        reason = "not a clean pass — %s of %d inputs; review the per-input results before applying" % (
-            " and ".join(parts) or "some inputs held, some did not", len(inputs))
+    elif verdict == "BORDERLINE":                                      # (2) mostly held, but some inputs drifted
+        reason = "not a clean pass — %d of %d inputs drifted; review the per-input results before applying" % (
+            notsafe, len(inputs))
     else:                                                              # (3) behaviour fine, but the prefix didn't cache
         reason = "behaviour preserved, but the reworded prefix did not cache on the live round-trip (read %d tok)" % (after.get("read", 0) or 0)
     return {**base, "verdict": verdict, "n": len(inputs), "k": k, "safe_inputs": safe, "inputs": inputs,

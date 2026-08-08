@@ -66,14 +66,15 @@
   .strat-note .to{font-family:'Plex Mono',ui-monospace,monospace;font-size:12.5px;color:var(--ink)}
   .subtle{color:var(--faint)}
   .evidence{list-style:none;margin:0;padding:0}
-  .ev-row{display:grid;grid-template-columns:74px minmax(0,1fr) minmax(0,1.3fr);gap:var(--s3);align-items:baseline;padding:var(--s2) 0;border-top:1px solid var(--line)}
+  .ev-row{display:grid;grid-template-columns:74px 1fr;gap:var(--s3);align-items:start;padding:var(--s3) 0;border-top:1px solid var(--line)}
+  .ev-main{min-width:0}
   .ev-row:first-child{border-top:none}
   .ev-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:2px 0;border-radius:5px;text-align:center}
   .ev-drift{background:var(--bad-weak);color:var(--bad)}
   .ev-warn{background:#fdf3e0;color:#8a5a00}
   .ev-kept{background:var(--ok-weak);color:var(--ok)}
-  .ev-in{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ev-why{font-size:13px;color:var(--muted)}
+  .ev-in{font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ev-why{font-size:12.5px;color:var(--muted);margin-top:3px}
   .ev-rate{color:var(--ink);font-variant-numeric:tabular-nums}
 
   .ba-grid{display:flex;align-items:center;gap:var(--s4);max-width:520px}
@@ -89,8 +90,7 @@
   .foot-note{color:var(--faint);font-size:12px;line-height:1.65;margin:var(--s5) 2px 0;max-width:84ch}
   @media (max-width:640px){
     .verdict-headline{font-size:24px}.metrics{gap:var(--s5)}
-    .ev-row{grid-template-columns:48px 1fr;grid-template-areas:"tag in" "tag why"}
-    .ev-tag{grid-area:tag}.ev-in{grid-area:in}.ev-why{grid-area:why}
+    .ev-row{grid-template-columns:62px 1fr}
     .f-model{display:none}
   }
 </style>
@@ -168,9 +168,11 @@
         <ul class="evidence">
           {% for iv in d.inputs %}
           <li class="ev-row">
-            {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% elif iv.verdict == 'NOT-SAFE' %}<span class="ev-tag ev-drift">not safe</span>{% else %}<span class="ev-tag ev-warn">unverified</span>{% endif %}
-            <span class="ev-in">{{ (iv.input or '(input)') | truncate(70, true) }}</span>
-            <span class="ev-why"><b class="ev-rate mono">{{ iv.kept }}/{{ iv.k }}</b>{% if iv.self_kept is not none %} <span class="subtle">&middot; baseline {{ iv.self_kept }}/{{ iv.k }}</span>{% endif %} &middot; {{ iv.note or iv.reason }}</span>
+            {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% else %}<span class="ev-tag ev-drift">not safe</span>{% endif %}
+            <div class="ev-main">
+              <div class="ev-in">{{ (iv.input or '(input)') | replace('Question: ', '') | truncate(96, true) }}</div>
+              <div class="ev-why"><b class="ev-rate mono">cheaper {{ iv.kept }}/{{ iv.k }}</b>{% if iv.self_kept is not none %} &middot; <span class="subtle">original {{ iv.self_kept }}/{{ iv.k }}</span>{% endif %} &middot; {{ iv.note or iv.reason }}</div>
+            </div>
           </li>
           {% endfor %}
         </ul>
@@ -219,9 +221,11 @@
         <ul class="evidence">
           {% for iv in c.inputs %}
           <li class="ev-row">
-            {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% elif iv.verdict == 'NOT-SAFE' %}<span class="ev-tag ev-drift">not safe</span>{% else %}<span class="ev-tag ev-warn">unverified</span>{% endif %}
-            <span class="ev-in">{{ (iv.input or '(input)') | truncate(70, true) }}</span>
-            <span class="ev-why"><b class="ev-rate mono">{{ iv.kept }}/{{ iv.k }}</b>{% if iv.self_kept is not none %} <span class="subtle">&middot; baseline {{ iv.self_kept }}/{{ iv.k }}</span>{% endif %} &middot; {{ iv.note or iv.reason }}</span>
+            {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% else %}<span class="ev-tag ev-drift">not safe</span>{% endif %}
+            <div class="ev-main">
+              <div class="ev-in">{{ (iv.input or '(input)') | replace('Question: ', '') | truncate(96, true) }}</div>
+              <div class="ev-why"><b class="ev-rate mono">cheaper {{ iv.kept }}/{{ iv.k }}</b>{% if iv.self_kept is not none %} &middot; <span class="subtle">original {{ iv.self_kept }}/{{ iv.k }}</span>{% endif %} &middot; {{ iv.note or iv.reason }}</div>
+            </div>
           </li>
           {% endfor %}
         </ul>
