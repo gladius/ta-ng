@@ -235,6 +235,8 @@ class LangSmithAdapter(Adapter):
         t["cost_ls"] = float(_c) if _c is not None else None   # Decimal -> float so it stays JSON/arith-safe
         t["feedback_score"], t["feedback_n"] = _feedback(rec.get("feedback_stats"))   # quality, when evals exist
         t["ttft_ms"] = _ttft_ms(rec)                           # time-to-first-token (streaming latency)
+        t["revision"] = str(meta.get("revision_id") or meta.get("revision")     # whole-agent version (git SHA),
+                            or meta.get("ls_revision_id") or "")                 # present only when the team tags it
         return t
 
     def to_record(self, rec, *, project=None, group_by=None, **_):

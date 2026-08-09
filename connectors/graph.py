@@ -161,12 +161,14 @@ def _resolve_path(rec, by_id):
 
 
 class Graph:
-    def __init__(self, agent, buckets, nodes, edges, trace_count):
+    def __init__(self, agent, buckets, nodes, edges, trace_count, errors_excluded=0, revisions=None):
         self.agent = agent
         self.buckets = buckets                           # OrderedDict[key -> list[trace]]  (downstream API)
         self.nodes = nodes
         self.edges = edges
         self.trace_count = trace_count
+        self.errors_excluded = errors_excluded           # failed samples dropped from ALL buckets (honesty count)
+        self.revisions = revisions or []                 # distinct agent versions seen (latest-pin / selector later)
 
 
 def build_graph(records, agent_default="agent"):
@@ -225,16 +227,25 @@ def build_graph(records, agent_default="agent"):
     for rec, nl, tagged, sig in resolved:
         variants_per_node.setdefault(nl, set()).add(_full_variant(rec, sig))
 
-    # PASS 2 — assign each sample a call-site key: 'agent/node', + '~variant' only where the node has >1
+    # PASS 2 — assign each sample a call-site key: 'agent/node', + '~variant' only where the node has >1.
+    # A FAILED sample (errored with no output / empty output, per contract.eligible) is COUNTED against the
+    # call-site but kept OUT of the audited bucket + stats — we never optimize or prove against a non-decision.
     buckets = OrderedDict()
-    stats = OrderedDict()                                # key -> accumulator
+    stats = OrderedDict()                                # key -> accumulator (SUCCESSFUL samples only)
+    excluded = OrderedDict()                             # key -> # failed samples kept out of the audited bucket
+    revs = set()                                         # distinct agent versions (revision_id) seen — pin/select later
     for rec, nl, tagged, sig in resolved:
         multi = len(variants_per_node.get(nl, ())) > 1
         variant = _full_variant(rec, sig) if multi else ""
         key = "%s/%s%s" % (agent, nl, ("~" + variant) if variant else "")   # '~' = URL-safe unreserved
+        if not eligible(rec["trace"])[0]:               # failed / empty output -> noise for a cost audit; count, skip
+            excluded[key] = excluded.get(key, 0) + 1
+            continue
+        if rec["trace"].get("revision"):
+            revs.add(rec["trace"]["revision"])
         buckets.setdefault(key, []).append(rec["trace"])
         s = stats.setdefault(key, {"node": nl, "variant": variant, "untagged": not tagged,
-                                   "in": 0, "out": 0, "ms": 0, "n": 0, "err": 0, "traces": set(),
+                                   "in": 0, "out": 0, "ms": 0, "n": 0, "traces": set(),
                                    "cost_ls": 0.0, "fb": [], "ttft": [], "tools": 0, "out_json": 0, "tool_in": 0,
                                    "out_list": [], "models": Counter(), "gpaths": Counter(),
                                    "model": rec["trace"].get("model", ""), "first": "", "last": ""})
@@ -249,7 +260,6 @@ def build_graph(records, agent_default="agent"):
         s["out"] += u.get("output_tokens", 0)
         s["ms"] += tr.get("runtime_ms", 0)
         s["n"] += 1
-        s["err"] += 1 if tr.get("error") else 0
         s["cost_ls"] += tr.get("cost_ls") or 0                # LangSmith's own $ (authoritative when present)
         s["tools"] += len(tr.get("tools_called") or [])       # tool-calling behaviour (captured, now surfaced)
         if tr.get("feedback_score") is not None:
@@ -274,7 +284,8 @@ def build_graph(records, agent_default="agent"):
                       "models_list": [{"name": m or "?", "calls": c} for m, c in _mm],   # distribution (app view)
                       "mixed_model": len(s["models"]) > 1,
                       "avg_in": round(s["in"] / n), "avg_out": round(s["out"] / n),
-                      "avg_ms": round(s["ms"] / n), "errors": s["err"], "error_rate": round(s["err"] / n, 3),
+                      "avg_ms": round(s["ms"] / n), "errors_excluded": excluded.get(key, 0),
+                      "error_rate": round(excluded.get(key, 0) / (n + excluded.get(key, 0)), 3),
                       "cost_ls": round(s["cost_ls"], 5), "avg_tools": round(s["tools"] / n, 1),
                       "feedback_score": (round(sum(s["fb"]) / len(s["fb"]), 3) if s["fb"] else None),
                       "ttft_ms": (round(sum(s["ttft"]) / len(s["ttft"])) if s["ttft"] else None),
@@ -291,4 +302,5 @@ def build_graph(records, agent_default="agent"):
             edge_ct[(a, b)] = edge_ct.get((a, b), 0) + 1
     edges = [{"src": a, "dst": b, "count": c} for (a, b), c in sorted(edge_ct.items(), key=lambda kv: -kv[1])]
 
-    return Graph(agent, buckets, nodes, edges, len([t for t in by_trace if t]))
+    return Graph(agent, buckets, nodes, edges, len([t for t in by_trace if t]),
+                 errors_excluded=sum(excluded.values()), revisions=sorted(revs))
