@@ -14,14 +14,15 @@ def _price(model):
 
 
 def _compressible(bucket):
-    """$0 candidacy for harness (system-prompt) compression: the system prompt is STATIC across the call-site AND big
-    enough to be worth shrinking. A DYNAMIC system prompt is a cache-reorg case, not a compress case — so we skip it
-    here (the proof would only waste calls). Real $ is decided by the paid proof (compress.prove); this just flags it."""
+    """$0 candidacy for harness (system-prompt) compression: the SHARED STATIC portion of the system (lines
+    byte-identical across the call-site) is big enough to be worth shrinking. A per-call injection (a date, an id,
+    retrieved state) does NOT disqualify the node — it lives in the dynamic remainder and is preserved verbatim by
+    the proof; only the stable core is compressed. Real $ is decided by the paid proof (compress.prove)."""
     if not bucket:
         return False
-    systems = {"\n".join(m.get("content") or "" for m in t.get("input_messages", []) if m.get("role") == "system")
-               for t in bucket}
-    return len(systems) == 1 and approx_tokens(next(iter(systems))) >= 400
+    from app.services import compress
+    static, _ = compress.static_system(bucket)
+    return approx_tokens(static) >= 400
 
 
 def build(source_id, ws_id, project, calls=None, levers=None, g=None):

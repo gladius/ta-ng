@@ -191,26 +191,34 @@ def judge_preserved(request, a_text, b_text, model=JUDGE_MODEL):
 
 
 def _distinct(traces, n):
-    """Up to n inputs that differ in content. DETERMINISTIC (walks the bucket in order) — never random, so the SAMPLE
-    is stable across audits; only the repeats measure model/judge noise.
+    """Up to n inputs that differ in their PER-CALL VARIABLE content — the part that actually changes behaviour.
+    DETERMINISTIC (walks the bucket in order), so the SAMPLE is stable across audits; only the repeats measure noise.
 
-    Keyed on the FULL input (every message — system + user + prior turns / tool results), so per-call variation is
-    caught wherever it lives: the human query, a tool result, or a varying slice of the system. Dedup is 3-gram Jaccard
-    >= 0.8 over that whole text. The big FIXED part (the agent's system config / template) is shared by every input, so
-    it DILUTES into the overlap instead of faking diversity: N copies of one question that differ only in a session id
-    or timestamp stay ~identical and collapse to 1 (correct), while genuinely different inputs fall below 0.8 and count
-    as distinct. The deliberate, honest trade-off runs the OTHER way — when a HUGE fixed prompt dwarfs a tiny variable,
-    truly different inputs can look alike and collapse; we then sample fewer (down to 1) and report that count, rather
-    than manufacturing diversity by stripping the shared part and keying on leftover noise."""
-    def sh(s):
-        w = s.lower().split()
-        return set(tuple(w[i:i + 3]) for i in range(max(0, len(w) - 2)))
-    kept, kept_sh = [], []
-    for t in traces:
-        s = sh(_input_text(t))
-        if any((len(s & k) / max(1, len(s | k))) >= 0.8 for k in kept_sh):
+    We key diversity on what VARIES per call, NOT the whole prompt. A call-site is a shared static skeleton (the system
+    config / instructions, byte-identical every call) + per-call content (the query, a tool result, an injected id).
+    The static carries ZERO behavioural variety yet can dwarf the prompt by bytes, so whole-prompt similarity goes
+    BLIND to real variety under a big fixed prefix (8 genuinely different tickets under an 8k-token system read as 1 —
+    letting a rule only SOME inputs trigger slip through as a false SAFE). So we STRIP the lines byte-identical across
+    the whole bucket (the shared skeleton) and dedup on the remainder — the per-call variable.
+
+    Dedup is WORD-SET (1-gram) Jaccard >= 0.8, deliberately NOT 3-gram: a genuinely SHORT variable (a classifier's
+    one-word input under a big rubric) has no 3-grams, so a 3-gram key falls back to the whole prompt and COLLAPSES it
+    to 1 — a false SAFE on the very simplest agents. A word set works from one word up. It cannot tell a genuine short
+    variable from short NOISE (a session id), so it COUNTS both — the SAFE default for a prove-it tool: over-sampling a
+    redundant real input is harmless; MISSING a real variation manufactures a false SAFE. This is the SAME
+    shared-static / per-call split the levers optimize on: optimize the static, sample from the variable. A
+    fully-identical bucket has no variable, so it correctly collapses to 1."""
+    fulls = [_input_text(t) for t in traces]
+    common = set.intersection(*[set(f.split("\n")) for f in fulls]) if fulls else set()  # the shared skeleton lines
+    def words(s):
+        return set(s.lower().split())                                   # 1-gram: robust from a single word up
+    kept, kept_w = [], []
+    for t, f in zip(traces, fulls):
+        var = "\n".join(l for l in f.split("\n") if l not in common)     # the per-call VARIABLE (skeleton stripped)
+        w = words(var) or words(f)                                      # no variable (fully static) -> full -> collapses identical
+        if any((len(w & k) / max(1, len(w | k))) >= 0.8 for k in kept_w):
             continue
-        kept.append(t); kept_sh.append(s)
+        kept.append(t); kept_w.append(w)
         if len(kept) >= n:
             break
     return kept
