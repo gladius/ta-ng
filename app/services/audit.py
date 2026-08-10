@@ -20,6 +20,7 @@ Never a false SAFE: ties break toward NOT recommending; an unverifiable anchor i
 """
 import json
 import re
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from auditor.util import canonical_model, next_cheaper, tier, release, max_output
@@ -31,6 +32,13 @@ from app.config import (AUDIT_SAMPLES, AUDIT_REPEATS, AUDIT_MIN_EVIDENCE, AUDIT_
 
 def _user_text(t):
     return " ".join(m["content"] for m in t.get("input_messages", []) if m.get("role") == "user")
+
+
+def _input_text(t):
+    """The FULL input a call sent — every message (system + user + prior turns / tool results). Used ONLY as the
+    diversity key in _distinct: a node's real per-call variation can live in the system prompt or retrieved context,
+    not just the user turn."""
+    return "\n".join((m.get("content") or "") for m in t.get("input_messages", []))
 
 
 def _messages(trace):
@@ -177,17 +185,27 @@ def judge_preserved(request, a_text, b_text, model=JUDGE_MODEL):
 
 
 def _distinct(traces, n):
-    """Up to n inputs that aren't near-identical (word-shingle overlap >= 0.8). DETERMINISTIC (walks in order) —
-    never random, so the SAMPLE is stable across audits; only the repeats measure model/judge noise."""
+    """Up to n inputs that differ in their PER-CALL VARIABLE content. DETERMINISTIC (walks in order) — never random,
+    so the SAMPLE is stable across audits; only the repeats measure model/judge noise.
+
+    Why not whole-text similarity: a real production node's prompt is a big shared TEMPLATE (system prompt,
+    instructions, retrieved context) + a small per-call variable. Whole-text 3-gram Jaccard is DOMINATED by the
+    template, so genuinely-different inputs score ~0.99 similar and collapse to one -> false LOW-EVIDENCE (and thin,
+    fragile BORDERLINE). So we STRIP the shingles that are near-universal across the node's OWN bucket (the scaffold)
+    and dedup on what remains — the variable. Fully-static input -> empty signature -> fall back to the full text, so
+    it correctly dedups to 1 rather than keeping n identical copies."""
     def sh(s):
         w = s.lower().split()
         return set(tuple(w[i:i + 3]) for i in range(max(0, len(w) - 2)))
-    kept, kept_sh = [], []
-    for t in traces:
-        s = sh(_user_text(t))
-        if any((len(s & k) / max(1, len(s | k))) >= 0.8 for k in kept_sh):
+    shs = [sh(_input_text(t)) for t in traces]                      # full input (system+user+...), not just user turn
+    df = Counter(g for s in shs for g in s)                        # document frequency of each shingle across the bucket
+    scaffold = {g for g, c in df.items() if c >= max(2, int(0.8 * len(traces)))}   # near-universal shingles = template
+    kept, kept_sig = [], []
+    for t, s in zip(traces, shs):
+        sig = (s - scaffold) or s                                  # per-call VARIABLE; empty (fully static) -> full text
+        if any((len(sig & k) / max(1, len(sig | k))) >= 0.8 for k in kept_sig):
             continue
-        kept.append(t); kept_sh.append(s)
+        kept.append(t); kept_sig.append(sig)
         if len(kept) >= n:
             break
     return kept
