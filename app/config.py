@@ -1,6 +1,8 @@
 """Demo-wide knobs. One place, so every page reconciles by construction."""
 import os
 
+import credentials
+
 # The fixed CALL-COUNT BASIS every $ figure is normalized to — NOT a monthly volume (a sample of traces can't
 # reveal real production volume). We quote "$X per CALLS_BASIS calls"; the per-call saving is exact, so a viewer
 # multiplies by their own real volume. Change it here (or via AUDIT_CALLS_BASIS) and every page — select, report,
@@ -15,6 +17,17 @@ LEVERS = [s.strip() for s in os.environ.get("LEVERS", "downgrade").split(",") if
 
 def lever_on(name):
     return name in LEVERS
+
+
+# ── Model roles — ALL model choices live HERE, one place, each .env-overridable so a model can be swapped per role
+# without touching code. Distinct roles: JUDGE (the equivalence verdict — quality is the crux), OPTIMIZER (rewrite /
+# reorg / compress — judgement work), FILTER (cheap relevance pruning, not a verdict), PROFILE (the per-node
+# comprehension analyst — a trust dial, one call per node, out of path; bump to Opus for a demo). Override in .env
+# with AUDIT_JUDGE_MODEL / AUDIT_OPTIMIZER_MODEL / AUDIT_FILTER_MODEL / AUDIT_PROFILE_MODEL.
+JUDGE_MODEL = credentials.get_config("AUDIT_JUDGE_MODEL", "claude-sonnet-5")
+OPTIMIZER_MODEL = credentials.get_config("AUDIT_OPTIMIZER_MODEL", "claude-sonnet-5")
+FILTER_MODEL = credentials.get_config("AUDIT_FILTER_MODEL", "claude-haiku-4-5")
+PROFILE_MODEL = credentials.get_config("AUDIT_PROFILE_MODEL", "claude-sonnet-5")
 
 
 # Downgrade-audit rigor — the ONE place these knobs live.

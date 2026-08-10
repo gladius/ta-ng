@@ -68,12 +68,13 @@ def report_view(request: Request, source: str, ws_id: str, project: str, snap: s
     if proof is None:                    # built but not audited yet -> pick call-sites first (report = results only)
         return RedirectResponse("/s/%s/ws/%s/agent/%s/select?snap=%s"
                                 % (source, ws_id, quote(project, safe=""), snap), status_code=303)
-    f = funnel.build(source, ws_id, project, levers=["downgrade", "cache"], g=g)  # both levers, from the PINNED snapshot
+    f = funnel.build(source, ws_id, project, levers=["downgrade", "cache", "compress"], g=g)  # all levers, PINNED snapshot
     results = proof["results"]                                                    # STRATEGY-primary report: one section
     dg = [r for r in results if r.get("downgrade")]                               # per lever, each listing only the
     ca = [r for r in results if r.get("cache") and not r["cache"].get("informational")]  # call-sites it applies to
+    co = [r for r in results if r.get("compress")]                               # compression: the call-sites it ran on
     return _page(request, "report.html", source=source, ws_id=ws_id, project=project,
-                 f=f, proof=proof, dg=dg, ca=ca, snap=snap)
+                 f=f, proof=proof, dg=dg, ca=ca, co=co, snap=snap)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/build-stream")
@@ -108,30 +109,33 @@ def select_view(request: Request, source: str, ws_id: str, project: str, snap: s
     if g is None:
         return RedirectResponse("/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe="")),
                                 status_code=303)
-    f = funnel.build(source, ws_id, project, levers=["downgrade", "cache"], g=g)
+    f = funnel.build(source, ws_id, project, levers=["downgrade", "cache", "compress"], g=g)
     return _page(request, "select.html", source=source, ws_id=ws_id, project=project, f=f, snap=snap)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/auditing", response_class=HTMLResponse)
-def auditing_view(request: Request, source: str, ws_id: str, project: str, snap: str = "", keys: str = ""):
-    """Audit-progress page — proves the SELECTED `keys` (via prove-stream) with a live N/M list, then redirects to
-    the report. No snap -> go rebuild."""
+def auditing_view(request: Request, source: str, ws_id: str, project: str, snap: str = "", keys: str = "",
+                  levers: str = ""):
+    """Audit-progress page — proves the SELECTED `keys` with the SELECTED `levers` (via prove-stream) with a live
+    N/M list, then redirects to the report. No snap -> go rebuild."""
     from app.services import snapshot
     if snapshot.get(snap, source, ws_id, project) is None:
         return RedirectResponse("/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe="")),
                                 status_code=303)
     return _page(request, "auditing.html", source=source, ws_id=ws_id, project=project,
-                 snap=snap, keys=keys, agent=project)
+                 snap=snap, keys=keys, levers=levers, agent=project)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/prove-stream")
-def prove_stream(source: str, ws_id: str, project: str, keys: str, snap: str = ""):
-    """SSE — prove the selected call-sites live against the PINNED snapshot. Paid; freezes the result for the report."""
+def prove_stream(source: str, ws_id: str, project: str, keys: str, snap: str = "", levers: str = ""):
+    """SSE — prove the selected call-sites with the selected LEVERS live against the PINNED snapshot. Paid; freezes
+    the result for the report. `levers` empty -> all three (prove.stream's default)."""
     from app.services import prove
     keylist = [k for k in keys.split(",") if k]
+    leverlist = [x for x in levers.split(",") if x] or None
 
     def gen():
-        for evt in prove.stream(source, ws_id, project, keylist, snap):
+        for evt in prove.stream(source, ws_id, project, keylist, snap, levers=leverlist):
             yield "event: %s\ndata: %s\n\n" % (evt.get("type", "msg"), json.dumps(evt))
 
     return StreamingResponse(gen(), media_type="text/event-stream",

@@ -38,14 +38,16 @@ def _report_md(f, proof):
     results = proof["results"] if proof else []
     dg = [x for x in results if x.get("downgrade")]
     ca = [x for x in results if x.get("cache") and not x["cache"].get("informational")]
+    co = [x for x in results if x.get("compress")]
     total = (proof.get("total", 0) if proof else 0)
     dg_total = (proof.get("downgrade_usd", 0) if proof else 0)
     ca_total = (proof.get("cache_usd", 0) if proof else 0)
+    co_total = (proof.get("compress_usd", 0) if proof else 0)
 
     L = ["# Token Audit — %s" % f["agent"], ""]
     if total > 0:
-        L.append("**$%s in verified savings** — ↓ $%s downgrade · ⚡ $%s cache."
-                 % (_fmt(total), _fmt(dg_total), _fmt(ca_total)))
+        L.append("**$%s in verified savings** — ↓ $%s downgrade · ⚡ $%s cache · − $%s compress."
+                 % (_fmt(total), _fmt(dg_total), _fmt(ca_total), _fmt(co_total)))
     else:
         L.append("**No safe savings on the audited call-sites.** Each re-ran live and needs its current setup — a "
                  "verified result, not an empty one.")
@@ -128,6 +130,43 @@ def _report_md(f, proof):
     else:
         L += ["_No cacheable-prefix opportunities among the audited call-sites._", ""]
 
+    # ── Prompt compression ────────────────────────────────────────────────────
+    L.append("## Prompt compression")
+    L.append("")
+    if co:
+        L += ["| Call-site | Tokens | Verdict | Inputs safe | $ / %s |" % unit, "|---|---|---|---|---|"]
+        for x in co:
+            c = x["compress"]
+            amt = "$" + _fmt(x["compress_usd"]) if c["verdict"] == "SAFE" else "—"
+            safe = "%s/%s" % (c.get("safe_inputs", 0), c.get("n", 0)) if c.get("inputs") else "—"
+            toks = "%s → %s" % (c.get("before_tok", "?"), c.get("after_tok", "?")) if c.get("after_tok") else "—"
+            L.append("| `%s` | %s | %s | %s | %s |" % (x["node"], toks, c["verdict"], safe, amt))
+        L.append("")
+        for x in co:
+            c = x["compress"]
+            L.append("### `%s` — %s" % (x["node"], c["verdict"]))
+            if c.get("after_tok"):
+                L.append("System prompt **%s → %s tokens** (%s). %s"
+                         % (c.get("before_tok"), c.get("after_tok"), c.get("mode", "-"),
+                            ("Behaviour preserved on %s/%s sampled inputs." % (c.get("safe_inputs", 0), c.get("n", 0))
+                             if c["verdict"] == "SAFE" else "Not applied — see per-input results.")))
+            else:
+                L.append(c.get("reason", ""))
+            if c.get("inputs"):
+                L.append("")
+                L.append("Behaviour test — %d distinct inputs × %d re-runs each (compressed prompt vs recorded output):"
+                         % (c.get("n", 0), c.get("k", 0)))
+                for i, r in enumerate(c["inputs"], 1):
+                    L.append("- input %d — %s (%d/%d) — %s" % (i, _IV.get(r["verdict"], r["verdict"]), r["kept"],
+                                                               r["k"], (r.get("note") or r.get("reason", ""))))
+            if c["verdict"] == "SAFE" and c.get("compressed"):
+                L.append("")
+                L.append("**What to do:** replace this call-site's system prompt with the proven-shorter version "
+                         "in `evidence/compress/%s/compressed-system.txt`." % _slug(x.get("key") or x["node"]))
+            L.append("")
+    else:
+        L += ["_No safe prompt-compression opportunities among the audited call-sites._", ""]
+
     L.append("---")
     L.append("_Figures shown per %s — a fixed basis, not a monthly figure; multiply by your agent's real call "
              "volume to scale the dollars. Cache savings assume calls arrive within the provider's cache window; a "
@@ -206,4 +245,15 @@ def build_zip(f, proof):
                 if c.get("prefix"):
                     z.writestr("%s/reorged-prefix.txt" % root, c.get("prefix", ""))
                 _write_inputs(z, root, c.get("inputs", []))
+            cp = x.get("compress")
+            if cp:
+                head = "prompt compression · verdict: %s" % cp.get("verdict", "?")
+                if cp.get("after_tok"):
+                    head += "\nsystem prompt tokens: before %s → after %s (%s)" % (
+                        cp.get("before_tok"), cp.get("after_tok"), cp.get("mode", "-"))
+                root = "evidence/compress/%s" % node
+                z.writestr("%s/verdict.md" % root, _verdict_md(x["node"], "prompt compression", head, cp))
+                if cp.get("verdict") == "SAFE" and cp.get("compressed"):   # the "what to do": the shorter system prompt
+                    z.writestr("%s/compressed-system.txt" % root, cp.get("compressed", ""))
+                _write_inputs(z, root, cp.get("inputs", []))
     return buf.getvalue()

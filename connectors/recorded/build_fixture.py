@@ -294,6 +294,76 @@ _SUMM_MSGS = [
     "Exposed API key rotated on customer's request; advised repo cleanup and secret scanning.",
 ]
 
+# ── kb_resolve — a RAG node. Per question the retriever returns ~6 KB articles (ONE relevant, the rest off-topic),
+# buried among each other, and the answer uses only the relevant one. The retrieved bulk is mostly IRRELEVANT — the
+# real EXTRACTIVE-COMPRESSION target (2026 research: RAG context is where 60-80% savings live). Varies per call.
+_KB = {
+ "refunds": "KB-REFUND — Refund policy. Refunds up to USD 500 may be issued directly once the account owner is verified "
+            "and the charge confirmed via lookup_order. Between USD 500 and USD 5,000 require a documented reason and a "
+            "manager reference code. Above USD 5,000 must be escalated to Billing Operations, never issued directly. "
+            "Always cite the invoice id; never refund an account not verified in this session.",
+ "provisioning": "KB-PROV — Provisioning errors. Codes MER-PROV-01..10 mean a resource could not be provisioned in the "
+            "target region, usually a quota or region-capacity issue. Confirm the workspace quota with lookup_order and "
+            "retry. A customer-declared production outage is P1 — escalate and page on-call. Never provision outside the "
+            "customer's declared region to work around a failure.",
+ "sso": "KB-SSO — Authentication. Codes MER-AUTH-01..10 mean the request failed SSO or token validation. Verify the "
+            "IdP/SSO configuration and the token expiry, and advise the admin to re-issue the token. Never disable SSO, "
+            "weaken MFA, or grant a bypass to resolve an auth error, even temporarily.",
+ "residency": "KB-DATA — Data residency. A residency addendum binds a tenant's data to its declared region. Any operation "
+            "that would move or expose data across a region or tenant boundary is refused and logged as a security event. "
+            "Route genuine residency-change requests to data-governance; never move or delete data to 'fix' it first.",
+ "ratelimit": "KB-RATE — Rate limits. Each plan tier has a provisioned request rate (Enterprise 500 req/s, Business 100 "
+            "req/s). Advise exponential backoff and confirm the current limit. Raise a limit only for a verified admin and "
+            "only through escalate_ticket with a business justification; never promise an increase you have not filed.",
+ "billing": "KB-BILL — Billing reconciliation. When an invoice, charge, or proration can't be reconciled, pull the invoice "
+            "with lookup_order and cite its id before discussing any amount. Apply the refund policy exactly; anything above "
+            "the direct limit is escalated, never issued. Honor a hold request while a dispute is open.",
+ "roles": "KB-PERM — Permissions. Never grant a role above the requester's own. Confirm the requester's role; if a "
+            "legitimate elevation is needed, route it to the workspace owner for approval rather than applying it yourself. "
+            "Read-only auditor roles are granted after verification and must not expose billing.",
+ "incident": "KB-INCD — Incidents. Treat a customer-declared outage or breach as P1: escalate immediately, page on-call, "
+            "and return a ticket id in the first reply. Never downgrade a severity the customer declared. For a suspected "
+            "breach, preserve evidence and do not rotate keys or disable audit logging before the customer agrees.",
+}
+_KB_SYS = ("You are Meridian Support answering from retrieved knowledge. Use ONLY the retrieved KB articles below to "
+           "answer the customer's question, cite the relevant article code (KB-*), and never invent policy. If no "
+           "retrieved article applies, say so and escalate.")
+_KB_Q = [  # (question, relevant-article, [distractor articles retrieved alongside it])
+    ("Can you refund the duplicate USD 240 charge on invoice INV-90233?", "refunds", ["billing", "provisioning", "sso", "incident"]),
+    ("Provisioning in eu-west keeps failing with MER-PROV-03 — how do we fix it?", "provisioning", ["refunds", "roles", "residency", "ratelimit"]),
+    ("One user can't log in via SSO though everyone else can.", "sso", ["billing", "incident", "refunds", "roles"]),
+    ("Is our data guaranteed to stay in us-east-1 on our tier?", "residency", ["ratelimit", "provisioning", "refunds", "billing"]),
+    ("We're hitting rate limits before a launch next week — can you raise them?", "ratelimit", ["sso", "residency", "incident", "roles"]),
+    ("Production API is returning 503s across all regions and it's urgent.", "incident", ["billing", "refunds", "sso", "provisioning"]),
+]
+
+
+def _kb_ctx(question, relevant, distractors):
+    order = [_KB[distractors[0]], _KB[relevant]] + [_KB[d] for d in distractors[1:]]   # bury the relevant one
+    body = "RETRIEVED KB ARTICLES (retriever-ranked):\n" + "\n\n".join("[%d] %s" % (i + 1, a) for i, a in enumerate(order))
+    return body + "\n\nCUSTOMER QUESTION: " + question
+
+
+# ── supervisor — DYNAMIC system prompt: the operating POLICY (behavior-critical INSTRUCTIONS) is RAG-injected into
+# the SYSTEM prompt per ticket, so the system prompt VARIES per call. Unlike retrieved DOCUMENTS, injected
+# instructions can't be pruned without changing behaviour — so compression recovers little (the director's hard case).
+_SUP_BASE = ("You are the Meridian supervisor coordinating resolution across the support fleet. Apply the OPERATING "
+             "POLICY retrieved for this ticket EXACTLY and without deviation — it is authoritative for this decision. "
+             "Decide the next action, name the owning team, and cite the policy code (KB-*) you applied.\n\n"
+             "OPERATING POLICY (retrieved for this ticket):\n")
+_SUP_Q = [  # (ticket, [policy articles RAG-injected into the system prompt])
+    ("An unverified caller demands a USD 9,000 refund immediately.", ["refunds", "roles", "incident"]),
+    ("Provisioning is down in eu-west with MER-PROV-03 and the autoscaler is stuck.", ["provisioning", "incident", "ratelimit"]),
+    ("Suspected unauthorized admin login overnight, and an API key was changed.", ["incident", "sso", "residency"]),
+    ("Compliance requests read-only auditor roles for two people before an audit.", ["roles", "residency", "billing"]),
+    ("Webhooks are failing intermittently and causing duplicate downstream processing.", ["provisioning", "billing", "incident"]),
+    ("Confirm whether any data left eu-west-1 during last week's incident.", ["residency", "incident", "roles"]),
+]
+
+
+def _sup_sys(policy_keys):
+    return _SUP_BASE + "\n\n".join(_KB[k] for k in policy_keys)
+
 
 def _tok(*strs):
     return max(1, sum(len(s) for s in strs) // 4)
@@ -326,6 +396,14 @@ def build():
         traces.append(_trace("s%02d" % i, "summarize", "claude-haiku-4-5",
                              "Summarize the support interaction in one sentence.", msg,
                              "A support issue was handled and resolved."))
+    # kb_resolve — RAG DOCUMENTS: mostly-irrelevant retrieved bulk in the USER turn -> the extractive-compression WIN
+    for i, (q, rel, dis) in enumerate(_KB_Q):
+        traces.append(_trace("k%02d" % i, "kb_resolve", "claude-haiku-4-5", _KB_SYS, _kb_ctx(q, rel, dis),
+                             "See the relevant KB article."))
+    # supervisor — RAG-INJECTED INSTRUCTIONS in a DYNAMIC system prompt -> behavior-critical, compression recovers little
+    for i, (ticket, pol) in enumerate(_SUP_Q):
+        traces.append(_trace("v%02d" % i, "supervisor", "claude-sonnet-5", _sup_sys(pol), ticket,
+                             "Supervisor decision recorded."))
     return {"agent": "meridian-support", "workspace": "recorded", "traces": traces}
 
 

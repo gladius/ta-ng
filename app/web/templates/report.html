@@ -86,6 +86,30 @@
   .ba-metric b{font-size:18px;font-variant-numeric:tabular-nums}
   .ba-arrow{color:var(--ok);font-weight:700;font-size:18px}
 
+  /* reusable scrollable before/after — used for prompt diffs AND per-input output diffs */
+  .diff{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);margin-top:var(--s3)}
+  @media(max-width:640px){.diff{grid-template-columns:1fr}}
+  .diff-col{border:1px solid var(--line);border-radius:8px;overflow:hidden;min-width:0}
+  .diff-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:5px 11px}
+  .diff-before .diff-tag{background:var(--bad-weak);color:var(--bad)}
+  .diff-after .diff-tag{background:var(--ok-weak);color:var(--ok)}
+  .diff-box{white-space:pre-wrap;font-family:'Plex Mono',ui-monospace,monospace;font-size:11px;line-height:1.5;
+    padding:10px 11px;max-height:300px;overflow:auto;margin:0;color:var(--ink);word-break:break-word}
+  .ba-text{margin-top:var(--s3)}
+  .ba-toggle{list-style:none;cursor:pointer;font-size:12.5px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:7px}
+  .ba-toggle::-webkit-details-marker{display:none}
+  .ba-text[open]>.ba-toggle .f-caret{transform:rotate(90deg)}
+  .ev-item{width:100%}
+  .ev-sum{list-style:none;cursor:pointer;display:flex;align-items:center;gap:var(--s3);padding:var(--s3) 0;border-top:1px solid var(--line)}
+  .ev-sum::-webkit-details-marker{display:none}
+  .ev-sum .f-caret{flex-shrink:0}
+  .ev-item[open]>.ev-sum .f-caret{transform:rotate(90deg)}
+  .evidence>li:first-child .ev-sum{border-top:none}
+  .ev-sum .ev-in{flex:1;min-width:0}
+  .ev-sum .ev-rate{color:var(--ink);white-space:nowrap;font-size:12.5px}
+  .ev-body{padding:var(--s2) 0 var(--s3) 22px}
+  .ev-remark{font-size:12.5px;color:var(--muted);margin:0 0 var(--s2)}
+
   .actions{display:flex;gap:10px;align-items:center;margin-top:var(--s6)}
   .foot-note{color:var(--faint);font-size:12px;line-height:1.65;margin:var(--s5) 2px 0;max-width:84ch}
   @media (max-width:640px){
@@ -95,15 +119,53 @@
   }
 </style>
 
+{# ── reusable scrollable before/after: prompt diff (finding-level) and output diff (per input) ── #}
+{% macro badiff(before, after, blabel, alabel) %}
+<details class="ba-text">
+  <summary class="ba-toggle"><span class="f-caret">&#9654;</span> {{ blabel }} &rarr; {{ alabel }} <span class="subtle">— click to expand</span></summary>
+  <div class="diff">
+    <div class="diff-col diff-before"><div class="diff-tag">{{ blabel }}</div><pre class="diff-box">{{ before or '(none)' }}</pre></div>
+    <div class="diff-col diff-after"><div class="diff-tag">{{ alabel }}</div><pre class="diff-box">{{ after or '(none)' }}</pre></div>
+  </div>
+</details>
+{% endmacro %}
+
+{% macro evidence(inputs) %}
+<ul class="evidence">
+  {% for iv in inputs %}
+  <li>
+    <details class="ev-item">
+      <summary class="ev-sum">
+        <span class="f-caret">&#9654;</span>
+        {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% else %}<span class="ev-tag ev-drift">not safe</span>{% endif %}
+        <span class="ev-in">{{ iv.note or iv.reason or 'judged' }}</span>
+        <span class="ev-rate mono">kept {{ iv.kept }}/{{ iv.k }}{% if iv.self_kept is not none %} &middot; orig {{ iv.self_kept }}/{{ iv.k }}{% endif %}</span>
+      </summary>
+      <div class="ev-body">
+        <p class="ev-remark"><b>Request:</b> {{ (iv.input or '(input)') | replace('Question: ', '') | truncate(200, true) }}</p>
+        <div class="diff">
+          <div class="diff-col diff-before"><div class="diff-tag">recorded output (before)</div><pre class="diff-box">{{ iv.recorded or '(none)' }}</pre></div>
+          <div class="diff-col diff-after"><div class="diff-tag">re-run output (after)</div><pre class="diff-box">{% if iv.samples %}{{ iv.samples[0].output or '(empty)' }}{% else %}(none){% endif %}</pre></div>
+        </div>
+      </div>
+    </details>
+  </li>
+  {% endfor %}
+</ul>
+{% endmacro %}
+
 {% set save = (proof.total or 0) %}
 {% set win = save > 0 %}
 {% set audited = proof.results | length %}
+{% set audited_cost = (proof.results | sum(attribute='cost')) or 0 %}   {# current spend of the audited call-sites, same 10k basis #}
+{% set pct = ((save / audited_cost * 100) | int) if audited_cost > 0 else 0 %}
 {% set dg_total = (proof.downgrade_usd or 0) %}
 {% set ca_total = (proof.cache_usd or 0) %}
+{% set co_total = (proof.compress_usd or 0) %}
 {% set errored = proof.results | selectattr('error') | list %}
 {% set all_failed = (errored | length == audited and audited > 0) %}
 {% set ns = namespace(safe=0) %}
-{% for r in proof.results %}{% if ((r.downgrade_usd or 0) + (r.cache_usd or 0)) > 0 %}{% set ns.safe = ns.safe + 1 %}{% endif %}{% endfor %}
+{% for r in proof.results %}{% if ((r.downgrade_usd or 0) + (r.cache_usd or 0) + (r.compress_usd or 0)) > 0 %}{% set ns.safe = ns.safe + 1 %}{% endif %}{% endfor %}
 
 {% if errored %}
 <div class="audit-error">
@@ -124,7 +186,7 @@
     <p class="verdict-sub">All {{ audited }} selected call-site{{ 's' if audited != 1 }} failed to re-run live, so nothing could be verified. This is an execution error, not a result &mdash; resolve it (usually API credits) and re-audit.</p>
   {% elif win %}
     <h1 class="verdict-headline">${{ '{:,.0f}'.format(save) }} in verified savings.</h1>
-    <p class="verdict-sub">{{ ns.safe }} of {{ audited }} audited call-site{{ 's' if audited != 1 }} proved safe on a live re-run of real recorded inputs &mdash; behavior held on every sampled call.</p>
+    <p class="verdict-sub">{{ ns.safe }} of {{ audited }} audited call-site{{ 's' if audited != 1 }} proved safe on a live re-run of real recorded inputs &mdash; behavior held on every sampled call.{% if pct > 0 %} That&rsquo;s <b>{{ pct }}%</b> off their <b>${{ '{:,.0f}'.format(audited_cost) }}</b> current cost per {{ '{:,}'.format(f.calls) }} calls.{% endif %}</p>
   {% else %}
     <h1 class="verdict-headline">No safe savings on the audited call-sites.</h1>
     <p class="verdict-sub">All {{ audited }} re-ran live against real recorded inputs and each genuinely needs its current setup. That&rsquo;s a verified result, not an empty one.</p>
@@ -132,9 +194,14 @@
   {% if not all_failed %}
   <div class="metrics">
     <div class="metric">
+      <div class="m-k">Current cost</div>
+      <div class="m-v">${{ '{:,.0f}'.format(audited_cost) }}<span class="m-u">per {{ '{:,}'.format(f.calls) }} calls</span></div>
+      <div class="m-split">audited call-sites &middot; list price</div>
+    </div>
+    <div class="metric">
       <div class="m-k">Verified savings</div>
       <div class="m-v{{ ' pos' if win }}">${{ '{:,.0f}'.format(save) }}<span class="m-u">per {{ '{:,}'.format(f.calls) }} calls</span></div>
-      {% if win %}<div class="m-split">{% if dg_total > 0 %}&darr; ${{ '{:,.0f}'.format(dg_total) }} downgrade{% endif %}{% if dg_total > 0 and ca_total > 0 %} &middot; {% endif %}{% if ca_total > 0 %}&#9889; ${{ '{:,.0f}'.format(ca_total) }} cache{% endif %}</div>{% endif %}
+      {% if win %}<div class="m-split">{% if pct > 0 %}<b>{{ pct }}% off</b> &middot; {% endif %}{% if dg_total > 0 %}&darr; ${{ '{:,.0f}'.format(dg_total) }} downgrade{% endif %}{% if ca_total > 0 %}{% if dg_total > 0 %} &middot; {% endif %}&#9889; ${{ '{:,.0f}'.format(ca_total) }} cache{% endif %}{% if co_total > 0 %}{% if dg_total > 0 or ca_total > 0 %} &middot; {% endif %}&#8722; ${{ '{:,.0f}'.format(co_total) }} compress{% endif %}</div>{% endif %}
     </div>
     <div class="metric"><div class="m-k">Safe to change</div><div class="m-v">{{ ns.safe }}<span class="m-u">/ {{ audited }} audited</span></div></div>
     <div class="metric"><div class="m-k">Sampled</div><div class="m-v">{{ f.traces }}<span class="m-u">traces</span></div></div>
@@ -155,7 +222,7 @@
       <summary class="finding-head">
         <span class="f-caret">&#9654;</span>
         <span class="f-name">{{ r.node }}</span>
-        <span class="f-model">{{ r.model }}</span>
+        <span class="f-model">{{ r.model }} &rarr; {{ d.cheaper }}</span>
         <span class="f-spacer"></span>
         {% if d.verdict == 'SAFE' %}<span class="chip chip--ok">safe</span><span class="f-amt pos">&minus;${{ '{:,.0f}'.format(r.downgrade_usd) }}<span class="per">/{{ (f.calls // 1000) }}k</span></span>
         {% elif d.verdict == 'NOT-SAFE' %}<span class="chip chip--bad">not safe</span><span class="f-amt none">&mdash;</span>
@@ -164,19 +231,7 @@
       </summary>
       <div class="finding-body">
         <p class="strat-note"><span class="to">{{ r.model }} &rarr; {{ d.cheaper }}</span>{% if d.verdict == 'SAFE' %} &mdash; the cheaper model matched on every sampled input.{% elif d.verdict == 'NOT-SAFE' %} &mdash; the cheaper model drifted on the majority of inputs; keep the current model.{% else %} &mdash; held on most inputs, but some drifted or couldn&rsquo;t be verified &mdash; see the per-input results.{% endif %}</p>
-        {% if d.inputs %}
-        <ul class="evidence">
-          {% for iv in d.inputs %}
-          <li class="ev-row">
-            {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% else %}<span class="ev-tag ev-drift">not safe</span>{% endif %}
-            <div class="ev-main">
-              <div class="ev-in">{{ (iv.input or '(input)') | replace('Question: ', '') | truncate(96, true) }}</div>
-              <div class="ev-why"><b class="ev-rate mono">cheaper {{ iv.kept }}/{{ iv.k }}</b>{% if iv.self_kept is not none %} &middot; <span class="subtle">original {{ iv.self_kept }}/{{ iv.k }}</span>{% endif %} &middot; {{ iv.note or iv.reason }}</div>
-            </div>
-          </li>
-          {% endfor %}
-        </ul>
-        {% endif %}
+        {% if d.inputs %}{{ evidence(d.inputs) }}{% endif %}
       </div>
     </details>
     {% endfor %}
@@ -217,25 +272,61 @@
           <div class="ba-col"><div class="ba-tag ba-after">after</div><div class="ba-metric"><b class="mono">{{ (c.after.read if c.after else 0) or 0 }}</b> tok cached / call</div></div>
         </div>
         {% endif %}
-        {% if c.inputs %}
-        <ul class="evidence">
-          {% for iv in c.inputs %}
-          <li class="ev-row">
-            {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% else %}<span class="ev-tag ev-drift">not safe</span>{% endif %}
-            <div class="ev-main">
-              <div class="ev-in">{{ (iv.input or '(input)') | replace('Question: ', '') | truncate(96, true) }}</div>
-              <div class="ev-why"><b class="ev-rate mono">cheaper {{ iv.kept }}/{{ iv.k }}</b>{% if iv.self_kept is not none %} &middot; <span class="subtle">original {{ iv.self_kept }}/{{ iv.k }}</span>{% endif %} &middot; {{ iv.note or iv.reason }}</div>
-            </div>
-          </li>
-          {% endfor %}
-        </ul>
-        {% endif %}
+        {% if c.before_prompt %}{{ badiff(c.before_prompt, c.after_prompt, 'original prompt', 'reorged prompt') }}{% endif %}
+        {% if c.inputs %}{{ evidence(c.inputs) }}{% endif %}
       </div>
     </details>
     {% endfor %}
   </div>
   {% else %}
   <p class="ssec-empty">No cacheable-prefix opportunities among the audited call-sites.</p>
+  {% endif %}
+</div>
+
+<!-- ── Prompt compression ── -->
+<div class="strat-sec">
+  <div class="ssec-head">
+    <span class="ssec-title"><span class="ico">&#8722;</span>Prompt compression</span>
+    <span class="ssec-sub">{% if co %}{% if co_total > 0 %}<b>${{ '{:,.0f}'.format(co_total) }}</b><span class="per">/{{ (f.calls // 1000) }}k</span> &middot; {% endif %}{{ co | length }} audited{% else %}none audited{% endif %}</span>
+  </div>
+  {% if co %}
+  <div class="findings">
+    {% for r in co %}{% set c = r.compress %}
+    <details class="finding">
+      <summary class="finding-head">
+        <span class="f-caret">&#9654;</span>
+        <span class="f-name">{{ r.node }}</span>
+        <span class="f-model">{{ r.model }}</span>
+        <span class="f-spacer"></span>
+        {% if c.verdict == 'SAFE' %}<span class="chip chip--ok">safe</span><span class="f-amt pos">&minus;${{ '{:,.0f}'.format(r.compress_usd) }}<span class="per">/{{ (f.calls // 1000) }}k</span></span>
+        {% elif c.verdict == 'NOT-SAFE' %}<span class="chip chip--bad">not safe</span><span class="f-amt none">&mdash;</span>
+        {% elif c.verdict == 'BORDERLINE' %}<span class="chip chip--warn">borderline</span><span class="f-amt none">&mdash;</span>
+        {% else %}<span class="chip chip--muted">{{ c.verdict | lower | replace('-',' ') }}</span><span class="f-amt none">&mdash;</span>{% endif %}
+      </summary>
+      <div class="finding-body">
+        {% if c.before_tok %}
+        <p class="strat-note">System prompt <b class="mono">{{ c.before_tok }} &rarr; {{ c.after_tok }}</b> tokens{% if c.mode %} &middot; <span class="subtle">{{ c.mode }}</span>{% endif %}{% if c.verdict == 'SAFE' %} &mdash; behavior held on every sampled input.{% elif c.verdict == 'NOT-SAFE' %} &mdash; the shorter prompt dropped or changed a rule; keep the original.{% elif c.verdict == 'BORDERLINE' %} &mdash; held on most inputs, some drifted &mdash; review per-input.{% endif %}</p>
+        {% else %}
+        <p class="strat-note">{{ c.reason or 'nothing to compress safely on this call-site.' }}</p>
+        {% endif %}
+        {% if c.after_tok %}
+        <div class="ba-grid">
+          <div class="ba-col"><div class="ba-tag ba-before">before</div><div class="ba-metric"><b class="mono">{{ c.before_tok }}</b> tok / call</div></div>
+          <div class="ba-arrow">&rarr;</div>
+          <div class="ba-col"><div class="ba-tag ba-after">after</div><div class="ba-metric"><b class="mono">{{ c.after_tok }}</b> tok / call</div></div>
+        </div>
+        {% endif %}
+        {% if c.original and c.compressed %}
+        {% if c.verdict == 'SAFE' %}<p class="strat-note"><b>What to do:</b> replace this call-site&rsquo;s system prompt with the proven-shorter version:</p>{% endif %}
+        {{ badiff(c.original, c.compressed, 'original system prompt', 'compressed system prompt') }}
+        {% endif %}
+        {% if c.inputs %}{{ evidence(c.inputs) }}{% endif %}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="ssec-empty">No safe prompt-compression opportunities among the audited call-sites.</p>
   {% endif %}
 </div>
 

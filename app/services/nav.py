@@ -15,10 +15,12 @@ def _safe(fn, default):
 
 
 def datasources():
-    """[{id, name, configured}] for every connector that ships a source.py."""
-    return [{"id": sid, "name": sid.replace("_", " ").title(),
-             "configured": _safe(src.configured, False)}
-            for sid, src in sorted(load_sources().items())]
+    """[{id, name, configured}] for every connector that is CONFIGURED (has credentials / is enabled). An
+    unconfigured source (e.g. Galileo with no key) is HIDDEN entirely, not shown greyed-out. `recorded` gates
+    itself to non-prod (see connectors/recorded/source.py), so it drops off in production."""
+    return [{"id": sid, "name": sid.replace("_", " ").title(), "configured": True}
+            for sid, src in sorted(load_sources().items())
+            if _safe(src.configured, False)]
 
 
 def workspaces(source_id):

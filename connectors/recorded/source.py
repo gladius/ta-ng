@@ -14,6 +14,7 @@ import json
 import glob
 from collections import OrderedDict
 
+import credentials
 from connectors.datasource import DataSource
 
 _DIR = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -23,6 +24,10 @@ class RecordedSource(DataSource):
     name = "recorded"
 
     def configured(self):
+        # DEV/DEMO source: fixtures on disk AND not running in production. Set APP_ENV=prod (in .env) to hide it
+        # from the datasource picker on a production deployment; it defaults to dev so local/demo shows it.
+        if credentials.get_config("APP_ENV", "dev").strip().lower() == "prod":
+            return False
         return os.path.isdir(_DIR) and bool(glob.glob(os.path.join(_DIR, "*.json")))
 
     def _agents(self):
