@@ -152,7 +152,8 @@ def prove(node_name, bucket, n=None, k=None, min_evidence=None):
                 "reason": "hoistable prefix %d tok < model minimum %d" % (ptok, cache_min(model))}
     # BEHAVIOUR — reuse the downgrade engine: candidate = reworded prefix + VERBATIM dynamic, same model
     inputs, verdict, safe = audit.prove_transform(
-        sample, lambda t: audit.replay(apply(t, prefix, static_set), model), model, k)
+        sample, lambda t: audit.replay(apply(t, prefix, static_set), model), model, k,
+        sent=lambda t: (prefix, _usr(apply(t, prefix, static_set))))    # AFTER input = the reorged prompt, for the inspector
     # AFTER — does the reworded prefix actually cache? (provider write->read)
     after = cache_proof.prove_prefix(model, prefix)
     recovered = max(0, after.get("read", 0) - before.get("read", 0))    # tokens that cache now but didn't before

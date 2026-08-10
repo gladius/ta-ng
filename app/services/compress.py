@@ -120,7 +120,8 @@ def prove(node_name, bucket, n=None, k=None, min_evidence=None):
             continue
         after_tok = approx_tokens(compressed)
         inputs, verdict, safe = audit.prove_transform(
-            sample, lambda t: audit.replay(with_compressed_system(t, compressed), model), model, k)
+            sample, lambda t: audit.replay(with_compressed_system(t, compressed), model), model, k,
+            sent=lambda t: (compressed, _user(t)))                 # AFTER input = compressed system + same user, for inspector
         save = round(PRICE.get(model, {}).get("input", 0) / 1e6 * (before_tok - after_tok) * 1000, 2)
         res = {**base, "after_tok": after_tok, "removed_tok": before_tok - after_tok,
                "ratio": round(after_tok / max(1, before_tok), 2), "compressed": compressed, "original": system,

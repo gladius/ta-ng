@@ -109,6 +109,17 @@
   .ev-sum .ev-rate{color:var(--ink);white-space:nowrap;font-size:12.5px}
   .ev-body{padding:var(--s2) 0 var(--s3) 22px}
   .ev-remark{font-size:12.5px;color:var(--muted);margin:0 0 var(--s2)}
+  .io-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:var(--s4) 0 6px}
+  .io{margin-top:9px}
+  .io:first-child{margin-top:0}
+  .io-k{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--faint);display:block;margin-bottom:3px}
+  .rtab-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:var(--s3)}
+  .rtab{font:inherit;font-size:12px;padding:5px 11px;border:1px solid var(--line-strong);border-radius:7px;background:var(--panel);color:var(--muted);cursor:pointer}
+  .rtab.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .rpanel{display:none}
+  .rpanel.on{display:block}
+  .ev-judge{margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+  .ev-judge .ev-tag{margin-right:6px}
 
   .actions{display:flex;gap:10px;align-items:center;margin-top:var(--s6)}
   .foot-note{color:var(--faint);font-size:12px;line-height:1.65;margin:var(--s5) 2px 0;max-width:84ch}
@@ -130,6 +141,9 @@
 </details>
 {% endmacro %}
 
+{# Per input: INPUT before/after shown ONCE (identical across re-runs), then the K re-runs as tabs — each tab a
+   2-column recorded-vs-re-run OUTPUT + that re-run's judge remark. ONE macro, reused by downgrade / cache / compress.
+   Self-variance baseline is intentionally NOT shown. Full text ships in the download ZIP; these fields are capped. #}
 {% macro evidence(inputs) %}
 <ul class="evidence">
   {% for iv in inputs %}
@@ -139,14 +153,39 @@
         <span class="f-caret">&#9654;</span>
         {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% else %}<span class="ev-tag ev-drift">not safe</span>{% endif %}
         <span class="ev-in">{{ iv.note or iv.reason or 'judged' }}</span>
-        <span class="ev-rate mono">kept {{ iv.kept }}/{{ iv.k }}{% if iv.self_kept is not none %} &middot; orig {{ iv.self_kept }}/{{ iv.k }}{% endif %}</span>
+        <span class="ev-rate mono">preserved {{ iv.kept }}/{{ iv.k }}</span>
       </summary>
       <div class="ev-body">
-        <p class="ev-remark"><b>Request:</b> {{ (iv.input or '(input)') | replace('Question: ', '') | truncate(200, true) }}</p>
+        <div class="io-lbl">Input (what was sent)</div>
         <div class="diff">
-          <div class="diff-col diff-before"><div class="diff-tag">recorded output (before)</div><pre class="diff-box">{{ iv.recorded or '(none)' }}</pre></div>
-          <div class="diff-col diff-after"><div class="diff-tag">re-run output (after)</div><pre class="diff-box">{% if iv.samples %}{{ iv.samples[0].output or '(empty)' }}{% else %}(none){% endif %}</pre></div>
+          <div class="diff-col diff-before"><div class="diff-tag">before</div>
+            <div class="io"><span class="io-k">system</span><pre class="diff-box">{{ iv.system_before or '(none)' }}</pre></div>
+            <div class="io"><span class="io-k">user</span><pre class="diff-box">{{ iv.user_before or '(none)' }}</pre></div>
+          </div>
+          <div class="diff-col diff-after"><div class="diff-tag">after</div>
+            <div class="io"><span class="io-k">system</span><pre class="diff-box">{{ iv.system_after or '(none)' }}</pre></div>
+            <div class="io"><span class="io-k">user</span><pre class="diff-box">{{ iv.user_after or '(none)' }}</pre></div>
+          </div>
         </div>
+        <div class="io-lbl">Output &middot; {{ iv.samples | length }} re-run{{ 's' if (iv.samples | length) != 1 }}</div>
+        {% if iv.samples %}
+        <div class="rtabs">
+          <div class="rtab-bar">
+            {% for s in iv.samples %}
+            <button type="button" class="rtab{{ ' on' if loop.first }}" data-i="{{ loop.index }}">re-run {{ loop.index }} &middot; {{ 'kept' if s.preserved else 'drift' }}</button>
+            {% endfor %}
+          </div>
+          {% for s in iv.samples %}
+          <div class="rpanel{{ ' on' if loop.first }}" data-i="{{ loop.index }}">
+            <div class="diff">
+              <div class="diff-col diff-before"><div class="diff-tag">recorded (before)</div><pre class="diff-box">{{ (iv.recorded or '(none)')[:6000] }}</pre></div>
+              <div class="diff-col diff-after"><div class="diff-tag">re-run (after)</div><pre class="diff-box">{{ (s.output or '(empty)')[:6000] }}</pre></div>
+            </div>
+            <p class="ev-judge"><b>Judge:</b> <span class="ev-tag {{ 'ev-kept' if s.preserved else 'ev-drift' }}">{{ 'kept' if s.preserved else 'drift' }}</span> {{ s.reason or '' }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}<p class="strat-note subtle">No re-run recorded for this input.</p>{% endif %}
       </div>
     </details>
   </li>
@@ -341,5 +380,13 @@
 <script>
   const BASE = {{ base | tojson }};
   function reaudit(){ location.href = BASE + '/report'; }
+  // Re-run tabs: one delegated handler, scoped to the clicked .rtabs container (no per-tab ids needed).
+  document.addEventListener('click', function(e){
+    var b = e.target.closest('.rtab'); if(!b) return;
+    var box = b.closest('.rtabs'); if(!box) return;
+    var i = b.getAttribute('data-i');
+    box.querySelectorAll('.rtab').forEach(function(x){ x.classList.toggle('on', x.getAttribute('data-i')===i); });
+    box.querySelectorAll('.rpanel').forEach(function(x){ x.classList.toggle('on', x.getAttribute('data-i')===i); });
+  });
 </script>
 {% endblock %}

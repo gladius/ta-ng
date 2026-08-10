@@ -20,7 +20,6 @@ Never a false SAFE: ties break toward NOT recommending; an unverifiable anchor i
 """
 import json
 import re
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from auditor.util import canonical_model, next_cheaper, tier, release, max_output
@@ -35,9 +34,17 @@ def _user_text(t):
 
 
 def _input_text(t):
-    """The FULL input a call sent — every message (system + user + prior turns / tool results). Used in _distinct ONLY
-    as a FALLBACK diversity key, when a node has no user turn at all (tool / router / system-only nodes)."""
+    """The FULL input a call sent — every message (system + user + prior turns / tool results). The diversity key for
+    _distinct: variation is caught wherever it lives (query / tool result / system), and the shared fixed part dilutes
+    into the overlap instead of faking diversity."""
     return "\n".join((m.get("content") or "") for m in t.get("input_messages", []))
+
+
+def _system_text(t):
+    return "\n".join((m.get("content") or "") for m in t.get("input_messages", []) if m.get("role") == "system")
+
+
+_INSPECT_CHARS = 8000    # cap for the report's before/after INSPECTOR fields (full text still ships in the ZIP)
 
 
 def _messages(trace):
@@ -184,32 +191,26 @@ def judge_preserved(request, a_text, b_text, model=JUDGE_MODEL):
 
 
 def _distinct(traces, n):
-    """Up to n inputs that differ in their PER-CALL VARIABLE content. DETERMINISTIC (walks in order) — never random,
-    so the SAMPLE is stable across audits; only the repeats measure model/judge noise.
+    """Up to n inputs that differ in content. DETERMINISTIC (walks the bucket in order) — never random, so the SAMPLE
+    is stable across audits; only the repeats measure model/judge noise.
 
-    Measured on the USER content (the query/task the caller actually varies), NOT the whole prompt: the system prompt
-    is the agent's fixed config (or the thing a lever transforms), and it carries per-call NOISE — session ids,
-    timestamps — that would fake diversity (5 copies of the same question with different session lines are NOT 5
-    distinct inputs). And even the user content is often a big shared TEMPLATE + a small variable, so whole-text
-    3-gram Jaccard is dominated by the template and collapses genuinely-different inputs -> false LOW-EVIDENCE (and
-    thin, fragile BORDERLINE). So we STRIP the shingles near-universal across the node's OWN bucket (the scaffold) and
-    dedup on what remains — the variable. Fall back to the FULL input only when there is no user turn at all (tool /
-    router nodes), so those still get sampled; a fully-static input dedups to 1."""
+    Keyed on the FULL input (every message — system + user + prior turns / tool results), so per-call variation is
+    caught wherever it lives: the human query, a tool result, or a varying slice of the system. Dedup is 3-gram Jaccard
+    >= 0.8 over that whole text. The big FIXED part (the agent's system config / template) is shared by every input, so
+    it DILUTES into the overlap instead of faking diversity: N copies of one question that differ only in a session id
+    or timestamp stay ~identical and collapse to 1 (correct), while genuinely different inputs fall below 0.8 and count
+    as distinct. The deliberate, honest trade-off runs the OTHER way — when a HUGE fixed prompt dwarfs a tiny variable,
+    truly different inputs can look alike and collapse; we then sample fewer (down to 1) and report that count, rather
+    than manufacturing diversity by stripping the shared part and keying on leftover noise."""
     def sh(s):
         w = s.lower().split()
         return set(tuple(w[i:i + 3]) for i in range(max(0, len(w) - 2)))
-    def _key(t):
-        u = _user_text(t)
-        return u if u.strip() else _input_text(t)                  # the query is the meaningful input; full only if no user turn
-    shs = [sh(_key(t)) for t in traces]
-    df = Counter(g for s in shs for g in s)                        # document frequency of each shingle across the bucket
-    scaffold = {g for g, c in df.items() if c >= max(2, int(0.8 * len(traces)))}   # near-universal shingles = template
-    kept, kept_sig = [], []
-    for t, s in zip(traces, shs):
-        sig = (s - scaffold) or s                                  # per-call VARIABLE; empty (fully static) -> full key text
-        if any((len(sig & k) / max(1, len(sig | k))) >= 0.8 for k in kept_sig):
+    kept, kept_sh = [], []
+    for t in traces:
+        s = sh(_input_text(t))
+        if any((len(s & k) / max(1, len(s | k))) >= 0.8 for k in kept_sh):
             continue
-        kept.append(t); kept_sig.append(sig)
+        kept.append(t); kept_sh.append(s)
         if len(kept) >= n:
             break
     return kept
@@ -248,8 +249,10 @@ def _verdict(cheap_kept, self_kept, k):
     return "NOT-SAFE", "less consistent than the original's own re-runs"
 
 
-def prove_transform(sample, produce, model, k=AUDIT_REPEATS):
-    """The verdict ENGINE, transform-agnostic and REUSED by both levers. For each of the N sampled inputs, run K
+def prove_transform(sample, produce, model, k=AUDIT_REPEATS, sent=None):
+    """The verdict ENGINE, transform-agnostic and REUSED by every lever. `sent(trace) -> (system, user)` returns the
+    TRANSFORMED input actually sent (for the report's before/after inspector); default None = input unchanged
+    (downgrade). For each of the N sampled inputs, run K
     independent `produce(trace) -> behavior` candidates and judge each vs the recorded output; then, on the DOUBTFUL
     inputs only, measure the ORIGINAL model's own run-to-run noise floor (replay the ORIGINAL prompt on the ORIGINAL
     model) and judge the candidate RELATIVE to it. Returns (inputs, node_verdict, safe_count).
@@ -286,9 +289,14 @@ def prove_transform(sample, produce, model, k=AUDIT_REPEATS):
         sk = self_kept.get(idx)                       # None unless this input was doubtful and the baseline ran
         v, note = _verdict(ck, sk, k)
         drift_reason = next((x["reason"] for x in s if not x["preserved"]), "")    # surface WHY it drifted, if it did
-        inputs.append({"input": _user_text(t)[:AUDIT_JUDGE_MAX_CHARS], "kept": ck, "k": k, "self_kept": sk,
+        sysb, usrb = _system_text(t), _user_text(t)                                # BEFORE = the original input
+        sysa, usra = sent(t) if sent else (sysb, usrb)                             # AFTER = the transformed input as sent
+        inputs.append({"input": usrb[:AUDIT_JUDGE_MAX_CHARS], "kept": ck, "k": k, "self_kept": sk,
                        "verdict": v, "note": note, "recorded": _recorded(t)[:AUDIT_JUDGE_MAX_CHARS],
                        "samples": s, "baseline": base_runs.get(idx, []),
+                       # before/after INSPECTOR fields (report tabs) — capped; full text ships in the download ZIP
+                       "system_before": sysb[:_INSPECT_CHARS], "user_before": usrb[:_INSPECT_CHARS],
+                       "system_after": (sysa or "")[:_INSPECT_CHARS], "user_after": (usra or "")[:_INSPECT_CHARS],
                        "reason": drift_reason or (s[0]["reason"] if s else "same decision")})
     # NODE verdict from the BINARY per-input results: SAFE if EVERY input held; NOT-SAFE if drift is the MAJORITY;
     # else BORDERLINE — some inputs drifted but MOST held ("mostly safe, your call"). $ is booked only on SAFE.
