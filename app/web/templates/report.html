@@ -141,9 +141,9 @@
 </details>
 {% endmacro %}
 
-{# Per input: INPUT before/after shown ONCE (identical across re-runs), then the K re-runs as tabs — each tab a
-   2-column recorded-vs-re-run OUTPUT + that re-run's judge remark. ONE macro, reused by downgrade / cache / compress.
-   Self-variance baseline is intentionally NOT shown. Full text ships in the download ZIP; these fields are capped. #}
+{# Per input: INPUT before/after shown ONCE, then the K re-runs as tabs (recorded-vs-re-run OUTPUT + judge remark).
+   Summary rate shows the re-run's kept/K and, on doubtful inputs, the original's own self-variance ("vs original
+   X/K") so a sub-perfect rate reads against the model's own noise. ONE macro, reused by all levers. #}
 {% macro evidence(inputs) %}
 <ul class="evidence">
   {% for iv in inputs %}
@@ -153,7 +153,7 @@
         <span class="f-caret">&#9654;</span>
         {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% else %}<span class="ev-tag ev-drift">not safe</span>{% endif %}
         <span class="ev-in">{{ iv.note or iv.reason or 'judged' }}</span>
-        <span class="ev-rate mono">preserved {{ iv.kept }}/{{ iv.k }}</span>
+        <span class="ev-rate mono">preserved {{ iv.kept }}/{{ iv.k }}{% if iv.self_kept is not none %} &middot; vs original {{ iv.self_kept }}/{{ iv.k }}{% endif %}</span>
       </summary>
       <div class="ev-body">
         <div class="io-lbl">Input (what was sent)</div>

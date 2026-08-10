@@ -45,8 +45,28 @@ def test_revision_captured_distinct_sorted():
     print("[ok] agent versions captured — distinct, sorted, blank ignored")
 
 
+def test_same_name_nodes_in_different_subgraphs_split():
+    # Two subgraphs each with a node literally named 'worker' (SAME prompt shape) are DIFFERENT call-sites, not one
+    # blended bucket. The structural graph_path disambiguates them; without it the audit proves one verdict across
+    # two positions and books all $ under a mislabeled node.
+    recs = [_rec("1", "ok", node="worker"), _rec("2", "ok", node="worker"),
+            _rec("3", "ok", node="worker"), _rec("4", "ok", node="worker")]
+    recs[0]["trace"]["graph_path"] = "billing"; recs[1]["trace"]["graph_path"] = "billing"
+    recs[2]["trace"]["graph_path"] = "refund";  recs[3]["trace"]["graph_path"] = "refund"
+    g = build_graph(recs, agent_default="a")
+    paths_per_bucket = {k: sorted({t.get("graph_path") for t in v}) for k, v in g.buckets.items()}
+    assert len(g.buckets) == 2, "same-name nodes in 2 subgraphs must be 2 buckets, got %d: %s" % (
+        len(g.buckets), paths_per_bucket)
+    assert all(len(p) == 1 for p in paths_per_bucket.values()), "no bucket may span >1 graph_path: %s" % paths_per_bucket
+    # and a FLAT node (no graph_path) still keys exactly as before — the fix is a no-op without path info
+    flat = build_graph([_rec("1", "ok"), _rec("2", "ok")], agent_default="a")
+    assert list(flat.buckets) == ["a/triage"], flat.buckets
+    print("[ok] same-name nodes in different subgraphs split by graph_path; flat nodes unchanged")
+
+
 if __name__ == "__main__":
     test_failed_samples_excluded_but_counted()
     test_recovered_error_with_output_is_kept()
     test_revision_captured_distinct_sorted()
+    test_same_name_nodes_in_different_subgraphs_split()
     print("\nALL INGEST-HYGIENE TESTS PASSED ($0, no network)")

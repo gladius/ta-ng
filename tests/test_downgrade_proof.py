@@ -203,13 +203,18 @@ def test_fallback_ratio_when_baseline_off():
 
 
 def test_low_evidence():
+    # Abstain MECHANISM: distinct inputs < min_evidence -> LOW-EVIDENCE, ZERO spend. Driven by an EXPLICIT
+    # min_evidence so it's independent of the default. AND the new default (min-evidence=1): a single real input is
+    # AUDITED, not abstained ("even one, we process it").
     calls = {"n": 0}
     with _patch(_ALWAYS, _ALWAYS):
         audit.replay = lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), "x")[1]
-        r = audit.audit_node("node", [_trace("only one ticket")], n=5, k=3)   # 1 distinct < MIN_EVIDENCE
-    assert r["verdict"] == "LOW-EVIDENCE", r["verdict"]
-    assert calls["n"] == 0, "abstain must NOT spend any replay"
-    print("[ok] < min evidence -> LOW-EVIDENCE, zero spend")
+        low = audit.audit_node("node", [_trace("only one ticket")], n=5, k=3, min_evidence=2)   # 1 distinct < 2
+        spent_at_abstain = calls["n"]
+        one = audit.audit_node("node", [_trace("only one ticket")], n=5, k=3)                   # default 1 -> audited
+    assert low["verdict"] == "LOW-EVIDENCE" and spent_at_abstain == 0, (low["verdict"], spent_at_abstain)
+    assert one["verdict"] != "LOW-EVIDENCE" and calls["n"] >= 1, (one["verdict"], calls["n"])
+    print("[ok] <min_evidence -> LOW-EVIDENCE zero spend; single input audited by default (min-evidence=1)")
 
 
 if __name__ == "__main__":
@@ -219,9 +224,10 @@ if __name__ == "__main__":
     test_render()
     test_safe_no_baseline()
     test_not_safe()
-    test_deterministic_tightens_to_borderline()
+    test_deterministic_one_worse_is_not_safe()
     test_matches_noise_is_safe()
-    test_noisy_anchor_is_borderline()
+    test_cheaper_steadier_than_noisy_original_is_safe()
+    test_mixed_node_mostly_safe_is_borderline()
     test_fallback_ratio_when_baseline_off()
     test_low_evidence()
     print("\nALL PROOF-PATH TESTS PASSED ($0, no network)")

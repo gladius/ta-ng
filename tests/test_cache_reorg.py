@@ -86,16 +86,21 @@ def test_behaviour_drift_blocks_recommend():
 
 
 def test_too_small_and_low_evidence_abstain():
-    # < min distinct inputs -> LOW-EVIDENCE, no LLM/proof spent
+    # Abstain MECHANISM: < min_evidence distinct inputs -> LOW-EVIDENCE, reorg model NEVER called. Driven by an
+    # EXPLICIT min_evidence so it's independent of the default. AND the new default (min-evidence=1): a single input
+    # is AUDITED, not abstained.
     saved = _patch(judge_ok=lambda: True, after_proven=True)
     called = {"plan": 0}
     cache_reorg.plan = lambda bucket: (called.__setitem__("plan", called["plan"] + 1), (_STAT, set()))[1]
     try:
-        r = cache_reorg.prove("node", _BUCKET[:1], n=5, k=3)
+        low = cache_reorg.prove("node", _BUCKET[:1], n=5, k=3, min_evidence=2)   # 1 distinct < 2 -> abstain
+        plan_after_low = called["plan"]
+        one = cache_reorg.prove("node", _BUCKET[:1], n=5, k=3)                   # default min_evidence=1 -> audited
     finally:
         _restore(saved)
-    assert r["verdict"] == "LOW-EVIDENCE" and called["plan"] == 0, r
-    print("[ok] < min distinct inputs -> LOW-EVIDENCE, reorg model never called")
+    assert low["verdict"] == "LOW-EVIDENCE" and plan_after_low == 0, (low["verdict"], plan_after_low)
+    assert one["verdict"] != "LOW-EVIDENCE" and called["plan"] >= 1, (one["verdict"], called["plan"])
+    print("[ok] <min_evidence -> LOW-EVIDENCE (reorg never called); single input audited by default")
 
 
 if __name__ == "__main__":

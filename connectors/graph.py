@@ -223,11 +223,18 @@ def build_graph(records, agent_default="agent"):
             return "after-tool"
         return frame_label.get(rec.get("id"), "") or "initial"
 
-    variants_per_node = {}                               # node_label -> set(full variant) — decides where to split
-    for rec, nl, tagged, sig in resolved:
-        variants_per_node.setdefault(nl, set()).add(_full_variant(rec, sig))
+    def _gp(rec):
+        """The structural subgraph PATH of a sample (node names only; run-uuids dropped): the trace's own graph_path
+        (LangGraph checkpoint_ns) else the tree-derived fallback. Part of the call-site key so two same-named nodes in
+        DIFFERENT subgraphs ('billing/worker' vs 'refund/worker') stay distinct call-sites, not one blended bucket."""
+        return (rec["trace"].get("graph_path") or paths.get(str(rec.get("id")), "")).strip("/")
 
-    # PASS 2 — assign each sample a call-site key: 'agent/node', + '~variant' only where the node has >1.
+    variants_per_node = {}                               # (path, node_label) -> set(full variant) — scoped PER call-site
+    for rec, nl, tagged, sig in resolved:                # so a variant in one subgraph can't force a '~variant' on another
+        variants_per_node.setdefault((_gp(rec), nl), set()).add(_full_variant(rec, sig))
+
+    # PASS 2 — assign each sample a call-site key: 'agent/[path/]node', + '~variant' only where that call-site has >1.
+    # The subgraph PATH is part of the key so same-named nodes in different subgraphs never merge (see _gp).
     # A FAILED sample (errored with no output / empty output, per contract.eligible) is COUNTED against the
     # call-site but kept OUT of the audited bucket + stats — we never optimize or prove against a non-decision.
     buckets = OrderedDict()
@@ -235,9 +242,10 @@ def build_graph(records, agent_default="agent"):
     excluded = OrderedDict()                             # key -> # failed samples kept out of the audited bucket
     revs = set()                                         # distinct agent versions (revision_id) seen — pin/select later
     for rec, nl, tagged, sig in resolved:
-        multi = len(variants_per_node.get(nl, ())) > 1
+        gp = _gp(rec)
+        multi = len(variants_per_node.get((gp, nl), ())) > 1
         variant = _full_variant(rec, sig) if multi else ""
-        key = "%s/%s%s" % (agent, nl, ("~" + variant) if variant else "")   # '~' = URL-safe unreserved
+        key = "%s/%s%s%s" % (agent, (gp + "/") if gp else "", nl, ("~" + variant) if variant else "")   # agent/[path/]node[~variant]
         if not eligible(rec["trace"])[0]:               # failed / empty output -> noise for a cost audit; count, skip
             excluded[key] = excluded.get(key, 0) + 1
             continue
@@ -252,7 +260,7 @@ def build_graph(records, agent_default="agent"):
         tr = rec["trace"]
         u = tr.get("usage", {})
         s["models"][tr.get("model", "")] += 1                                 # full model DISTRIBUTION, not just first
-        s["gpaths"][tr.get("graph_path") or paths.get(str(rec.get("id")), "")] += 1   # trace field, else tree-derived
+        s["gpaths"][_gp(rec)] += 1                                                     # trace field, else tree-derived (stripped)
         s["out_list"].append(u.get("output_tokens", 0))                       # for the output-length DISTRIBUTION
         s["out_json"] += 1 if _is_json(tr.get("output")) else 0                # deterministic output-structure signal
         s["tool_in"] += 1 if any(m.get("role") == "tool" for m in tr.get("input_messages", []) or []) else 0
