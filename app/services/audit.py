@@ -35,9 +35,8 @@ def _user_text(t):
 
 
 def _input_text(t):
-    """The FULL input a call sent — every message (system + user + prior turns / tool results). Used ONLY as the
-    diversity key in _distinct: a node's real per-call variation can live in the system prompt or retrieved context,
-    not just the user turn."""
+    """The FULL input a call sent — every message (system + user + prior turns / tool results). Used in _distinct ONLY
+    as a FALLBACK diversity key, when a node has no user turn at all (tool / router / system-only nodes)."""
     return "\n".join((m.get("content") or "") for m in t.get("input_messages", []))
 
 
@@ -188,21 +187,26 @@ def _distinct(traces, n):
     """Up to n inputs that differ in their PER-CALL VARIABLE content. DETERMINISTIC (walks in order) — never random,
     so the SAMPLE is stable across audits; only the repeats measure model/judge noise.
 
-    Why not whole-text similarity: a real production node's prompt is a big shared TEMPLATE (system prompt,
-    instructions, retrieved context) + a small per-call variable. Whole-text 3-gram Jaccard is DOMINATED by the
-    template, so genuinely-different inputs score ~0.99 similar and collapse to one -> false LOW-EVIDENCE (and thin,
-    fragile BORDERLINE). So we STRIP the shingles that are near-universal across the node's OWN bucket (the scaffold)
-    and dedup on what remains — the variable. Fully-static input -> empty signature -> fall back to the full text, so
-    it correctly dedups to 1 rather than keeping n identical copies."""
+    Measured on the USER content (the query/task the caller actually varies), NOT the whole prompt: the system prompt
+    is the agent's fixed config (or the thing a lever transforms), and it carries per-call NOISE — session ids,
+    timestamps — that would fake diversity (5 copies of the same question with different session lines are NOT 5
+    distinct inputs). And even the user content is often a big shared TEMPLATE + a small variable, so whole-text
+    3-gram Jaccard is dominated by the template and collapses genuinely-different inputs -> false LOW-EVIDENCE (and
+    thin, fragile BORDERLINE). So we STRIP the shingles near-universal across the node's OWN bucket (the scaffold) and
+    dedup on what remains — the variable. Fall back to the FULL input only when there is no user turn at all (tool /
+    router nodes), so those still get sampled; a fully-static input dedups to 1."""
     def sh(s):
         w = s.lower().split()
         return set(tuple(w[i:i + 3]) for i in range(max(0, len(w) - 2)))
-    shs = [sh(_input_text(t)) for t in traces]                      # full input (system+user+...), not just user turn
+    def _key(t):
+        u = _user_text(t)
+        return u if u.strip() else _input_text(t)                  # the query is the meaningful input; full only if no user turn
+    shs = [sh(_key(t)) for t in traces]
     df = Counter(g for s in shs for g in s)                        # document frequency of each shingle across the bucket
     scaffold = {g for g, c in df.items() if c >= max(2, int(0.8 * len(traces)))}   # near-universal shingles = template
     kept, kept_sig = [], []
     for t, s in zip(traces, shs):
-        sig = (s - scaffold) or s                                  # per-call VARIABLE; empty (fully static) -> full text
+        sig = (s - scaffold) or s                                  # per-call VARIABLE; empty (fully static) -> full key text
         if any((len(sig & k) / max(1, len(sig | k))) >= 0.8 for k in kept_sig):
             continue
         kept.append(t); kept_sig.append(sig)
