@@ -76,7 +76,7 @@ For **each input independently** (no cross-input mixing):
 > - COMMITMENTS — what is identical across ALL 5 and carries meaning (decisions, labels, codes, required facts, structure); mark each HARD (held every time) or SOFT (held most times — note how often)
 > - ALLOWED VARIATION — what differs, and **how much / in what way** (wording? order? which optional details? a value in a range?). The cheaper model may vary exactly this much, no more.
 > - CONFIDENCE — were 5 samples enough to be sure, or is the node too noisy to profile? (if unsure, say so)
-> Be conservative: if unsure whether something is a commitment, call it HARD. Never invent a commitment the outputs don't support.
+> Be conservative in BOTH directions: if unsure whether something is a commitment, call it HARD; if unsure whether a difference is acceptable, do NOT list it under ALLOWED VARIATION. (The judge forgives only what you list here, so an over-broad allow-list is the only way to wave through a real regression.) Never invent a commitment the outputs don't support.
 
 **Commitment-judge** (one cheaper output + profile → kept?):
 > Reference commitments for this request: {commitments}. It may vary in: {allowed variation}. Candidate output: {output}. Did the candidate preserve EVERY commitment (ignoring allowed variation)? Answer KEPT or BROKE, and name any commitment it broke.
@@ -108,21 +108,34 @@ For **each input independently** (no cross-input mixing):
 
 Maps onto existing code: `app/services/audit.py` (`prove_transform`, `_verdict`, `judge_preserved`), `app/config.py` (K, tolerance, feature flag). No change to cache/compress.
 
-## 10. Out of scope (deliberately)
+## 10. Integration with the existing engine (decisions)
+
+Today `prove_transform` is ONE shared, transform-agnostic engine reused by all three levers. The profile flow **inverts three of its assumptions** (single-recorded reference; doubtful-only baseline; integer `ck ≥ self_kept`), so it doesn't slot in — it forks. The decisions:
+
+1. **New judge, don't touch the shared one.** `judge_preserved(request, recorded, candidate)` can't carry the profile. Add `judge_within_envelope(request, recorded, profile, candidate)` for downgrade only; leave `judge_preserved` for cache/compress.
+2. **Judge framing = "candidate vs the RECORDED, *ignoring* differences that fall inside allowed-variation."** NOT "check a commitments checklist." Rationale = failure direction: if the profiler **misses** something, the checklist framing never checks it → **false SAFE** (bad downgrade ships); the vs-recorded framing flags it as an un-forgiven diff → **false NOT-SAFE** (we lose a saving, never ship a regression). The recorded stays the concrete anchor; the profile is the *forgive-list*. This is also what makes allowed-variation the crux.
+3. **Profiler conservatism is two-sided, one principle:** over-list commitments AND under-list allowed-variation → both = "when unsure, stay strict." (Add the second half to the §6 prompt.)
+4. **The self-variance runs are repurposed; the doubtful-only optimization dies.** The profiled path always runs the original 4× (they ARE the profiler's input, not a tiebreaker). Straight line: original 4× → profile → cheaper 5× → judge each vs envelope. ~10 calls + 1 profiler per node — more than today's conditional baseline; acceptable per cost stance, flagged.
+5. **`_verdict` is replaced; cushion lives in TWO places.** Per-aspect proportional cushion is applied *inside the judge* (via allowed-variation). A *small aggregate tolerance* (e.g. allow ≤1 break of 5) sits in `_verdict_profiled(kept, k)` to absorb judge/LLM flicker. The integer `ck ≥ self_kept` compare is gone. **Aggregate threshold = a Phase-0 measurement, not a guess.**
+6. **Fork, don't mutate.** New `prove_transform_profiled`; `audit_node` branches to it behind a flag; old engine stays as fallback + for cache/compress.
+7. **Report fields shift (Phase 3, downstream).** Downgrade has no prompt transform, so `system_before/after` are equal; new evidence = the profile + which commitment each break hit; `self_kept` leaves the UI. Touches `report.html` + `report_doc.py` — not in Phase 1.
+8. **Two stability tiers — don't over-promise tier 1.** The profile *reduces* judge flips immediately (concrete envelope). *Eliminating* cross-audit drift also needs pinned inputs + a frozen profile (Phase 4). Tier 1 = steadier; tier 2 = deterministic.
+
+## 11. Out of scope (deliberately)
 
 - Cache-prefix expansion and input compression (not touched).
 - Embedding / semantic-similarity scoring — masks critical small changes (a mislabel is 98% text-similar); rejected.
 - A curated golden dataset — impossible at this scale; rejected.
 - INCONCLUSIVE as a third verdict — folded into NOT-SAFE per the governance "when unsure, don't downgrade" stance.
 
-## 11. Open questions to resolve before implementing
+## 12. Open questions to resolve before implementing
 
 1. Does the profiler produce sensible commitments on *messy real* prompts (structured, routing, classification, summary)? — **Phase 0 answers this.**
 2. What is the real clean-node fake-break rate, and therefore the right K and tolerance?
 3. Freeze vs re-profile — measure the stability difference.
 4. Cost budget per node at K=5 across a large fleet — acceptable?
 
-## 12. References
+## 13. References
 
 - Daikon — dynamic detection of likely invariants: https://homes.cs.washington.edu/~mernst/pubs/daikon-tool-scp2007.pdf
 - Metamorphic Testing of LLMs: https://arxiv.org/abs/2511.02108
