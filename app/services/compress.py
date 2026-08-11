@@ -3,9 +3,8 @@ behaviour is preserved by replaying the node's real inputs on the compressed pro
 output. It reuses the SAME transform-agnostic engine the downgrade + cache levers use (audit.prove_transform); the
 only new thing is the transform. Mirrors cache_reorg.py.
 
-Shared-core, once per node: we compress the STATIC system content (the lines byte-identical across the node's calls)
-ONCE, reattach each call's per-call remainder VERBATIM, and validate across the node's diverse recorded inputs — so a
-mostly-static system (big shared core + a tiny per-call id) is a real target, not skipped. Three guards, by authority:
+Static-only, once per node: the system prompt is identical across a node's calls, so we compress it ONCE and validate
+it across the node's diverse recorded inputs. Three guards, in order of authority:
   1. compressor is preservation-first — keep every rule/number/code/tool verbatim; ABSTRACTIVE paraphrases non-rule
      prose (the bigger cut, tried first), SURGICAL only strips repetition/filler (the safer fallback on drift).
   2. coverage gate — protect_literals (thresholds/codes, ported from headroom) + tool names must survive verbatim.
@@ -44,25 +43,6 @@ def protect_literals(text):
 
 def _system(trace):
     return "\n".join(m["content"] for m in trace.get("input_messages", []) if m.get("role") == "system")
-
-
-def static_system(bucket):
-    """The system LINES byte-identical across EVERY call in the bucket — the shared, compressible CORE — in the first
-    trace's order, plus the common line-set used to peel each call's per-call remainder. Mirrors the cache lever's
-    static/dynamic split: we only ever compress what's provably stable across the node's real traffic. A per-call
-    injection (a date, a ticket id, retrieved state) falls OUT of the core and is reattached verbatim by the proof,
-    never compressed. So a mostly-static system (big shared core + a tiny varying line) is a real compress target,
-    and a genuinely dynamic system simply yields a small/empty core -> a small or no win, honestly."""
-    systems = [_system(t) for t in bucket]
-    if not systems:
-        return "", set()
-    common = set.intersection(*[set(s.split("\n")) for s in systems])
-    return "\n".join(l for l in systems[0].split("\n") if l in common), common
-
-
-def _dynamic_system(trace, common):
-    """This call's per-call system lines — the bits NOT shared across the bucket, kept verbatim and reattached."""
-    return "\n".join(l for l in _system(trace).split("\n") if l not in common)
 
 
 def _compress_once(text, must_preserve, target_tokens, guidance, abstractive, strict):
@@ -119,14 +99,14 @@ def prove(node_name, bucket, n=None, k=None, min_evidence=None):
     from app.config import AUDIT_SAMPLES, AUDIT_REPEATS, AUDIT_MIN_EVIDENCE
     n, k, min_evidence = n or AUDIT_SAMPLES, k or AUDIT_REPEATS, min_evidence or AUDIT_MIN_EVIDENCE
     model = canonical_model(bucket[0].get("model")) or bucket[0].get("model")
-    static, common = static_system(bucket)                          # compress only the SHARED, provably-stable core
-    before_tok = approx_tokens(static)
+    system = _system(bucket[0])
+    before_tok = approx_tokens(system)
     base = {"node": node_name, "model": model, "lever": "compress", "before_tok": before_tok}
     if before_tok < 400:
-        return {**base, "verdict": "N/A", "reason": "shared static system too small to compress", "inputs": []}
+        return {**base, "verdict": "N/A", "reason": "system prompt too small to compress", "inputs": []}
     tools = bucket[0].get("tools_defined") or []                    # tool names + formatted literals must survive
-    tool_names = [t[0] for t in tools if isinstance(t, (list, tuple)) and t and isinstance(t[0], str) and t[0] in static]
-    must_preserve = tuple(sorted(set(tool_names) | set(protect_literals(static))))
+    tool_names = [t[0] for t in tools if isinstance(t, (list, tuple)) and t and isinstance(t[0], str) and t[0] in system]
+    must_preserve = tuple(sorted(set(tool_names) | set(protect_literals(system))))
     sample = audit._distinct(bucket, n)
     if len(sample) < min_evidence:
         return {**base, "verdict": "LOW-EVIDENCE", "n": len(sample), "inputs": [],
@@ -135,19 +115,16 @@ def prove(node_name, bucket, n=None, k=None, min_evidence=None):
     # ABSTRACTIVE + aggressive first (paraphrase prose -> bigger cut); on drift, back off to SURGICAL + gentler.
     # The judge proof decides SAFE either way, so a rejected aggressive cut costs nothing but the retry.
     for abstractive, frac in ((True, 0.5), (False, 0.75)):
-        compressed, ok = compress_system(static, must_preserve, int(before_tok * frac), guidance, abstractive)
+        compressed, ok = compress_system(system, must_preserve, int(before_tok * frac), guidance, abstractive)
         if not ok:
             continue
         after_tok = approx_tokens(compressed)
-        def sysf(t):                                                # per-call system = compressed CORE + THIS call's dynamic
-            dyn = _dynamic_system(t, common)                        # (a date / id / state) reattached VERBATIM — never trace 0's
-            return compressed + ("\n" + dyn if dyn.strip() else "")
         inputs, verdict, safe = audit.prove_transform(
-            sample, lambda t: audit.replay(with_compressed_system(t, sysf(t)), model), model, k,
-            sent=lambda t: (sysf(t), _user(t)))                    # AFTER input = compressed core + preserved per-call bits
+            sample, lambda t: audit.replay(with_compressed_system(t, compressed), model), model, k,
+            sent=lambda t: (compressed, _user(t)))                 # AFTER input = compressed system + same user, for inspector
         save = round(PRICE.get(model, {}).get("input", 0) / 1e6 * (before_tok - after_tok) * 1000, 2)
         res = {**base, "after_tok": after_tok, "removed_tok": before_tok - after_tok,
-               "ratio": round(after_tok / max(1, before_tok), 2), "compressed": compressed, "original": static,
+               "ratio": round(after_tok / max(1, before_tok), 2), "compressed": compressed, "original": system,
                "mode": "abstractive" if abstractive else "surgical",
                "verdict": verdict, "n": len(inputs), "k": k, "safe_inputs": safe, "inputs": inputs,
                "save_per_1k": save if verdict == "SAFE" else 0.0}
