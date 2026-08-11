@@ -1,10 +1,11 @@
-"""Report export — a downloadable ZIP whose centerpiece is ONE self-contained `report.md` covering BOTH levers
-(model-tier downgrade AND cacheable prefix). Built ONLY from the frozen proof — measured, nothing invented, no LLM
-in the loop, so the deliverable is reproducible.
+"""Report export — a downloadable ZIP whose centerpiece is ONE self-contained `report.md`: an APPLY GUIDE across all
+three levers (model-tier downgrade, cacheable-prefix expansion, prompt compression). Built ONLY from the frozen proof
+— measured, nothing invented, no LLM in the loop, so the deliverable is reproducible.
 
 The ZIP unpacks to:
-  report.md                                     the whole advisory: verdicts, $, and — for cache — the exact reorg
-                                                to apply. Read this; it stands on its own.
+  report.md                                     the apply guide: one block per proven fix (what / where / how / why /
+                                                verify / caveat, artifacts INLINE) + a machine-readable index + the
+                                                honest rejections. A human or a coding assistant can act on it alone.
   evidence/<lever>/<node>/verdict.md            WHAT THE JUDGE FOUND, co-located with the raw text: per-input
                                                 verdict, rate (kept X/K · baseline Y/K), and reason.
   evidence/<lever>/<node>/input-<i>/            the raw outputs to diff:
@@ -15,6 +16,7 @@ The ZIP unpacks to:
 would balloon it) and lives under evidence/ instead. stdlib zipfile only — zero dependencies.
 """
 import io
+import json
 import re
 import zipfile
 
@@ -31,146 +33,167 @@ def _slug(s):
     return re.sub(r"[^a-zA-Z0-9._-]+", "-", str(s)).strip("-")[:60] or "node"
 
 
+def _sys_first_line(detail):
+    """A greppable fingerprint of the call-site's system prompt — its first non-blank line — so a human or coding
+    assistant can locate the exact prompt in their source. From the compress lever's `original`, else the proof's
+    captured `system_before`."""
+    sysm = detail.get("original") or ""
+    if not sysm:
+        inps = detail.get("inputs") or []
+        sysm = (inps[0].get("system_before") if inps else "") or ""
+    return next((ln.strip() for ln in sysm.splitlines() if ln.strip()), "")[:140]
+
+
+def _drift(detail):
+    """Why a lever was rejected: the first NOT-SAFE input's judge reason, else the finding's own reason."""
+    for r in detail.get("inputs") or []:
+        if r.get("verdict") == "NOT-SAFE":
+            return r.get("note") or r.get("reason") or ""
+    return detail.get("reason") or ""
+
+
+_LEVER_LABEL = {"downgrade": "Model downgrade", "cache": "Cache-prefix expansion", "compress": "Prompt compression"}
+
+
 def _report_md(f, proof):
-    """The single deliverable: both levers, from the frozen proof."""
+    """The single deliverable: an APPLY GUIDE across all three levers, built ONLY from the frozen proof. One block per
+    recommended fix (what / where / how / why / verify / caveat, artifacts INLINE and paste-ready), a machine-readable
+    index for a coding assistant, and an honest list of what was tested and rejected. Bulky per-run text still lives
+    under evidence/; nothing here is invented — every figure is measured."""
     calls = f["calls"]
     unit = "%s calls" % _fmt(calls)
     results = proof["results"] if proof else []
-    dg = [x for x in results if x.get("downgrade")]
-    ca = [x for x in results if x.get("cache") and not x["cache"].get("informational")]
-    co = [x for x in results if x.get("compress")]
     total = (proof.get("total", 0) if proof else 0)
     dg_total = (proof.get("downgrade_usd", 0) if proof else 0)
     ca_total = (proof.get("cache_usd", 0) if proof else 0)
     co_total = (proof.get("compress_usd", 0) if proof else 0)
 
-    L = ["# Token Audit — %s" % f["agent"], ""]
+    # ONE pass over the proof: split every lever result into a RECOMMENDED fix or an honest REJECTION.
+    fixes, rejects = [], []                     # fixes: (lever, x, detail, usd)   rejects: (call_site, lever, verdict, reason)
+    for x in results:
+        key = x.get("key") or x["node"]
+        d = x.get("downgrade")
+        if d and d.get("verdict") == "SAFE":
+            fixes.append(("downgrade", x, d, x.get("downgrade_usd", 0)))
+        elif d:
+            rejects.append((key, "model downgrade", d.get("verdict", "?"), _drift(d)))
+        c = x.get("cache")
+        if c and not c.get("informational"):
+            if c.get("recommend"):
+                fixes.append(("cache", x, c, x.get("cache_usd", 0)))
+            else:
+                rejects.append((key, "cache-prefix", c.get("verdict", "?"), _drift(c)))
+        cp = x.get("compress")
+        if cp and cp.get("verdict") == "SAFE":
+            fixes.append(("compress", x, cp, x.get("compress_usd", 0)))
+        elif cp:
+            rejects.append((key, "compression", cp.get("verdict", "?"), _drift(cp)))
+
+    L = ["# Token Audit — %s · Apply Guide" % f["agent"], ""]
+    L.append("> These are **verified, behaviour-preserving** changes to your agent, each proven on real recorded "
+             "inputs. Apply each at the named call-site **exactly as written** — the prompts and prefixes below were "
+             "proven verbatim, so editing a proven artifact voids its proof. Advisory & read-only: you decide what to "
+             "apply.")
+    L.append("")
     if total > 0:
-        L.append("**$%s in verified savings** — ↓ $%s downgrade · ⚡ $%s cache · − $%s compress."
-                 % (_fmt(total), _fmt(dg_total), _fmt(ca_total), _fmt(co_total)))
+        L.append("**$%s in verified savings per %s** — ↓ $%s model downgrade · ⚡ $%s cache-prefix · − $%s compression."
+                 % (_fmt(total), unit, _fmt(dg_total), _fmt(ca_total), _fmt(co_total)))
     else:
-        L.append("**No safe savings on the audited call-sites.** Each re-ran live and needs its current setup — a "
-                 "verified result, not an empty one.")
+        L.append("**No safe savings on the audited call-sites** — each re-ran live and needs its current setup. A "
+                 "verified result, not an empty one; see *Tested and not recommended* below.")
     L.append("")
-    L.append("Audited **%d call-site(s)** across **%s traces**. All $ per %s." % (len(results), f.get("traces", 0), unit))
-    L.append("")
-    L.append("> Advisory, out-of-path, read-only. Every dollar is earned by a live re-run of real recorded inputs; "
-             "unproven potential is never counted as savings. You decide whether to apply.")
+    L.append("Audited **%d call-site(s)** across **%s traces**; **%d fix(es) to apply**. All $ per %s."
+             % (len(results), f.get("traces", 0), len(fixes), unit))
     L.append("")
 
-    # ── Model-tier downgrade ──────────────────────────────────────────────────
-    L.append("## Model-tier downgrade")
-    L.append("")
-    if dg:
-        L += ["| Call-site | Downgrade | Verdict | Inputs safe | $ / %s |" % unit, "|---|---|---|---|---|"]
-        for x in dg:
-            d = x["downgrade"]
-            amt = "$" + _fmt(x["downgrade_usd"]) if d["verdict"] == "SAFE" else "—"
-            safe = "%s/%s" % (d.get("safe_inputs", 0), d.get("n", 0)) if d.get("inputs") else "—"
-            L.append("| `%s` | %s → %s | %s | %s | %s |" % (
-                x["node"], d.get("model", "?"), d.get("cheaper", "-"), _VERDICT.get(d["verdict"], d["verdict"]), safe, amt))
+    # ── machine-readable index — a coding assistant can parse THIS instead of the prose ──
+    idx = []
+    for n, (lever, x, det, usd) in enumerate(fixes, 1):
+        e = {"fix": n, "lever": lever, "call_site": (x.get("key") or x["node"]), "node": x["node"],
+             "graph_path": x.get("graph_path", ""), "saving": round(usd, 2), "basis": unit}
+        if lever == "downgrade":
+            e["from_model"], e["to_model"] = det.get("model"), det.get("cheaper")
+        elif lever == "compress":
+            e["from_tokens"], e["to_tokens"] = det.get("before_tok"), det.get("after_tok")
+        elif lever == "cache":
+            e["cached_tokens_before"] = (det.get("before") or {}).get("read", 0)
+            e["cached_tokens_after"] = (det.get("after") or {}).get("read", 0)
+        idx.append(e)
+    L += ["## Fixes — machine-readable index", "```json", json.dumps(idx, indent=2), "```", ""]
+
+    # ── one APPLY BLOCK per recommended fix — what / where / how / why / verify / caveat, artifacts inline ──
+    if fixes:
+        L += ["## Fixes to apply", ""]
+    for n, (lever, x, det, usd) in enumerate(fixes, 1):
+        key = x.get("key") or x["node"]
+        L.append("### Fix %d · %s · `%s` — saves $%s per %s" % (n, _LEVER_LABEL[lever], key, _fmt(usd), unit))
         L.append("")
-        for x in dg:
-            d = x["downgrade"]
-            L.append("### `%s` — %s → %s · %s" % (x["node"], d.get("model", "?"), d.get("cheaper", "-"),
-                                                  _VERDICT.get(d["verdict"], d["verdict"])))
-            if d.get("inputs"):
-                L.append("Tested %d distinct inputs × %d re-runs each on %s. Evidence: `evidence/downgrade/%s/`."
-                         % (d.get("n", 0), d.get("k", 0), d.get("cheaper", "-"), _slug(x.get("key") or x["node"])))
-                for i, r in enumerate(d["inputs"], 1):
-                    rate = "cheaper %d/%d" % (r["kept"], r["k"])
-                    if r.get("self_kept") is not None:
-                        rate += ", baseline %d/%d" % (r["self_kept"], r["k"])
-                    req = (r.get("input", "") or "")[:160].replace("\n", " ")
-                    L.append("- **input %d** — %s (%s) — %s  \n  _req:_ %s" % (
-                        i, _IV.get(r["verdict"], r["verdict"]), rate, (r.get("note") or r.get("reason", "")), req))
-            else:
-                L.append(d.get("reason", ""))
-            L.append("")
-    else:
-        L += ["_No downgrade opportunities among the audited call-sites._", ""]
+        L.append("**Where**")
+        L.append("- Call-site: node `%s`%s, agent `%s`, currently on model `%s`." % (
+            x["node"], (" (subgraph `%s`)" % x["graph_path"]) if x.get("graph_path") else "", f["agent"], x["model"]))
+        fp = _sys_first_line(det)
+        if fp:
+            L += ["- Find it by the node name, or by its system prompt which begins:", "  > %s" % fp]
+        L += ["", "**Change**"]
+        if lever == "downgrade":
+            L += ["- Switch this call-site's model:  `%s`  →  `%s`" % (det.get("model"), det.get("cheaper")),
+                  "- Nothing else changes — same prompt, same tools."]
+        elif lever == "compress":
+            L.append("- Replace this call-site's **system prompt** with the version below (paste verbatim). Tokens: "
+                     "**%s → %s** (%s). Keep every per-call value exactly as-is."
+                     % (det.get("before_tok"), det.get("after_tok"), det.get("mode", "-")))
+            L += ["", "```text", det.get("compressed", ""), "```"]
+        elif lever == "cache":
+            b = (det.get("before") or {}).get("read", 0)
+            a = (det.get("after") or {}).get("read", 0)
+            L += ["- Make this exact block a **contiguous cached system prefix**: hoist it to the front, set the "
+                  "provider's cache breakpoint at its end, and keep every per-call value **after** it, verbatim.",
+                  "- Cached tokens per call: **%s → %s** (recovered %s)." % (b, a, det.get("recovered_tok", 0)),
+                  "", "```text", det.get("prefix", ""), "```"]
+        ni, si, k = det.get("n", 0), det.get("safe_inputs", 0), det.get("k", 0)
+        L += ["", "**Why it's safe**"]
+        if lever == "downgrade":
+            L.append("- Re-ran %d distinct real inputs × %d each on `%s`, judged against your recorded outputs; held "
+                     "on **%d/%d** — measured against your current model's own run-to-run noise, so a cheaper model is "
+                     "never blamed for normal variance." % (ni, k, det.get("cheaper"), si, ni))
+        elif lever == "compress":
+            L.append("- The compressor kept every rule, number, code and tool name verbatim; behaviour then held on "
+                     "**%d/%d** distinct real inputs × %d re-runs, judged against your recorded outputs." % (si, ni, k))
+        elif lever == "cache":
+            L.append("- Behaviour held on **%d/%d** distinct real inputs × %d re-runs (reordered prompt vs recorded "
+                     "output), **and** a live provider round-trip confirmed the new prefix actually cached." % (si, ni, k))
+        L.append("- Saves **$%s per %s**." % (_fmt(usd), unit))
+        L += ["", "**Verify & caveats**",
+              "- After applying, re-audit this call-site (or re-run these inputs and diff behaviour). Full evidence: "
+              "`evidence/%s/%s/`." % (lever, _slug(key))]
+        if lever == "compress":
+            L.append("- Do **not** further shorten this text — it was proven exactly as written; more cuts void the proof.")
+        if lever == "cache":
+            L.append("- Savings assume calls arrive within the provider's cache window; a call-site called less often "
+                     "than that window won't benefit.")
+        L += ["", "---", ""]
 
-    # ── Cacheable prefix ──────────────────────────────────────────────────────
-    L.append("## Cacheable prefix")
-    L.append("")
-    if ca:
-        for x in ca:
-            c = x["cache"]
-            ok = c.get("recommend")
-            b = (c.get("before") or {}).get("read", 0) or 0
-            a = (c.get("after") or {}).get("read", 0) or 0
-            L.append("### `%s` — %s" % (x["node"], "safe + cache-proven" if ok else "not recommended"))
-            if ok:
-                L.append("**Saves $%s per %s.** Cached tokens per call: **%d → %d** (recovered %d). Behaviour "
-                         "preserved on %s/%s sampled inputs; the provider round-trip confirmed the cache read."
-                         % (_fmt(x["cache_usd"]), unit, b, a, c.get("recovered_tok", 0),
-                            c.get("safe_inputs", 0), c.get("n", 0)))
-            else:
-                L.append(c.get("reason") or "The reorg changed behaviour or did not cache on the round-trip — not "
-                         "recommended.")
-                if c.get("after"):
-                    L.append("Cached tokens per call: **%d → %d** (the reorg's own caching; the verdict above is why "
-                             "it's still not recommended)." % (b, a))
-            if c.get("inputs"):                          # the behaviour test actually ran — show it (proof we tried)
-                L.append("")
-                L.append("Behaviour test — %d distinct inputs × %d re-runs each (reorged prompt vs recorded output):"
-                         % (c.get("n", 0), c.get("k", 0)))
-                for i, r in enumerate(c["inputs"], 1):
-                    L.append("- input %d — %s (%d/%d) — %s" % (i, _IV.get(r["verdict"], r["verdict"]), r["kept"], r["k"],
-                                                               (r.get("note") or r.get("reason", ""))))
-            if ok:
-                L.append("")
-                L.append("**What to do:** move this fixed block to the FRONT as a cached **system** prefix, set the "
-                         "cache breakpoint at its end, and keep every per-call value AFTER it, verbatim:")
-                L.append("")
-                L.append("```text")
-                L.append(c.get("prefix", ""))
-                L.append("```")
-            L.append("")
-    else:
-        L += ["_No cacheable-prefix opportunities among the audited call-sites._", ""]
+    # ── composition: a call-site with more than one fix ──
+    seen, multi = set(), []
+    for _, x, _, _ in fixes:
+        k = x.get("key") or x["node"]
+        (multi.append(k) if k in seen else seen.add(k))
+    if multi:
+        L += ["## Call-sites with more than one fix",
+              "Independent — apply both. (Downgrade changes the model; compression/cache change the prompt.) Order "
+              "doesn't matter."] + ["- `%s`" % k for k in dict.fromkeys(multi)] + [""]
 
-    # ── Prompt compression ────────────────────────────────────────────────────
-    L.append("## Prompt compression")
-    L.append("")
-    if co:
-        L += ["| Call-site | Tokens | Verdict | Inputs safe | $ / %s |" % unit, "|---|---|---|---|---|"]
-        for x in co:
-            c = x["compress"]
-            amt = "$" + _fmt(x["compress_usd"]) if c["verdict"] == "SAFE" else "—"
-            safe = "%s/%s" % (c.get("safe_inputs", 0), c.get("n", 0)) if c.get("inputs") else "—"
-            toks = "%s → %s" % (c.get("before_tok", "?"), c.get("after_tok", "?")) if c.get("after_tok") else "—"
-            L.append("| `%s` | %s | %s | %s | %s |" % (x["node"], toks, c["verdict"], safe, amt))
+    # ── the honest 'no' — tested and rejected, so nothing is silently touched ──
+    if rejects:
+        L += ["## Tested and not recommended (keep current)",
+              "We tried these and the proof said no — listed so you know what was tested and *not* to touch:"]
+        for key, lever, verdict, reason in rejects:
+            L.append("- `%s` · %s → **%s**%s" % (key, lever, verdict, (" — %s" % reason) if reason else ""))
         L.append("")
-        for x in co:
-            c = x["compress"]
-            L.append("### `%s` — %s" % (x["node"], c["verdict"]))
-            if c.get("after_tok"):
-                L.append("System prompt **%s → %s tokens** (%s). %s"
-                         % (c.get("before_tok"), c.get("after_tok"), c.get("mode", "-"),
-                            ("Behaviour preserved on %s/%s sampled inputs." % (c.get("safe_inputs", 0), c.get("n", 0))
-                             if c["verdict"] == "SAFE" else "Not applied — see per-input results.")))
-            else:
-                L.append(c.get("reason", ""))
-            if c.get("inputs"):
-                L.append("")
-                L.append("Behaviour test — %d distinct inputs × %d re-runs each (compressed prompt vs recorded output):"
-                         % (c.get("n", 0), c.get("k", 0)))
-                for i, r in enumerate(c["inputs"], 1):
-                    L.append("- input %d — %s (%d/%d) — %s" % (i, _IV.get(r["verdict"], r["verdict"]), r["kept"],
-                                                               r["k"], (r.get("note") or r.get("reason", ""))))
-            if c["verdict"] == "SAFE" and c.get("compressed"):
-                L.append("")
-                L.append("**What to do:** replace this call-site's system prompt with the proven-shorter version "
-                         "in `evidence/compress/%s/compressed-system.txt`." % _slug(x.get("key") or x["node"]))
-            L.append("")
-    else:
-        L += ["_No safe prompt-compression opportunities among the audited call-sites._", ""]
 
     L.append("---")
-    L.append("_Figures shown per %s — a fixed basis, not a monthly figure; multiply by your agent's real call "
-             "volume to scale the dollars. Cache savings assume calls arrive within the provider's cache window; a "
-             "call-site called less often than that window will not benefit._" % unit)
+    L.append("_Figures per %s — a fixed basis, not a monthly total; multiply by your real call volume to scale. Built "
+             "only from the frozen proof: measured live against your recorded traffic, nothing invented._" % unit)
     return "\n".join(L) + "\n"
 
 
