@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.services import nav
+from app.config import LEVERS      # enabled levers (default: downgrade only on this branch)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 app = FastAPI(title="Token Auditor")
@@ -68,7 +69,7 @@ def report_view(request: Request, source: str, ws_id: str, project: str, snap: s
     if proof is None:                    # built but not audited yet -> pick call-sites first (report = results only)
         return RedirectResponse("/s/%s/ws/%s/agent/%s/select?snap=%s"
                                 % (source, ws_id, quote(project, safe=""), snap), status_code=303)
-    f = funnel.build(source, ws_id, project, levers=["downgrade", "cache", "compress"], g=g)  # all levers, PINNED snapshot
+    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g)  # all levers, PINNED snapshot
     results = proof["results"]                                                    # STRATEGY-primary report: one section
     dg = [r for r in results if r.get("downgrade")]                               # per lever, each listing only the
     ca = [r for r in results if r.get("cache") and not r["cache"].get("informational")]  # call-sites it applies to
@@ -109,7 +110,7 @@ def select_view(request: Request, source: str, ws_id: str, project: str, snap: s
     if g is None:
         return RedirectResponse("/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe="")),
                                 status_code=303)
-    f = funnel.build(source, ws_id, project, levers=["downgrade", "cache", "compress"], g=g)
+    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g)
     return _page(request, "select.html", source=source, ws_id=ws_id, project=project, f=f, snap=snap)
 
 

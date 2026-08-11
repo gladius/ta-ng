@@ -31,6 +31,12 @@ Why this works:
 - **No golden set** — the reference is the old model's own runs.
 - **Stable** — it turns the judge's vibe call into a concrete checklist, which is the thing that actually removes the flips.
 
+**The crux is the ALLOWED-VARIATION side, not the commitments.** Catching a broken commitment (a mislabel) is the *easy* half. The *hard* half — and where most false NOT-SAFEs and most instability come from — is correctly recognising that a reworded / reordered / differently-detailed output is **still fine because the original itself varies that way**. So the profile's real job is to characterise, per aspect, **what the original varies and by how much**, and the cheaper's **tolerance on each aspect is the original's own variance on that aspect** — *proportional, not a flat number*:
+- Aspect the original **never** varies (a true commitment, 0 variance) → cheaper must match it **exactly** (no cushion).
+- Aspect the original **does** vary (wording, order, an optional detail, a value, even an occasional slip) → cheaper is allowed to vary it **up to the same degree** the original does (cushion = the original's measured variance there).
+
+This is the self-variance principle applied *per aspect*: "if the old model does it (or wobbles on it), the new model may too; if the old model is rock-solid on it, so must the new be."
+
 Grounded in: dynamic invariant detection (Daikon), metamorphic testing for LLMs, symmetric metamorphic relations for model stability (see References).
 
 ## 4. The flow (per call-site)
@@ -44,7 +50,7 @@ For **each input independently** (no cross-input mixing):
 | 3 | **Extract the per-input profile** — one LLM call, on the ORIGINAL's outputs only | → **Commitments** (identical across all: decision/label, codes, required facts, shape) + **Allowed variation** (what differs: wording, order, minor details, values that legitimately vary) | the intelligence; separated from the cheaper so it is not a mega-call |
 | 4 | **Run the CHEAPER K×** | K candidate outputs | same as today |
 | 5 | **Judge each cheaper re-run** — one call per re-run, given the profile | "keep these commitments, ignore this variation — did this output keep every commitment? y/n + which broke" | concrete y/n → low judge variance → stable; a broken commitment (mislabel) is caught regardless of surface similarity |
-| 6 | **Per-input verdict** | input PASSES if the cheaper kept all commitments across its re-runs (strict; allow at most 1 as a cushion for residual judge noise) | one bad re-run of a real commitment = not safe |
+| 6 | **Per-input verdict** | input PASSES if the cheaper stays inside the original's envelope: holds every hard commitment (0-variance aspects) AND varies the rest **no more than the original did**. The cushion per aspect = the original's own variance there — NOT a flat number. Where the original itself wobbled (a soft commitment), the cheaper gets the same wobble as cushion. | the goal is the variation side: allow exactly the original's own spread, flag only variation *beyond* it → few false NOT-SAFEs, stable |
 | 7 | **Node verdict (binary)** | SAFE if every input passes; else NOT-SAFE | conservative; borderline folds into NOT-SAFE ("when unsure, don't downgrade") |
 
 **Key architectural point:** extraction (Step 3) reads only the ORIGINAL's outputs; judging (Step 5) is **one call per cheaper re-run** given a short profile summary. No single call ever reads all outputs together.
@@ -58,13 +64,14 @@ For **each input independently** (no cross-input mixing):
 | **Profile from the OLD model's own runs** | allows the new model exactly the old's variation; no golden truth needed. |
 | **One judge call per re-run (no mega-call)** | a single call over all outputs is harder, noisier, and hides which output failed; extraction and judging are separated. |
 | **Binary SAFE / NOT-SAFE, no INCONCLUSIVE** | governance wants a decision; "not confidently safe" = don't downgrade; borderline fails safe. |
-| **Strict commitments + K=5, WITH the profile** | the profile kills the judge's fake breaks, so strict is viable *and* stable; K=5 tightens the real-break estimate. Loosening the pass rule to buy consistency costs safety (false SAFE) — avoided. |
+| **Cushion is proportional to the original's own variance, not a flat "allow N"** | the real work is defining allowed variation; tying the cushion per aspect to how much/often the original itself varies means "if the old wobbles, the new may too; if the old is solid, the new must be" — that's what makes it both fair and stable. |
+| **Strict on 0-variance commitments + K=5, WITH the profile** | the profile kills the judge's fake breaks, so strict-where-the-original-is-strict is viable *and* stable; K=5 tightens the estimate. Loosening the standard *globally* to buy consistency costs safety (false SAFE) — instead the cushion is *earned* per aspect from the original. |
 | **Freeze the profile per (node + prompt-version)** *(optional, later)* | removes the profiler's own run-to-run variance from the reference; invalidate on prompt/agent-version change. |
 
 ## 6. The two prompts (sketch — to be refined)
 
 **Profiler** (old model's K+1 outputs → profile):
-> You are shown several outputs the SAME model produced for the SAME request. List (a) COMMITMENTS — everything identical across all of them that carries meaning (decisions, classifications, labels, codes, required facts, output structure); (b) ALLOWED VARIATION — everything that differs (wording, order, optional details, values that legitimately vary). Be conservative: if unsure whether something is a commitment, list it as a commitment.
+> You are shown several outputs the SAME model produced for the SAME request. Characterise its behaviour: (a) COMMITMENTS — what is identical across ALL of them and carries meaning (decisions, labels, codes, required facts, structure); mark each as HARD (held every time) or SOFT (held most but not all times — note how often); (b) ALLOWED VARIATION — what differs, and **how much / in what way** (wording only? order? which optional details? a value within a range?). The cheaper model will be allowed to vary exactly this much and no more. Be conservative: if unsure whether something is a commitment, call it a HARD commitment.
 
 **Commitment-judge** (one cheaper output + profile → kept?):
 > Reference commitments for this request: {commitments}. It may vary in: {allowed variation}. Candidate output: {output}. Did the candidate preserve EVERY commitment (ignoring allowed variation)? Answer KEPT or BROKE, and name any commitment it broke.
@@ -80,7 +87,7 @@ For **each input independently** (no cross-input mixing):
 ## 8. Knobs to decide (calibrate on real nodes, not guess)
 
 - **K (re-runs):** 5 proposed. Cost vs consistency.
-- **Tolerance (commitment breaks allowed per input):** 0 (strict) or ≤1 (cushion for residual judge noise). Never more — that tolerates real break rates.
+- **Tolerance:** DERIVED per aspect from the original's own variance (proportional), not a flat global "allow N". A small global floor may still be useful to absorb residual judge noise on hard commitments — but the primary cushion is earned from the original's spread. Decide: is a global floor needed on top, and how big.
 - **Freeze the profile?** Yes per prompt-version (stable), or re-profile live each audit.
 - **Original on all inputs vs doubtful-only:** all inputs, since the profile is per-input.
 

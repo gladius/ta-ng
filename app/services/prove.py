@@ -10,6 +10,7 @@ report reads identical numbers on every reload. Nothing is asserted here that is
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.services import audit, funnel, store, cache_reorg, compress, snapshot
+from app.config import LEVERS      # enabled levers (default: downgrade only on this branch)
 
 
 def proof_key(source, ws, project, snap=""):
@@ -63,7 +64,7 @@ def stream(source, ws, project, keys, snap, calls=None, levers=None):
     the frozen result keyed by the SNAPSHOT. Everything — rows AND per-call-site buckets — comes from the ONE pinned
     snapshot graph, so the keys the checkboxes captured can't drift here. `levers` = which levers to prove (default
     all three). Paid; overlapped."""
-    levers = levers or ["downgrade", "cache", "compress"]
+    levers = levers or list(LEVERS)      # default to config-enabled levers (downgrade only on this branch)
     g = snapshot.get(snap, source, ws, project)
     if g is None:                                                          # snapshot evicted -> don't clobber; reload
         yield {"type": "start", "total": 0, "agent": project}
