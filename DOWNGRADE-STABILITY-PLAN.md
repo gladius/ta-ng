@@ -46,9 +46,9 @@ For **each input independently** (no cross-input mixing):
 | # | Step | What it does | Why it helps |
 |---|---|---|---|
 | 1 | **Sample N diverse inputs** (`_distinct`) | pick N genuinely-different real inputs | diversity bounds the contract quality — the single biggest lever |
-| 2 | **Run the ORIGINAL K×** | K outputs + the recorded output = the old model's behaviour envelope on this input | this is the reference; per-input only, no pollution |
-| 3 | **Extract the per-input profile** — one LLM call, on the ORIGINAL's outputs only | → **Commitments** (identical across all: decision/label, codes, required facts, shape) + **Allowed variation** (what differs: wording, order, minor details, values that legitimately vary) | the intelligence; separated from the cheaper so it is not a mega-call |
-| 4 | **Run the CHEAPER K×** | K candidate outputs | same as today |
+| 2 | **Run the ORIGINAL 4×** | 4 re-runs + the recorded output = **5 samples** of the old model on this input (the recorded one is real production behaviour — the most authoritative sample, and free) | the reference envelope; per-input only, no pollution |
+| 3 | **Extract the per-input profile** — ONE LLM call that **reasons then extracts**; sees the request (prompt+input) + the original's 5 samples, **NEVER the cheaper** | reasons about the task and *why* each thing is stable vs varies, then outputs: **Commitments** (each HARD/SOFT), **Allowed variation** (+ degree/kind), the **output type**, and its **confidence** (were 5 enough, or unsure?). Optional second verify/critique pass — decide in Phase 0. | reasoning cuts false-positive commitments (Daikon's weakness); the extra fields let the judge weight and let us **abstain honestly** when the profile is uncertain; separated from the cheaper so it is not a mega-call |
+| 4 | **Run the CHEAPER 5×** | 5 candidate outputs (matched to the original's 5 samples for a fair comparison) | same as today, just K=5 |
 | 5 | **Judge each cheaper re-run** — one call per re-run, given the profile | "keep these commitments, ignore this variation — did this output keep every commitment? y/n + which broke" | concrete y/n → low judge variance → stable; a broken commitment (mislabel) is caught regardless of surface similarity |
 | 6 | **Per-input verdict** | input PASSES if the cheaper stays inside the original's envelope: holds every hard commitment (0-variance aspects) AND varies the rest **no more than the original did**. The cushion per aspect = the original's own variance there — NOT a flat number. Where the original itself wobbled (a soft commitment), the cheaper gets the same wobble as cushion. | the goal is the variation side: allow exactly the original's own spread, flag only variation *beyond* it → few false NOT-SAFEs, stable |
 | 7 | **Node verdict (binary)** | SAFE if every input passes; else NOT-SAFE | conservative; borderline folds into NOT-SAFE ("when unsure, don't downgrade") |
@@ -70,8 +70,13 @@ For **each input independently** (no cross-input mixing):
 
 ## 6. The two prompts (sketch — to be refined)
 
-**Profiler** (old model's K+1 outputs → profile):
-> You are shown several outputs the SAME model produced for the SAME request. Characterise its behaviour: (a) COMMITMENTS — what is identical across ALL of them and carries meaning (decisions, labels, codes, required facts, structure); mark each as HARD (held every time) or SOFT (held most but not all times — note how often); (b) ALLOWED VARIATION — what differs, and **how much / in what way** (wording only? order? which optional details? a value within a range?). The cheaper model will be allowed to vary exactly this much and no more. Be conservative: if unsure whether something is a commitment, call it a HARD commitment.
+**Profiler** (request + the original's 5 samples → profile). ONE call, reason-then-extract:
+> Here is the request (system prompt + input) and 5 outputs the SAME (original) model produced for it. First, briefly REASON about what this node is doing and why each thing stays the same or changes. Then output:
+> - TASK / OUTPUT TYPE (label · JSON · summary · tool-call · free text)
+> - COMMITMENTS — what is identical across ALL 5 and carries meaning (decisions, labels, codes, required facts, structure); mark each HARD (held every time) or SOFT (held most times — note how often)
+> - ALLOWED VARIATION — what differs, and **how much / in what way** (wording? order? which optional details? a value in a range?). The cheaper model may vary exactly this much, no more.
+> - CONFIDENCE — were 5 samples enough to be sure, or is the node too noisy to profile? (if unsure, say so)
+> Be conservative: if unsure whether something is a commitment, call it HARD. Never invent a commitment the outputs don't support.
 
 **Commitment-judge** (one cheaper output + profile → kept?):
 > Reference commitments for this request: {commitments}. It may vary in: {allowed variation}. Candidate output: {output}. Did the candidate preserve EVERY commitment (ignoring allowed variation)? Answer KEPT or BROKE, and name any commitment it broke.
@@ -86,7 +91,9 @@ For **each input independently** (no cross-input mixing):
 
 ## 8. Knobs to decide (calibrate on real nodes, not guess)
 
-- **K (re-runs):** 5 proposed. Cost vs consistency.
+- **Sample counts:** original = **4 re-runs + recorded = 5 samples**; cheaper = **5 re-runs** (equal sizes). Cost vs consistency.
+- **Profiler: one call or two?** Baseline = ONE reason-then-extract call. Add a second verify/critique pass ONLY if Phase-0 shows over/under-declared commitments. Measure first.
+- **Profiler confidence → abstain:** if the profiler says the node is too noisy to profile, treat the node as NOT-SAFE (don't certify a downgrade on an un-pinnable node) rather than guessing.
 - **Tolerance:** DERIVED per aspect from the original's own variance (proportional), not a flat global "allow N". A small global floor may still be useful to absorb residual judge noise on hard commitments — but the primary cushion is earned from the original's spread. Decide: is a global floor needed on top, and how big.
 - **Freeze the profile?** Yes per prompt-version (stable), or re-profile live each audit.
 - **Original on all inputs vs doubtful-only:** all inputs, since the profile is per-input.
