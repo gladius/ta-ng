@@ -111,7 +111,7 @@ def select_view(request: Request, source: str, ws_id: str, project: str, snap: s
         return RedirectResponse("/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe="")),
                                 status_code=303)
     f = funnel.build(source, ws_id, project, levers=LEVERS, g=g)
-    return _page(request, "select.html", source=source, ws_id=ws_id, project=project, f=f, snap=snap)
+    return _page(request, "select.html", source=source, ws_id=ws_id, project=project, f=f, snap=snap, levers=LEVERS)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/auditing", response_class=HTMLResponse)

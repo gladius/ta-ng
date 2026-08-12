@@ -153,12 +153,15 @@
         <span class="f-caret">&#9654;</span>
         {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% else %}<span class="ev-tag ev-drift">not safe</span>{% endif %}
         <span class="ev-in">{{ iv.note or iv.reason or 'judged' }}</span>
-        <span class="ev-rate mono">preserved {{ iv.kept }}/{{ iv.k }}{% if iv.self_kept is not none %} &middot; vs original {{ iv.self_kept }}/{{ iv.k }}{% endif %}</span>
+        <span class="ev-rate mono">preserved {{ iv.kept }}/{{ iv.k }}{% if iv.self_rate %} &middot; original {{ iv.self_rate }}{% elif iv.self_kept is not none %} &middot; vs original {{ iv.self_kept }}/{{ iv.k }}{% endif %}</span>
       </summary>
       <div class="ev-body">
         {% if iv.commitments %}
-        {# Downgrade: no prompt transform, so the input-inspector slot shows the learned CONTRACT — what the original
-           model holds constant vs the variation it naturally allows. This is what the cheaper is judged against. #}
+        {# Downgrade: the input is UNCHANGED (no prompt transform), so show it ONCE (not a redundant before/after) so
+           you can inspect what was sent — THEN the learned CONTRACT the cheaper is judged against. #}
+        <div class="io-lbl">Input (what was sent)</div>
+        <div class="io"><span class="io-k">system</span><pre class="diff-box">{{ (iv.system or '(none)')[:8000] }}</pre></div>
+        <div class="io"><span class="io-k">user</span><pre class="diff-box">{{ (iv.input or '(none)')[:8000] }}</pre></div>
         <div class="io-lbl">The original&rsquo;s contract{% if iv.confidence %} &middot; profile confidence {{ iv.confidence.split()[0] }}{% endif %}</div>
         <div class="io"><span class="io-k">commitments</span><pre class="diff-box">{{ iv.commitments }}</pre></div>
         <div class="io"><span class="io-k">allowed variation</span><pre class="diff-box">{{ iv.allowed_variation or '(none observed &mdash; must match exactly)' }}</pre></div>

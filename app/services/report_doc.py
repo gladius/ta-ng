@@ -204,7 +204,9 @@ _IV = {"SAFE": "safe", "NOT-SAFE": "not safe", "BORDERLINE": "borderline", "LOW-
 
 def _rate(inp):
     r = "%d/%d" % (inp.get("kept", 0), inp.get("k", 0))
-    if inp.get("self_kept") is not None:
+    if inp.get("self_rate"):                                  # profiled downgrade: original's own self-consistency
+        r += " · original %s" % inp["self_rate"]
+    elif inp.get("self_kept") is not None:                    # legacy cache/compress engine
         r += " · baseline %d/%d" % (inp["self_kept"], inp.get("k", 0))
     return r
 

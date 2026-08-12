@@ -59,10 +59,13 @@ def _profiler_prompt(request, outputs):
         "this much and no more.\n\n"
         "CONFIDENCE: were %d outputs enough to be sure, or is this node too noisy to profile? (HIGH / MEDIUM / LOW "
         "+ one line why).\n\n"
+        "SELF-CONSISTENCY: of the %d outputs, how many are MATERIALLY consistent with one another (same decision, "
+        "facts and structure)? Answer as n/%d plus a one-line remark (e.g. '5/5 — identical decision' or "
+        "'3/5 — two runs changed the recommended step').\n\n"
         "Be conservative in BOTH directions: if unsure whether something is a commitment, call it a HARD commitment; "
         "if unsure whether a difference is acceptable, do NOT list it under ALLOWED VARIATION. Never invent a "
         "commitment the outputs don't support."
-    ) % (len(outputs), request[:CAP], blocks, len(outputs))
+    ) % (len(outputs), request[:CAP], blocks, len(outputs), len(outputs), len(outputs))
 
 
 def _section(profile, name):
@@ -86,7 +89,8 @@ def profile_input(request, samples):
     commit, var = _section(text, "COMMITMENTS"), _section(text, "ALLOWED VARIATION")
     if not commit and not var:                               # extraction missed both -> give the judge the whole thing
         commit = text
-    return {"commitments": commit, "allowed_variation": var, "confidence": _section(text, "CONFIDENCE"), "text": text}
+    return {"commitments": commit, "allowed_variation": var, "confidence": _section(text, "CONFIDENCE"),
+            "self_consistency": _section(text, "SELF-CONSISTENCY"), "text": text}
 
 
 # ── The envelope judge (Option A): candidate vs the RECORDED, ignoring differences within allowed-variation ────────
@@ -124,7 +128,7 @@ def judge_within_envelope(request, recorded, commitments, allowed_variation, can
     reason = next((ln.strip() for ln in raw.splitlines()
                    if ln.strip() and not re.fullmatch(r"(KEPT|BROKE)[\s:.\-]*", ln.strip(), flags=re.I)),
                   "kept" if kept else "broke")
-    return kept, reason[:80]
+    return kept, reason[:240]        # display cap only — the judge's one-line reason, not a token limit
 
 
 def prove_transform_profiled(sample, cheaper, original, k=None):
@@ -178,9 +182,12 @@ def prove_transform_profiled(sample, cheaper, original, k=None):
             verdict, note = "SAFE", "cheaper stayed within the original's own envelope"
         else:
             verdict, note = "NOT-SAFE", next((why for kept, why, _ in js if not kept), "cheaper broke a commitment")
+        sc = p.get("self_consistency", "") or ""
+        m = re.search(r"\d+\s*/\s*\d+", sc)                   # the original's own self-consistency n/5 (display-only)
         inputs.append({
-            "input": _user_text(t)[:CAP], "recorded": _recorded(t)[:CAP],
+            "input": _user_text(t)[:CAP], "system": _system_text(t)[:CAP], "recorded": _recorded(t)[:CAP],
             "kept": kept_count, "k": k, "breaks": breaks, "verdict": verdict, "note": note,
+            "self_rate": (m.group(0).replace(" ", "") if m else ""), "self_note": sc[:240],
             "commitments": p["commitments"], "allowed_variation": p["allowed_variation"], "confidence": p["confidence"],
             "samples": [{"preserved": kept, "reason": why, "output": (c or "")[:CAP]} for kept, why, c in js],
         })

@@ -51,11 +51,14 @@
     <label><input type="radio" name="mode" value="auto" checked onchange="setMode()"> <b>Top 5 costliest</b> <span class="muted">— the biggest opportunities</span></label>
     <label><input type="radio" name="mode" value="manual" onchange="setMode()"> <b>Choose manually</b></label>
   </div>
+  {# Only the ENABLED levers (app.config.LEVERS) render — cache/compress are omitted while disabled, so the UI can't
+     offer a lever the backend won't run. #}
+  {% set lever_labels = {'downgrade': 'Model-tier downgrade', 'cache': 'Cacheable prefix', 'compress': 'Prompt compression'} %}
   <div class="leverbar">
     <span class="lv-label">Levers to test</span>
-    <label><input type="checkbox" class="lev" value="downgrade" checked> Model-tier downgrade</label>
-    <label><input type="checkbox" class="lev" value="cache" checked> Cacheable prefix</label>
-    <label><input type="checkbox" class="lev" value="compress" checked> Prompt compression</label>
+    {% for lv in levers %}
+    <label><input type="checkbox" class="lev" value="{{ lv }}" checked> {{ lever_labels[lv] or lv }}</label>
+    {% endfor %}
   </div>
   {% if f.graphs or f.rows | length > 12 %}
   <div class="filterbar" id="fbar" hidden>
