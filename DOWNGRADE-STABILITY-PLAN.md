@@ -88,13 +88,14 @@ For **each input independently** (no cross-input mixing):
 - **The trace-change source is untouched here.** A fresh audit pulling different inputs is a separate instability; pinning/caching the sampled inputs addresses it (a later phase).
 - **The profiler can over-declare commitments** from few runs (Daikon's known weakness) → over-strict → a few false NOT-SAFEs. Fails safe; more old-model runs relax it.
 - **Cost:** runs the original K× on *every* input (not just doubtful today) + one profiler call per input. More than today — the price of a richer, stable reference.
+- **`max_tokens` is an OUTPUT cap, not a context cap — keep it, size it right.** It bounds only what the profiler/judge *generate* (cost ~4–5× input, latency, no rambling); the reply size does NOT grow with input size (a judge comparing two million-token outputs still returns one KEPT/BROKE line). Setting it too *low* truncates the verdict → the "no verdict → broke" false positive we hit at 200/1000. The real enterprise-scale limit is the **INPUT** side: huge outputs vs `AUDIT_JUDGE_MAX_CHARS` + the model's context window. Today's `"too long → broke"` guard over-rejects big-but-legit outputs at scale → a **scale item** (larger-context judge, or structured field-level / diff comparison), independent of `max_tokens`.
 
 ## 8. Knobs to decide (calibrate on real nodes, not guess)
 
 - **Sample counts:** original = **4 re-runs + recorded = 5 samples**; cheaper = **5 re-runs** (equal sizes). Cost vs consistency.
 - **Profiler: one call or two?** Baseline = ONE reason-then-extract call. Add a second verify/critique pass ONLY if Phase-0 shows over/under-declared commitments. Measure first.
 - **Profiler confidence → abstain:** if the profiler says the node is too noisy to profile, treat the node as NOT-SAFE (don't certify a downgrade on an un-pinnable node) rather than guessing.
-- **Tolerance:** DERIVED per aspect from the original's own variance (proportional), not a flat global "allow N". A small global floor may still be useful to absorb residual judge noise on hard commitments — but the primary cushion is earned from the original's spread. Decide: is a global floor needed on top, and how big.
+- **Tolerance:** DERIVED per aspect from the original's own variance (proportional), not a flat global "allow N". A small global floor may still be useful to absorb residual judge noise on hard commitments — but the primary cushion is earned from the original's spread. Decide: is a global floor needed on top, and how big. *Phase-0 evidence: the original's own per-input break rate was 0 on stable nodes and up to ~1/4 on branchy ones — so the cushion is `cheaper_breaks ≤ original_breaks`, measured per input, NOT a comparison to 0.*
 - **Freeze the profile?** Yes per prompt-version (stable), or re-profile live each audit.
 - **Original on all inputs vs doubtful-only:** all inputs, since the profile is per-input.
 
@@ -108,6 +109,14 @@ For **each input independently** (no cross-input mixing):
 
 Maps onto existing code: `app/services/audit.py` (`prove_transform`, `_verdict`, `judge_preserved`), `app/config.py` (K, tolerance, feature flag). No change to cache/compress.
 
+### Phase 0 findings — run 1 (`meridian-support`, 2 nodes × 2 inputs, `downgrade_phase0.py`)
+
+- **Profiles are high-quality and correctly two-sided.** On stable nodes the profiler cleanly split HARD commitments (KB code, $-threshold, refund gate, tool name+args) from cosmetic ALLOWED-VARIATION (greeting/step wording, order). Confidence tracked reality: stable→HIGH, branchy inputs→MEDIUM ("real branch point... more samples would help").
+- **Envelope judge bites: negative control 4/4 (100%).** A different input's answer always BROKE — the forgive-list doesn't rubber-stamp.
+- **Output caps matter (the bug, not the design).** `max_tokens` too low truncated the profiler's ALLOWED-VARIATION section and the judge's verdict token → spurious over-strictness. Raising profiler 1000→2200 (+ ≤3-sentence reasoning) and judge 200→320 dropped the clean-node fake-break rate **50% → 19%**.
+- **The residual 19% is REAL original self-drift, not judge error.** All 3 remaining breaks were the *original* haiku model breaking its *own* HARD commitments on a re-run (hallucinated a data-residency justification; promised to "process the refund"; invented "unlimited workspaces"). **This empirically confirms the proportional cushion:** the original is ~80% self-consistent here, so requiring the cheaper to be *perfect* would wrongly reject no-worse downgrades. The aggregate tolerance = the original's own measured per-input break rate, not a fixed number.
+- **Implication for `_verdict`:** measure the original's own break count against its envelope (the self-variance runs already give this) and require `cheaper_breaks ≤ original_breaks (+ small floor)`, per input — do not compare to 0.
+
 ## 10. Integration with the existing engine (decisions)
 
 Today `prove_transform` is ONE shared, transform-agnostic engine reused by all three levers. The profile flow **inverts three of its assumptions** (single-recorded reference; doubtful-only baseline; integer `ck ≥ self_kept`), so it doesn't slot in — it forks. The decisions:
@@ -118,7 +127,12 @@ Today `prove_transform` is ONE shared, transform-agnostic engine reused by all t
 4. **The self-variance runs are repurposed; the doubtful-only optimization dies.** The profiled path always runs the original 4× (they ARE the profiler's input, not a tiebreaker). Straight line: original 4× → profile → cheaper 5× → judge each vs envelope. ~10 calls + 1 profiler per node — more than today's conditional baseline; acceptable per cost stance, flagged.
 5. **`_verdict` is replaced; cushion lives in TWO places.** Per-aspect proportional cushion is applied *inside the judge* (via allowed-variation). A *small aggregate tolerance* (e.g. allow ≤1 break of 5) sits in `_verdict_profiled(kept, k)` to absorb judge/LLM flicker. The integer `ck ≥ self_kept` compare is gone. **Aggregate threshold = a Phase-0 measurement, not a guess.**
 6. **Fork, don't mutate.** New `prove_transform_profiled`; `audit_node` branches to it behind a flag; old engine stays as fallback + for cache/compress.
-7. **Report fields shift (Phase 3, downstream).** Downgrade has no prompt transform, so `system_before/after` are equal; new evidence = the profile + which commitment each break hit; `self_kept` leaves the UI. Touches `report.html` + `report_doc.py` — not in Phase 1.
+7. **Report fields shift (Phase 3, downstream) — UI already scoped.** Downgrade has no prompt transform, so `system_before/after` are equal and drop out; the new evidence is the **learned contract**. Two-tier, matching the existing report:
+   - *Exec:* SAFE/NOT-SAFE · cheaper model · $/mo (unchanged headline).
+   - *Dev drill-down:* COMMITMENTS as HARD/SOFT chips + the ALLOWED-VARIATION list, per representative input — this replaces the old `self_kept` "vs original X/K" line and the (now meaningless) before/after prompt diff.
+   - *Per cheaper re-run:* kept/broke + **which commitment broke** (the judge reason) = the "why NOT-SAFE".
+   - *Confidence state:* profiler LOW → a distinct "couldn't certify (node too noisy)" state, never a false SAFE/NOT-SAFE.
+   Touches `report.html` + `report_doc.py`. Deferred on purpose: the panel renders the profile's real shape, which Phase 0 establishes first — building it earlier is rework.
 8. **Two stability tiers — don't over-promise tier 1.** The profile *reduces* judge flips immediately (concrete envelope). *Eliminating* cross-audit drift also needs pinned inputs + a frozen profile (Phase 4). Tier 1 = steadier; tier 2 = deterministic.
 
 ## 11. Out of scope (deliberately)
