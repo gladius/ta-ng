@@ -1,22 +1,17 @@
-"""Model-downgrade audit — the provable core. Generic: no rules, no cohorts, no per-payload branching.
+"""Downgrade audit — shared replay/judge machinery + the (cache/compress) proof engine.
 
-For a call-site we test two axes so a verdict is both broad AND repeatable:
-  DIVERSITY  — N distinct recorded inputs (different real tickets).
-  STABILITY  — each input re-run on the cheaper model K times, because a single run of a stochastic model +
-               judge is a noisy sample, not a fact. We report a preservation RATE per input, not a coin-flip.
+The DOWNGRADE verdict now lives in app/services/profile_downgrade.py (prove_transform_profiled): per input it
+profiles the ORIGINAL model's own behaviour envelope (commitments vs allowed variation) and judges the cheaper model
+against it — stable on re-audit. `audit_node` samples N distinct inputs and delegates to it.
 
-  replay(trace, model)   -> the cheaper model's behavior as ONE string (text AND any tool calls rendered in).
-  reference              -> the ORIGINAL's RECORDED output (already in the trace — never re-run; it's the real
-                            production behavior we must preserve).
-  judge_preserved(A,B)   -> ONE generic judge for every payload (prose, JSON, or a tool call — all just behavior):
-                            did B keep A's decision + every material fact, no contradiction? unsure -> DRIFT.
+This module provides the pieces that path shares:
+  replay(trace, model)   -> re-run the recorded request on `model`, behaviour as ONE string (text + tool calls).
+  _recorded(trace)       -> the ORIGINAL's recorded output — the reference we must preserve (never re-run).
+  _distinct / _tools / _tool_choice / _render / _messages -> input sampling + provider-neutral request shaping.
 
-Verdict per input:  cheaper PERFECT (K/K) -> SAFE (can't do better). Otherwise we can't tell downgrade-drift from
-                    node-noise, so we measure the ORIGINAL's OWN consistency (self-variance) on that same input and
-                    judge the cheaper RELATIVE to it: as steady as the original -> SAFE · clearly worse -> NOT-SAFE ·
-                    one repeat worse, OR the original can't even reproduce itself (unreliable anchor) -> BORDERLINE.
-Verdict per node:   SAFE only if EVERY input is SAFE · NOT-SAFE if any input is NOT-SAFE · else BORDERLINE.
-Never a false SAFE: ties break toward NOT recommending; an unverifiable anchor is BORDERLINE, never SAFE.
+It ALSO keeps `prove_transform` + `judge_preserved` + `_verdict` — the self-variance proof engine still used by the
+CACHE and COMPRESS levers (currently disabled via LEVERS). Downgrade no longer uses them; if/when those levers are
+revisited they move onto the profiled flow too.
 """
 import json
 import re
@@ -26,6 +21,7 @@ from auditor.util import canonical_model, next_cheaper, tier, release, max_outpu
 from app.services import llm_client
 from app.config import (AUDIT_SAMPLES, AUDIT_REPEATS, AUDIT_MIN_EVIDENCE, AUDIT_MAX_PARALLEL,
                         AUDIT_JUDGE_MAX_CHARS, AUDIT_SAFE_RATIO, AUDIT_SELF_BASELINE, AUDIT_SELF_FLOOR,
+                        AUDIT_DOWNGRADE_K,   # cheaper re-run count for the profiled downgrade engine
                         JUDGE_MODEL)   # judge model role lives in config (.env-overridable), not hardcoded here
 
 
@@ -336,8 +332,9 @@ def audit_node(node_name, bucket, cheaper=None, n=AUDIT_SAMPLES, k=AUDIT_REPEATS
     if len(sample) < min_evidence:
         return {**base, "verdict": "LOW-EVIDENCE", "n": len(sample), "inputs": [],
                 "reason": "only %d distinct input(s), need %d" % (len(sample), min_evidence)}
-    inputs, verdict, safe = prove_transform(sample, lambda t: replay(t, cheaper), model, k)
-    return {**base, "verdict": verdict, "n": len(inputs), "k": k, "safe_inputs": safe, "inputs": inputs}
+    from app.services.profile_downgrade import prove_transform_profiled   # lazy: avoids an import cycle
+    inputs, verdict, safe = prove_transform_profiled(sample, cheaper, model)
+    return {**base, "verdict": verdict, "n": len(inputs), "k": AUDIT_DOWNGRADE_K, "safe_inputs": safe, "inputs": inputs}
 
 
 def run(source_id, ws_id, project, n=AUDIT_SAMPLES, k=AUDIT_REPEATS):

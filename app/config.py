@@ -61,3 +61,22 @@ AUDIT_SAFE_RATIO = float(os.environ.get("AUDIT_SAFE_RATIO", "0.66"))
 # never a confident SAFE/NOT-SAFE. Set AUDIT_SELF_BASELINE=0 to disable and fall back to AUDIT_SAFE_RATIO.
 AUDIT_SELF_BASELINE = os.environ.get("AUDIT_SELF_BASELINE", "1") not in ("0", "false", "False", "")
 AUDIT_SELF_FLOOR = float(os.environ.get("AUDIT_SELF_FLOOR", "0.5"))
+
+# ── Profile-based downgrade validation — the stable per-input verdict (replaces the self_kept knife-edge) ───────────
+# Per input we PROFILE the original model's own behaviour from its own runs (COMMITMENTS it holds constant vs ALLOWED
+# VARIATION it legitimately varies), then judge each cheaper run against THAT envelope: a difference inside allowed-
+# variation is forgiven, a broken commitment is a BREAK. Stable because the judge's vibe call becomes a concrete,
+# per-input checklist. See DOWNGRADE-STABILITY-PLAN.md.
+#   PROFILE_RERUNS = fresh ORIGINAL re-runs to build the envelope (+ the recorded output = PROFILE_RERUNS+1 samples).
+#   DOWNGRADE_K    = cheaper re-runs judged against the envelope.
+#   BREAK_FLOOR    = aggregate cushion — how many of the K cheaper runs may BREAK and still be SAFE (residual judge/
+#                    original flicker; the PER-ASPECT cushion is semantic, applied in-judge via allowed-variation).
+#   PROFILER/JUDGE_MAX_TOKENS = OUTPUT ceilings (NOT context): the profiler must fit all its sections, the judge its
+#                    verdict+reason. A ceiling, not a target — generous costs nothing extra, too-low truncates.
+#   PROFILER_SAMPLE_CHARS = per-sample INPUT cap when packing several original outputs into the profiler prompt.
+AUDIT_PROFILE_RERUNS = int(os.environ.get("AUDIT_PROFILE_RERUNS", "4"))
+AUDIT_DOWNGRADE_K = int(os.environ.get("AUDIT_DOWNGRADE_K", "5"))
+AUDIT_DOWNGRADE_BREAK_FLOOR = int(os.environ.get("AUDIT_DOWNGRADE_BREAK_FLOOR", "1"))
+AUDIT_PROFILER_MAX_TOKENS = int(os.environ.get("AUDIT_PROFILER_MAX_TOKENS", "2200"))
+AUDIT_JUDGE_MAX_TOKENS = int(os.environ.get("AUDIT_JUDGE_MAX_TOKENS", "512"))
+AUDIT_PROFILER_SAMPLE_CHARS = int(os.environ.get("AUDIT_PROFILER_SAMPLE_CHARS", "4000"))

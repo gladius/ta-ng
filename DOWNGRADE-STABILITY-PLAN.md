@@ -102,13 +102,12 @@ For **each input independently** (no cross-input mixing):
 
 ## 9. Implementation phases (only if we proceed — refine first)
 
-- **Phase 0 — measure first (cheap, no verdict change):** write the two prompts; on 2–3 real nodes, run the profiler on the old model's runs and eyeball whether COMMITMENTS / ALLOWED-VARIATION come out sensible; measure the clean-node fake-break rate. **Decide K and tolerance from real numbers, not estimates.**
-- **Phase 1:** add the profiler step + the commitment-judge behind a flag; keep the current `_verdict` as the fallback.
-- **Phase 2:** wire per-input pass + binary node roll-up into `audit_node` / `prove_transform`.
-- **Phase 3:** freeze the profile per prompt-version; surface the commitments in the report as the interpretable artifact.
+- **Phase 0 — measure first (cheap, no verdict change): ✅ DONE.** `downgrade_phase0.py` proved the two prompts across 4 shapes; clean-node fake-break 19% = real original self-drift; tolerance rule derived (`cheaper_breaks ≤ original_breaks`, semantic + floor).
+- **Phase 1+2 — build it end-to-end, REPLACE (no flag, no fallback): ✅ DONE.** New engine `app/services/profile_downgrade.py` (profiler + envelope judge + `prove_transform_profiled`, binary node roll-up); `audit_node` delegates to it directly; config knobs in `config.py`; report + download adapted (contract panel reusing the evidence macro); tests `tests/test_downgrade_profiled.py`. The legacy self-variance fallback + kill-switch were removed per "no fallback/legacy."
+- **Phase 3 (later):** freeze the profile per prompt-version (full cross-audit determinism).
 - **Phase 4 (later):** pin/cache the sampled inputs to remove the trace-change instability.
 
-Maps onto existing code: `app/services/audit.py` (`prove_transform`, `_verdict`, `judge_preserved`), `app/config.py` (K, tolerance, feature flag). No change to cache/compress.
+Maps onto code: `app/services/profile_downgrade.py` (the engine), `app/services/audit.py` (`audit_node` delegates; shared `replay`/`prove_transform` — the latter now serves only the disabled cache/compress levers), `app/config.py` (`AUDIT_PROFILE_RERUNS`/`AUDIT_DOWNGRADE_K`/`AUDIT_DOWNGRADE_BREAK_FLOOR`/`AUDIT_PROFILER_*`/`AUDIT_JUDGE_MAX_TOKENS`).
 
 ### Phase 0 findings — run 1 (`meridian-support`, 2 nodes × 2 inputs, `downgrade_phase0.py`)
 
@@ -127,7 +126,7 @@ Today `prove_transform` is ONE shared, transform-agnostic engine reused by all t
 3. **Profiler conservatism is two-sided, one principle:** over-list commitments AND under-list allowed-variation → both = "when unsure, stay strict." (Add the second half to the §6 prompt.)
 4. **The self-variance runs are repurposed; the doubtful-only optimization dies.** The profiled path always runs the original 4× (they ARE the profiler's input, not a tiebreaker). Straight line: original 4× → profile → cheaper 5× → judge each vs envelope. ~10 calls + 1 profiler per node — more than today's conditional baseline; acceptable per cost stance, flagged.
 5. **`_verdict` is replaced; cushion lives in TWO places.** Per-aspect proportional cushion is applied *inside the judge* (via allowed-variation). A *small aggregate tolerance* (e.g. allow ≤1 break of 5) sits in `_verdict_profiled(kept, k)` to absorb judge/LLM flicker. The integer `ck ≥ self_kept` compare is gone. **Aggregate threshold = a Phase-0 measurement, not a guess.**
-6. **Fork, don't mutate.** New `prove_transform_profiled`; `audit_node` branches to it behind a flag; old engine stays as fallback + for cache/compress.
+6. **Replace, don't flag (as built).** New `prove_transform_profiled`; `audit_node` delegates to it directly — no kill-switch, no legacy fallback (removed to avoid eventual drift). `prove_transform`/`_verdict` remain ONLY as the disabled cache/compress engine; they move onto the profiled flow if those levers return.
 7. **Report fields shift (Phase 3, downstream) — UI already scoped.** Downgrade has no prompt transform, so `system_before/after` are equal and drop out; the new evidence is the **learned contract**. Two-tier, matching the existing report:
    - *Exec:* SAFE/NOT-SAFE · cheaper model · $/mo (unchanged headline).
    - *Dev drill-down:* COMMITMENTS as HARD/SOFT chips + the ALLOWED-VARIATION list, per representative input — this replaces the old `self_kept` "vs original X/K" line and the (now meaningless) before/after prompt diff.

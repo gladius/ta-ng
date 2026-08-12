@@ -153,9 +153,10 @@ def _report_md(f, proof):
         ni, si, k = det.get("n", 0), det.get("safe_inputs", 0), det.get("k", 0)
         L += ["", "**Why it's safe**"]
         if lever == "downgrade":
-            L.append("- Re-ran %d distinct real inputs × %d each on `%s`, judged against your recorded outputs; held "
-                     "on **%d/%d** — measured against your current model's own run-to-run noise, so a cheaper model is "
-                     "never blamed for normal variance." % (ni, k, det.get("cheaper"), si, ni))
+            L.append("- Re-ran %d distinct real inputs × %d each on `%s`, judged against the original model's own "
+                     "behaviour envelope (the commitments it holds constant vs the variation it naturally allows); "
+                     "held on **%d/%d**. The cheaper model gets exactly the latitude the original itself takes, so it "
+                     "is never blamed for normal variance." % (ni, k, det.get("cheaper"), si, ni))
         elif lever == "compress":
             L.append("- The compressor kept every rule, number, code and tool name verbatim; behaviour then held on "
                      "**%d/%d** distinct real inputs × %d re-runs, judged against your recorded outputs." % (si, ni, k))
@@ -223,6 +224,11 @@ def _verdict_md(node_name, lever_label, headline, r):
         L.append("## input %d — %s (%s)" % (i, _IV.get(inp["verdict"], inp["verdict"]), _rate(inp)))
         L.append("- request: %s" % ((inp.get("input", "") or "")[:200].replace("\n", " ")))
         L.append("- judge: %s" % (inp.get("note") or inp.get("reason", "")))
+        if inp.get("commitments"):        # profiled downgrade: the learned contract the cheaper was judged against
+            L.append("- commitments (must hold): %s" % (inp["commitments"].replace("\n", " ")[:400]))
+            L.append("- allowed variation: %s" % ((inp.get("allowed_variation") or "none").replace("\n", " ")[:300]))
+            if inp.get("confidence"):
+                L.append("- profile confidence: %s" % (inp["confidence"].splitlines()[0][:120]))
         L.append("- raw: `input-%d/before-original.txt` vs `input-%d/after-run-*.txt`%s"
                  % (i, i, " (+ baseline-*.txt = the original's own re-runs)" if inp.get("baseline") else ""))
         L.append("")

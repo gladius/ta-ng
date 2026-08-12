@@ -156,6 +156,13 @@
         <span class="ev-rate mono">preserved {{ iv.kept }}/{{ iv.k }}{% if iv.self_kept is not none %} &middot; vs original {{ iv.self_kept }}/{{ iv.k }}{% endif %}</span>
       </summary>
       <div class="ev-body">
+        {% if iv.commitments %}
+        {# Downgrade: no prompt transform, so the input-inspector slot shows the learned CONTRACT — what the original
+           model holds constant vs the variation it naturally allows. This is what the cheaper is judged against. #}
+        <div class="io-lbl">The original&rsquo;s contract{% if iv.confidence %} &middot; profile confidence {{ iv.confidence.split()[0] }}{% endif %}</div>
+        <div class="io"><span class="io-k">commitments</span><pre class="diff-box">{{ iv.commitments }}</pre></div>
+        <div class="io"><span class="io-k">allowed variation</span><pre class="diff-box">{{ iv.allowed_variation or '(none observed &mdash; must match exactly)' }}</pre></div>
+        {% else %}
         <div class="io-lbl">Input (what was sent)</div>
         <div class="diff">
           <div class="diff-col diff-before"><div class="diff-tag">before</div>
@@ -167,6 +174,7 @@
             <div class="io"><span class="io-k">user</span><pre class="diff-box">{{ iv.user_after or '(none)' }}</pre></div>
           </div>
         </div>
+        {% endif %}
         <div class="io-lbl">Output &middot; {{ iv.samples | length }} re-run{{ 's' if (iv.samples | length) != 1 }}</div>
         {% if iv.samples %}
         <div class="rtabs">
@@ -269,7 +277,7 @@
         {% else %}<span class="chip chip--muted">{{ d.verdict | lower | replace('-',' ') }}</span><span class="f-amt none">&mdash;</span>{% endif %}
       </summary>
       <div class="finding-body">
-        <p class="strat-note"><span class="to">{{ r.model }} &rarr; {{ d.cheaper }}</span>{% if d.verdict == 'SAFE' %} &mdash; the cheaper model matched on every sampled input.{% elif d.verdict == 'NOT-SAFE' %} &mdash; the cheaper model drifted on the majority of inputs; keep the current model.{% else %} &mdash; held on most inputs, but some drifted or couldn&rsquo;t be verified &mdash; see the per-input results.{% endif %}</p>
+        <p class="strat-note"><span class="to">{{ r.model }} &rarr; {{ d.cheaper }}</span>{% if d.verdict == 'SAFE' %} &mdash; the cheaper model stayed within the original&rsquo;s own envelope on every sampled input.{% elif d.verdict == 'NOT-SAFE' %} &mdash; the cheaper model broke the original&rsquo;s commitments on at least one input; keep the current model.{% else %} &mdash; see the per-input results.{% endif %}</p>
         {% if d.inputs %}{{ evidence(d.inputs) }}{% endif %}
       </div>
     </details>
