@@ -21,9 +21,10 @@ def build_into(sid, source, ws, project):
     """Fetch + build the graph ONCE and pin it under the GIVEN snapshot id; returns the graph. Splitting the
     id from the build lets the web layer mint an id, render a progress page immediately, then run this in the
     background under that same id (see server.build_stream) — so the multi-second fetch isn't a frozen page."""
-    from app.services import graph, store
+    from app.services import graph, store, snapdump
     g = graph.build(source, ws, project)
     store.put(("snapshot", sid), {"source": source, "ws": ws, "project": project, "graph": g})
+    snapdump.dump_graph(sid, g)                               # dev-only (AUDIT_DEBUG): traces/ + graph/ for this snap
     return g
 
 

@@ -15,3 +15,6 @@ venv/
 .claude/settings.local.json
 .DS_Store
 
+# dev-only traceability dumps (AUDIT_DEBUG)
+.audit_debug/
+

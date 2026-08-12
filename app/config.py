@@ -80,3 +80,18 @@ AUDIT_DOWNGRADE_BREAK_FLOOR = int(os.environ.get("AUDIT_DOWNGRADE_BREAK_FLOOR", 
 AUDIT_PROFILER_MAX_TOKENS = int(os.environ.get("AUDIT_PROFILER_MAX_TOKENS", "2200"))
 AUDIT_JUDGE_MAX_TOKENS = int(os.environ.get("AUDIT_JUDGE_MAX_TOKENS", "512"))
 AUDIT_PROFILER_SAMPLE_CHARS = int(os.environ.get("AUDIT_PROFILER_SAMPLE_CHARS", "4000"))
+
+# ── Reference-set downgrade validation (DOWNGRADE-STABILITY-LOGIC.md) — the current engine ─────────────────────────
+# No prose contract. The original's 5 own outputs ARE the acceptable range; ONE fit-judge decides "does this candidate
+# belong to that set?", and every judgement is a MAJORITY VOTE (the probe proved a single judge flips on borderline
+# outputs). Per input we get two rates by the IDENTICAL mechanism: original self-consistency (each original vs the
+# other 4, leave-one-out) and cheaper fit (each cheaper vs all 5 originals). The verdict is arithmetic on the two.
+#   JUDGE_VOTES     = judge each candidate this many times, majority wins (kills per-output judge flip).
+#   COHERENCE_FLOOR = original must reproduce itself at least this often (of 5) or we can't certify -> NOT-SAFE.
+#   DOWNGRADE_MARGIN= cheaper is SAFE if `cheaper_rate >= original_rate - MARGIN` (proportional to the original).
+#   NODE_SAFE_RATIO = node is SAFE if at least this FRACTION of inputs are SAFE (softer than all-must-pass, which
+#                     amplifies per-input noise). 0.8 = allow one input of five to fail.
+AUDIT_JUDGE_VOTES = int(os.environ.get("AUDIT_JUDGE_VOTES", "3"))
+AUDIT_COHERENCE_FLOOR = int(os.environ.get("AUDIT_COHERENCE_FLOOR", "3"))
+AUDIT_DOWNGRADE_MARGIN = int(os.environ.get("AUDIT_DOWNGRADE_MARGIN", "1"))
+AUDIT_NODE_SAFE_RATIO = float(os.environ.get("AUDIT_NODE_SAFE_RATIO", "0.8"))

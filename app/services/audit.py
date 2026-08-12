@@ -332,8 +332,8 @@ def audit_node(node_name, bucket, cheaper=None, n=AUDIT_SAMPLES, k=AUDIT_REPEATS
     if len(sample) < min_evidence:
         return {**base, "verdict": "LOW-EVIDENCE", "n": len(sample), "inputs": [],
                 "reason": "only %d distinct input(s), need %d" % (len(sample), min_evidence)}
-    from app.services.profile_downgrade import prove_transform_profiled   # lazy: avoids an import cycle
-    inputs, verdict, safe = prove_transform_profiled(sample, cheaper, model)
+    from app.services.downgrade_refset import prove_transform_refset      # lazy: avoids an import cycle
+    inputs, verdict, safe = prove_transform_refset(sample, cheaper, model)
     return {**base, "verdict": verdict, "n": len(inputs), "k": AUDIT_DOWNGRADE_K, "safe_inputs": safe, "inputs": inputs}
 
 

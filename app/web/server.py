@@ -75,7 +75,7 @@ def report_view(request: Request, source: str, ws_id: str, project: str, snap: s
     ca = [r for r in results if r.get("cache") and not r["cache"].get("informational")]  # call-sites it applies to
     co = [r for r in results if r.get("compress")]                               # compression: the call-sites it ran on
     return _page(request, "report.html", source=source, ws_id=ws_id, project=project,
-                 f=f, proof=proof, dg=dg, ca=ca, co=co, snap=snap)
+                 f=f, proof=proof, dg=dg, ca=ca, co=co, snap=snap, levers=LEVERS)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/build-stream")

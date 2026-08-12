@@ -9,7 +9,7 @@ report reads identical numbers on every reload. Nothing is asserted here that is
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app.services import audit, funnel, store, cache_reorg, compress, snapshot
+from app.services import audit, funnel, store, cache_reorg, compress, snapshot, snapdump
 from app.config import LEVERS      # enabled levers (default: downgrade only on this branch)
 
 
@@ -108,4 +108,5 @@ def stream(source, ws, project, keys, snap, calls=None, levers=None):
            "total": round(sum(x.get("cache_usd", 0) + x.get("downgrade_usd", 0) + x.get("compress_usd", 0)
                              for x in results), 2)}
     store.put(proof_key(source, ws, project, snap), res)
+    snapdump.dump_results(snap, res)                          # dev-only (AUDIT_DEBUG): results/ for this snap
     yield {"type": "complete", "total_usd": res["total"]}

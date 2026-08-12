@@ -156,9 +156,27 @@
         <span class="ev-rate mono">preserved {{ iv.kept }}/{{ iv.k }}{% if iv.self_rate %} &middot; original {{ iv.self_rate }}{% elif iv.self_kept is not none %} &middot; vs original {{ iv.self_kept }}/{{ iv.k }}{% endif %}</span>
       </summary>
       <div class="ev-body">
-        {% if iv.commitments %}
-        {# Downgrade: the input is UNCHANGED (no prompt transform), so show it ONCE (not a redundant before/after) so
-           you can inspect what was sent — THEN the learned CONTRACT the cheaper is judged against. #}
+        {% if iv.orig_runs %}
+        {# Reference-set downgrade: input unchanged — show it once, then the original's own outputs as tabs, each
+           tagged whether it FITS the other 4 (that leave-one-out is what produces original n/5). #}
+        <div class="io-lbl">Input (what was sent)</div>
+        <div class="io"><span class="io-k">system</span><pre class="diff-box">{{ (iv.system or '(none)')[:8000] }}</pre></div>
+        <div class="io"><span class="io-k">user</span><pre class="diff-box">{{ (iv.input or '(none)')[:8000] }}</pre></div>
+        <div class="io-lbl">Original&rsquo;s own outputs &mdash; the reference set{% if iv.self_rate %} &middot; self-consistency {{ iv.self_rate }}{% endif %}</div>
+        <div class="rtabs">
+          <div class="rtab-bar">
+            {% for o in iv.orig_runs %}
+            <button type="button" class="rtab{{ ' on' if loop.first }}" data-i="{{ loop.index }}">original {{ loop.index }} &middot; {{ 'fits' if o.preserved else 'differs' }}{% if o.votes %} ({{ o.votes }}){% endif %}</button>
+            {% endfor %}
+          </div>
+          {% for o in iv.orig_runs %}
+          <div class="rpanel{{ ' on' if loop.first }}" data-i="{{ loop.index }}">
+            <pre class="diff-box">{{ (o.output or '(empty)')[:6000] }}</pre>
+            <p class="ev-judge"><b>Fits the other originals:</b> <span class="ev-tag {{ 'ev-kept' if o.preserved else 'ev-drift' }}">{{ 'yes' if o.preserved else 'no' }}</span> {{ o.reason or '' }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        {% elif iv.commitments %}
         <div class="io-lbl">Input (what was sent)</div>
         <div class="io"><span class="io-k">system</span><pre class="diff-box">{{ (iv.system or '(none)')[:8000] }}</pre></div>
         <div class="io"><span class="io-k">user</span><pre class="diff-box">{{ (iv.input or '(none)')[:8000] }}</pre></div>
@@ -183,7 +201,7 @@
         <div class="rtabs">
           <div class="rtab-bar">
             {% for s in iv.samples %}
-            <button type="button" class="rtab{{ ' on' if loop.first }}" data-i="{{ loop.index }}">re-run {{ loop.index }} &middot; {{ 'kept' if s.preserved else 'drift' }}</button>
+            <button type="button" class="rtab{{ ' on' if loop.first }}" data-i="{{ loop.index }}">re-run {{ loop.index }} &middot; {{ 'kept' if s.preserved else 'drift' }}{% if s.votes %} ({{ s.votes }}){% endif %}</button>
             {% endfor %}
           </div>
           {% for s in iv.samples %}
@@ -291,6 +309,7 @@
   {% endif %}
 </div>
 
+{% if 'cache' in levers %}
 <!-- ── Cacheable prefix ── -->
 <div class="strat-sec">
   <div class="ssec-head">
@@ -332,7 +351,9 @@
   <p class="ssec-empty">No cacheable-prefix opportunities among the audited call-sites.</p>
   {% endif %}
 </div>
+{% endif %}
 
+{% if 'compress' in levers %}
 <!-- ── Prompt compression ── -->
 <div class="strat-sec">
   <div class="ssec-head">
@@ -379,6 +400,7 @@
   <p class="ssec-empty">No safe prompt-compression opportunities among the audited call-sites.</p>
   {% endif %}
 </div>
+{% endif %}
 
 <div class="actions">
   <a class="btn" href="{{ base }}/report/download?snap={{ snap | urlencode }}">Download report (.zip)</a>
