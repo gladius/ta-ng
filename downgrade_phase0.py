@@ -29,10 +29,18 @@ from app.services import graph, llm_client
 from app.services.audit import replay, _recorded, _user_text, _system_text, _distinct
 from app.config import AUDIT_JUDGE_MAX_CHARS, AUDIT_MAX_PARALLEL, JUDGE_MODEL
 
+# Probe knobs — surfaced here, NOT buried inline. In Phase 1 each becomes a config.py entry (.env-overridable),
+# alongside the existing AUDIT_* rigor knobs: AUDIT_PROFILE_RERUNS / AUDIT_PROFILER_MAX_TOKENS /
+# AUDIT_JUDGE_MAX_TOKENS / AUDIT_PROFILER_SAMPLE_CHARS. (CAP reuses the existing config input-cap already.)
 PROFILE_RERUNS = 4        # + the recorded output = 5 samples of the ORIGINAL, used to build the profile
 HELDOUT = 4               # held-out ORIGINAL re-runs judged vs the envelope -> the fake-break rate
-CAP = AUDIT_JUDGE_MAX_CHARS
-OUT_CAP = 4000            # per-output cap when packing several samples into the profiler prompt
+CAP = AUDIT_JUDGE_MAX_CHARS   # INPUT cap (chars the judge/profiler READ) — already config-driven
+OUT_CAP = 4000            # per-sample INPUT cap when packing several outputs into the profiler prompt
+PROFILER_MAX_TOKENS = 2200    # OUTPUT cap: the profile must fit reasoning + all sections (too low truncated it)
+JUDGE_MAX_TOKENS = 512        # OUTPUT ceiling for KEPT/BROKE + reason. A ceiling, NOT a target: the judge stops the
+                              # instant it emits the verdict (~40 tok), so a higher cap costs the SAME in the normal
+                              # case — it only prevents the truncation cliff when the model enumerates facts (the
+                              # summarizer's "no verdict" miss). Generous by design; tight would save nothing here.
 
 _CALLS = {"n": 0}
 def _count(_):
@@ -67,7 +75,7 @@ def _profiler_prompt(request, outputs):
 
 
 def profile_node(request, outputs):
-    r = llm_client.complete(model=JUDGE_MODEL, max_tokens=2200, system=_PROFILER_SYS,
+    r = llm_client.complete(model=JUDGE_MODEL, max_tokens=PROFILER_MAX_TOKENS, system=_PROFILER_SYS,
                             messages=[{"role": "user", "content": _profiler_prompt(request, outputs)}])
     _count(None)
     return "".join(b.text for b in r.content if b.type == "text").strip()
@@ -102,7 +110,7 @@ def envelope_kept(request, a, b, commitments, variation):
     if len(a) > CAP or len(b) > CAP:
         return False, "output too long to verify -> broke"
     p = _JUDGE_TMPL % (commitments or "(none listed)", variation or "(none listed)", request[:CAP], a, b)
-    r = llm_client.complete(model=JUDGE_MODEL, max_tokens=320, system=_JUDGE_SYS,
+    r = llm_client.complete(model=JUDGE_MODEL, max_tokens=JUDGE_MAX_TOKENS, system=_JUDGE_SYS,
                             messages=[{"role": "user", "content": p}])
     _count(None)
     raw = "".join(x.text for x in r.content if x.type == "text")
@@ -129,10 +137,11 @@ def main():
     project = sys.argv[3] if len(sys.argv) > 3 else "meridian-support"
     max_nodes = int(sys.argv[4]) if len(sys.argv) > 4 else 2
     max_inputs = int(sys.argv[5]) if len(sys.argv) > 5 else 2
+    only = set(x for x in (sys.argv[6].split(",") if len(sys.argv) > 6 else []) if x)   # optional node-name filter
 
     g = graph.build(source, ws, project)
     nodes, buckets = g["nodes"], g["buckets"]
-    usable = [n for n in nodes if buckets.get(n["key"])]
+    usable = [n for n in nodes if buckets.get(n["key"]) and (not only or n["node"] in only)]
     print("AGENT: %s   nodes: %d (usable %d)   traces: %s   judge/profiler model: %s\n"
           % (g["agent"], len(nodes), len(usable), g.get("traces"), JUDGE_MODEL))
 
