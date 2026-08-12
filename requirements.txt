@@ -1,0 +1,8 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+jinja2>=3.1
+langsmith>=0.1          # live LangSmith trace pull (offline/recorded mode needs no key)
+anthropic>=0.40         # provider SDK for the paid re-run + judge calls (llm_client)
+
+# Run:  pip install -r requirements.txt
+#       python -m app.web.server        (http://127.0.0.1:8100)
