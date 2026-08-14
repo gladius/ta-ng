@@ -8,7 +8,7 @@ but edit THIS file, not the .pptx, or the next rebuild overwrites your change.
   1  what it is                    definition, the gap it closes, scope boundary
   2  for agent teams               the finding card that lands on a developer's desk
   3  cache-prefix expansion        interleaved static/per-call lines -> one prefix, dual proof
-  4  model-tier downgrade          the full path, including the self-variance noise floor
+  4  model-tier downgrade          reference-set fit, majority-voted, vs the original's own self-consistency
   5  input compression             the same engine, a new transform, and the refine loop
   6  production coverage           which prompt shape each lever needs, and where Cortex lands
 """
@@ -156,46 +156,42 @@ def label(slide, x, y, w, text, color=None, align=PP_ALIGN.LEFT):
 # ═════════════════════════════════════════════════════════════════════════════
 def slide_downgrade(prs):
     s = new_slide(prs, "LEVER TWO", "Model-tier downgrade, end to end",
-                  "The cheaper model is measured against your current model's own inconsistency — "
-                  "not against perfection.")
+                  "The cheaper model is measured against your current model's OWN inconsistency — "
+                  "not against perfection, and not against a written rubric.")
 
-    MY, MH, MID = 2.55, 1.15, 3.125
-    BY, BH, BID = 4.45, 1.15, 5.025
-    DX, DW = 7.75, 2.10
-    DCX = DX + DW / 2
-    TX, TW = 10.30, 2.40
+    R1, R2, BH = 2.40, 4.40, 1.05          # top row = cheaper path · bottom row = original / reference-set path
+    IN_Y = 3.40
 
-    box(s, 0.70, MY, 2.05, MH, "5 genuinely different\nreal recorded inputs", "det")
-    box(s, 3.05, MY, 2.05, MH, "Re-run each on the\nCHEAPER model · 3×", "live")
-    box(s, 5.40, MY, 2.05, MH, "Judge vs the recorded\nproduction output", "ai")
-    diamond(s, DX, MY - 0.15, DW, MH + 0.30, "Held on every\nsingle re-run?")
-    box(s, TX, MY, TW, MH, "SAFE\ndollars booked", "win", bold_first=True)
+    box(s, 0.70, IN_Y, 1.85, BH, "5 genuinely different\nreal recorded inputs", "det")
 
-    FX, FW = 4.90, 2.30
-    FCX = FX + FW / 2
-    box(s, FX, BY, FW, BH, "NOISE FLOOR: re-run the\nORIGINAL model on itself", "live")
-    diamond(s, DX, BY - 0.15, DW, BH + 0.30, "As steady as\nthe original?")
-    box(s, TX, BY, TW, BH, "NOT-SAFE\nzero", "zero", bold_first=True)
+    # top path — the CHEAPER model, judged against the reference set (majority-voted)
+    box(s, 2.95, R1, 2.05, BH, "Run the CHEAPER\nmodel · 5×", "live")
+    box(s, 5.30, R1, 2.30, BH, "Judge each vs the\nreference set · 3× vote", "ai")
+    box(s, 10.85, R1, 1.85, BH, "SAFE\ndollars booked", "win", bold_first=True)
 
-    arrow(s, 2.75, MID, 3.05, MID)
-    arrow(s, 5.10, MID, 5.40, MID)
-    arrow(s, 7.45, MID, DX, MID)
-    arrow(s, DX + DW, MID, TX, MID)
-    edge_label(s, TX - 0.675, MID - 0.30, "yes", ACCENT)
+    # bottom path — the ORIGINAL's own 5 outputs ARE the reference set; each vs the other 4 = its self-consistency
+    box(s, 2.95, R2, 2.05, BH, "Run the ORIGINAL 5×\n= the reference set", "live")
+    box(s, 5.30, R2, 2.30, BH, "Each vs the other 4\n· 3× vote", "ai")
+    box(s, 10.85, R2, 1.85, BH, "NOT-SAFE\nzero", "zero", bold_first=True)
 
-    arrow(s, DCX, MY + MH + 0.15, DCX, 4.12, head=False)
-    arrow(s, DCX, 4.12, FCX, 4.12, head=False)
-    arrow(s, FCX, 4.12, FCX, BY)
-    edge_label(s, DCX - 0.96, MY + MH + 0.24, "no", BRICK)
+    # the two rates meet at ONE arithmetic comparison — no rubric, no all-or-nothing
+    DX, DY, DW, DH = 8.05, 3.02, 2.30, 1.66
+    diamond(s, DX, DY, DW, DH, "cheaper n/5 ≥\noriginal n/5 − 1?")
 
-    arrow(s, FX + FW, BID, DX, BID)
-    arrow(s, DX + DW, BID, TX, BID)
-    edge_label(s, TX - 0.675, BID - 0.30, "no", BRICK)
+    arrow(s, 2.55, IN_Y + 0.25, 2.95, R1 + BH / 2)                 # input -> both rows
+    arrow(s, 2.55, IN_Y + BH - 0.25, 2.95, R2 + BH / 2)
+    arrow(s, 5.00, R1 + BH / 2, 5.30, R1 + BH / 2)                 # each run -> its judge
+    arrow(s, 5.00, R2 + BH / 2, 5.30, R2 + BH / 2)
+    arrow(s, 7.60, R1 + BH / 2, DX + 0.35, DY + 0.52)             # judges -> the comparison
+    arrow(s, 7.60, R2 + BH / 2, DX + 0.35, DY + DH - 0.52)
+    edge_label(s, 7.62, R1 + BH / 2 - 0.36, "cheaper n/5", ACCENT)
+    edge_label(s, 7.62, R2 + BH / 2 + 0.16, "original n/5", MUTED)
+    arrow(s, DX + DW - 0.35, DY + 0.52, 10.85, R1 + BH / 2)       # verdict
+    arrow(s, DX + DW - 0.35, DY + DH - 0.52, 10.85, R2 + BH / 2)
+    edge_label(s, 10.18, R1 + BH / 2 - 0.34, "yes", ACCENT)
+    edge_label(s, 10.18, R2 + BH / 2 + 0.12, "no", BRICK)
 
-    arrow(s, DCX, BY - 0.15, TX + 0.90, MY + MH)
-    edge_label(s, 9.85, 4.00, "yes", ACCENT)
-
-    LEG = [("det", "Deterministic · free"), ("live", "Live provider call"), ("ai", "AI judgement"),
+    LEG = [("det", "Deterministic · free"), ("live", "Live provider call"), ("ai", "AI judgement · voted"),
            ("win", "Proven · counted"), ("zero", "Zero · shown anyway")]
     lx = 0.75
     for kind, text in LEG:
@@ -207,8 +203,8 @@ def slide_downgrade(prs):
         lx += 2.42
 
     caption(s, 0.75, 6.92, 11.9,
-            "Large models are not deterministic. Scoring the cheaper model 2-of-3 means nothing until you know "
-            "your current model also scores 2-of-3 on that input.")
+            "The original's own 5 outputs ARE the acceptable range — the cheaper only has to fit it as often as the "
+            "original fits itself. Every judgement is a majority vote, so one stray judge call can't flip the verdict.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -555,7 +551,7 @@ def slide_for_builders(prs):
             _fill_text(r, txt, k, sz, bold, MONO if k != "det" else SANS, al)
 
     finding(0, "Behaviour", "SAFE", "win",
-            "5 genuinely different real inputs, re-run 3× each and judged\nagainst your own recorded output")
+            "5 genuinely different real inputs, cheaper re-run 5× and\nmajority-judged against your model's own 5 outputs")
     finding(1, "Caching", "PROVEN", "live",
             "the provider's own billing counter confirmed the new prefix\ncached on a live round-trip")
     finding(2, "Saving", "BOOKED", "win",
@@ -584,9 +580,9 @@ def slide_for_builders(prs):
             ("Measured against your model's own noise",
              "We measure how inconsistent your current model is on the same input first, so a cheaper "
              "model is never blamed for normal variance."),
-            ("Unanimous, or it earns nothing",
-             "One drifting input pulls the whole call-site out of the total. Split results are reported "
-             "and counted as zero.")]:
+            ("Every verdict is a majority vote",
+             "Each output is judged several times and the majority wins, so one stray judge call can't flip "
+             "the result; the cheaper must fit as often as the original fits itself.")]:
         textbox(s, RX, y, RW, 1.0,
                 [(head, 10.5, True, INK, SANS), (body, 9.5, False, MUTED, SANS)], spacing=2)
         y += 1.12

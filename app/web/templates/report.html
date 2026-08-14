@@ -90,11 +90,17 @@
   .diff{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);margin-top:var(--s3)}
   @media(max-width:640px){.diff{grid-template-columns:1fr}}
   .diff-col{border:1px solid var(--line);border-radius:8px;overflow:hidden;min-width:0}
-  .diff-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:5px 11px}
+  .diff-tag{display:flex;align-items:center;gap:8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:5px 11px}
   .diff-before .diff-tag{background:var(--bad-weak);color:var(--bad)}
   .diff-after .diff-tag{background:var(--ok-weak);color:var(--ok)}
+  .diff-tag--n{background:var(--hold-weak);color:var(--faint)}                 /* neutral header for a standalone framed box */
+  .fld-meta{margin-left:2px;font-weight:600;color:var(--muted);text-transform:none;letter-spacing:0}
+  .fld-x{margin-left:auto;font:inherit;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:none;border:0;cursor:pointer;padding:2px 0}
+  .fld-x:hover{color:var(--accent)}
+  .iofields{display:flex;flex-direction:column;gap:9px;margin-top:9px}
   .diff-box{white-space:pre-wrap;font-family:'Plex Mono',ui-monospace,monospace;font-size:11px;line-height:1.5;
-    padding:10px 11px;max-height:300px;overflow:auto;margin:0;color:var(--ink);word-break:break-word}
+    padding:10px 11px;max-height:300px;overflow:auto;resize:vertical;margin:0;color:var(--ink);word-break:break-word}
+  .diff-box.tall{max-height:none;resize:none}                                 /* expand: lift the scroll cage, show everything */
   .ba-text{margin-top:var(--s3)}
   .ba-toggle{list-style:none;cursor:pointer;font-size:12.5px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:7px}
   .ba-toggle::-webkit-details-marker{display:none}
@@ -141,6 +147,15 @@
 </details>
 {% endmacro %}
 
+{# Standalone framed box: bordered, shaded header, per-box "expand" to lift the scroll cage. Full text, never
+   truncated — the scroll (and drag-resize) is the slider; expand shows everything. Reused for inputs and outputs. #}
+{% macro iobox(label, text, meta='') %}
+<div class="diff-col">
+  <div class="diff-tag diff-tag--n"><span>{{ label }}</span>{% if meta %}<span class="fld-meta">{{ meta }}</span>{% endif %}<button type="button" class="fld-x" aria-label="Show everything or collapse">expand</button></div>
+  <pre class="diff-box">{{ text if (text not in (None, '')) else '(none)' }}</pre>
+</div>
+{% endmacro %}
+
 {# Per input: INPUT before/after shown ONCE, then the K re-runs as tabs (recorded-vs-re-run OUTPUT + judge remark).
    Summary rate shows the re-run's kept/K and, on doubtful inputs, the original's own self-variance ("vs original
    X/K") so a sub-perfect rate reads against the model's own noise. ONE macro, reused by all levers. #}
@@ -160,8 +175,10 @@
         {# Reference-set downgrade: input unchanged — show it once, then the original's own outputs as tabs, each
            tagged whether it FITS the other 4 (that leave-one-out is what produces original n/5). #}
         <div class="io-lbl">Input (what was sent)</div>
-        <div class="io"><span class="io-k">system</span><pre class="diff-box">{{ (iv.system or '(none)')[:8000] }}</pre></div>
-        <div class="io"><span class="io-k">user</span><pre class="diff-box">{{ (iv.input or '(none)')[:8000] }}</pre></div>
+        <div class="iofields">
+          {{ iobox('system', iv.system) }}
+          {{ iobox('user', iv.input) }}
+        </div>
         <div class="io-lbl">Original&rsquo;s own outputs &mdash; the reference set{% if iv.self_rate %} &middot; self-consistency {{ iv.self_rate }}{% endif %}</div>
         <div class="rtabs">
           <div class="rtab-bar">
@@ -171,7 +188,7 @@
           </div>
           {% for o in iv.orig_runs %}
           <div class="rpanel{{ ' on' if loop.first }}" data-i="{{ loop.index }}">
-            <pre class="diff-box">{{ (o.output or '(empty)')[:6000] }}</pre>
+            {{ iobox('output', o.output, 'original ' ~ loop.index) }}
             <p class="ev-judge"><b>Fits the other originals:</b> <span class="ev-tag {{ 'ev-kept' if o.preserved else 'ev-drift' }}">{{ 'yes' if o.preserved else 'no' }}</span> {{ o.reason or '' }}</p>
           </div>
           {% endfor %}
@@ -196,21 +213,29 @@
           </div>
         </div>
         {% endif %}
-        <div class="io-lbl">Output &middot; {{ iv.samples | length }} re-run{{ 's' if (iv.samples | length) != 1 }}</div>
+        {# Cheaper re-runs. For reference-set downgrade the baseline is ALL the originals shown above, not one
+           recorded output &mdash; so each cheaper output stands on its own, judged against that set (no misleading
+           before/after). Other levers keep the recorded-vs-re-run diff. #}
+        <div class="io-lbl">{% if iv.orig_runs %}Cheaper model&rsquo;s outputs{% else %}Output{% endif %} &middot; {{ iv.samples | length }} re-run{{ 's' if (iv.samples | length) != 1 }}{% if iv.orig_runs %} &middot; judged against the reference set above{% endif %}</div>
         {% if iv.samples %}
         <div class="rtabs">
           <div class="rtab-bar">
             {% for s in iv.samples %}
-            <button type="button" class="rtab{{ ' on' if loop.first }}" data-i="{{ loop.index }}">re-run {{ loop.index }} &middot; {{ 'kept' if s.preserved else 'drift' }}{% if s.votes %} ({{ s.votes }}){% endif %}</button>
+            <button type="button" class="rtab{{ ' on' if loop.first }}" data-i="{{ loop.index }}">re-run {{ loop.index }} &middot; {% if iv.orig_runs %}{{ 'fits' if s.preserved else 'differs' }}{% else %}{{ 'kept' if s.preserved else 'drift' }}{% endif %}{% if s.votes %} ({{ s.votes }}){% endif %}</button>
             {% endfor %}
           </div>
           {% for s in iv.samples %}
           <div class="rpanel{{ ' on' if loop.first }}" data-i="{{ loop.index }}">
+            {% if iv.orig_runs %}
+            {{ iobox('output', s.output, 'cheaper re-run ' ~ loop.index) }}
+            <p class="ev-judge"><b>Fits the reference set:</b> <span class="ev-tag {{ 'ev-kept' if s.preserved else 'ev-drift' }}">{{ 'yes' if s.preserved else 'no' }}</span> {{ s.reason or '' }}</p>
+            {% else %}
             <div class="diff">
               <div class="diff-col diff-before"><div class="diff-tag">recorded (before)</div><pre class="diff-box">{{ (iv.recorded or '(none)')[:6000] }}</pre></div>
               <div class="diff-col diff-after"><div class="diff-tag">re-run (after)</div><pre class="diff-box">{{ (s.output or '(empty)')[:6000] }}</pre></div>
             </div>
             <p class="ev-judge"><b>Judge:</b> <span class="ev-tag {{ 'ev-kept' if s.preserved else 'ev-drift' }}">{{ 'kept' if s.preserved else 'drift' }}</span> {{ s.reason or '' }}</p>
+            {% endif %}
           </div>
           {% endfor %}
         </div>
@@ -420,6 +445,12 @@
     var i = b.getAttribute('data-i');
     box.querySelectorAll('.rtab').forEach(function(x){ x.classList.toggle('on', x.getAttribute('data-i')===i); });
     box.querySelectorAll('.rpanel').forEach(function(x){ x.classList.toggle('on', x.getAttribute('data-i')===i); });
+  });
+  // Expand a single box: lift its scroll cap to show everything (and back).
+  document.addEventListener('click', function(e){
+    var x = e.target.closest('.fld-x'); if(!x) return;
+    var col = x.closest('.diff-col'); var pre = col && col.querySelector('.diff-box'); if(!pre) return;
+    x.textContent = pre.classList.toggle('tall') ? 'collapse' : 'expand';
   });
 </script>
 {% endblock %}

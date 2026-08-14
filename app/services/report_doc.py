@@ -1,46 +1,43 @@
-"""Report export — a downloadable ZIP whose centerpiece is ONE self-contained `report.md`: an APPLY GUIDE across all
-three levers (model-tier downgrade, cacheable-prefix expansion, prompt compression). Built ONLY from the frozen proof
-— measured, nothing invented, no LLM in the loop, so the deliverable is reproducible.
+"""Report export — a downloadable ZIP of exactly TWO markdown files, built ONLY from the frozen proof (no LLM in the
+loop, so the deliverable is reproducible):
 
-The ZIP unpacks to:
-  report.md                                     the apply guide: one block per proven fix (what / where / how / why /
-                                                verify / caveat, artifacts INLINE) + a machine-readable index + the
-                                                honest rejections. A human or a coding assistant can act on it alone.
-  evidence/<lever>/<node>/verdict.md            WHAT THE JUDGE FOUND, co-located with the raw text: per-input
-                                                verdict, rate (kept X/K · baseline Y/K), and reason.
-  evidence/<lever>/<node>/input-<i>/            the raw outputs to diff:
-    request.txt · before-original.txt · after-run-<j>.<kept|drift>.txt · baseline-<j>.<kept|drift>.txt
-  evidence/cache/<node>/reorged-prefix.txt      the reorged cacheable prefix (the cache "what to do")
+  report.md    the APPLY GUIDE — one block per proven fix (what / where / how / why / verify / caveat, artifacts
+               INLINE and paste-ready) + a machine-readable index + the honest rejections. Self-contained *for
+               action*: a human or a coding assistant can apply every fix from this file alone.
+  evidence.md  the PROOF APPENDIX — the raw runs behind every verdict: per call-site, the reference set (the current
+               model's own outputs) vs the re-runs, each tagged, with the rate. Read this to *verify* a
+               recommendation; you never need it to apply one.
 
-<lever> is `downgrade` or `cache` — BOTH are exported. The bulky per-run text stays OUT of report.md (a big agent
-would balloon it) and lives under evidence/ instead. stdlib zipfile only — zero dependencies.
+The split is deliberate: applying a fix needs the guide, not the receipts (evidence is pure noise to an agent
+applying a change, and balloons for a large agent); verifying a fix needs the receipts, on demand. stdlib zipfile
+only — zero dependencies.
 """
 import io
 import json
 import re
 import zipfile
 
-_VERDICT = {"SAFE": "safe to downgrade", "BORDERLINE": "borderline — flips, don't downgrade",
-            "NOT-SAFE": "not safe — keep current", "LOW-EVIDENCE": "needs more data",
-            "N/A": "already cheapest tier"}
+# per-INPUT rollup verdict, shown with the system's own words — BORDERLINE is its own state, NOT "not safe".
+_IV = {"SAFE": "safe", "NOT-SAFE": "not safe", "BORDERLINE": "borderline", "LOW-EVIDENCE": "low evidence"}
+
+_LEVER_LABEL = {"downgrade": "Model downgrade", "cache": "Cache-prefix expansion", "compress": "Prompt compression"}
+# the SAME short label in report.md's cross-reference and evidence.md's heading, so a reader matches them by name.
+_EV_LABEL = {"downgrade": "model downgrade", "cache": "cache-prefix", "compress": "prompt compression"}
 
 
 def _fmt(n):
     return "{:,.0f}".format(n or 0)
 
 
-def _slug(s):
-    return re.sub(r"[^a-zA-Z0-9._-]+", "-", str(s)).strip("-")[:60] or "node"
-
-
 def _sys_first_line(detail):
     """A greppable fingerprint of the call-site's system prompt — its first non-blank line — so a human or coding
-    assistant can locate the exact prompt in their source. From the compress lever's `original`, else the proof's
-    captured `system_before`."""
+    assistant can locate the exact prompt in their source. From the compress lever's `original`, else the first
+    input's captured system prompt (`system` on the refset engine, `system_before` on the legacy engine)."""
     sysm = detail.get("original") or ""
     if not sysm:
         inps = detail.get("inputs") or []
-        sysm = (inps[0].get("system_before") if inps else "") or ""
+        first = inps[0] if inps else {}
+        sysm = first.get("system") or first.get("system_before") or ""
     return next((ln.strip() for ln in sysm.splitlines() if ln.strip()), "")[:140]
 
 
@@ -52,14 +49,24 @@ def _drift(detail):
     return detail.get("reason") or ""
 
 
-_LEVER_LABEL = {"downgrade": "Model downgrade", "cache": "Cache-prefix expansion", "compress": "Prompt compression"}
+def _rate(inp):
+    """The per-input rate line. Refset downgrade reads the cheaper's fit against the reference set alongside the
+    original's own self-consistency; the legacy cache/compress engine reads kept vs an optional baseline."""
+    if inp.get("self_rate"):                                   # refset downgrade: cheaper fit · original self-consistency
+        return "cheaper %d/%d · original %s" % (inp.get("kept", 0), inp.get("k", 0), inp["self_rate"])
+    r = "kept %d/%d" % (inp.get("kept", 0), inp.get("k", 0))
+    if inp.get("self_kept") is not None:                       # legacy engine baseline
+        r += " · baseline %d/%d" % (inp["self_kept"], inp.get("k", 0))
+    return r
 
+
+# ─────────────────────────────────────────── report.md — the apply guide ───────────────────────────────────────────
 
 def _report_md(f, proof):
-    """The single deliverable: an APPLY GUIDE across all three levers, built ONLY from the frozen proof. One block per
+    """The deliverable: an APPLY GUIDE across all three levers, built ONLY from the frozen proof. One block per
     recommended fix (what / where / how / why / verify / caveat, artifacts INLINE and paste-ready), a machine-readable
-    index for a coding assistant, and an honest list of what was tested and rejected. Bulky per-run text still lives
-    under evidence/; nothing here is invented — every figure is measured."""
+    index for a coding assistant, and an honest list of what was tested and rejected. The raw runs live in
+    evidence.md; nothing here is invented — every figure is measured."""
     calls = f["calls"]
     unit = "%s calls" % _fmt(calls)
     results = proof["results"] if proof else []
@@ -93,7 +100,7 @@ def _report_md(f, proof):
     L.append("> These are **verified, behaviour-preserving** changes to your agent, each proven on real recorded "
              "inputs. Apply each at the named call-site **exactly as written** — the prompts and prefixes below were "
              "proven verbatim, so editing a proven artifact voids its proof. Advisory & read-only: you decide what to "
-             "apply.")
+             "apply. The raw runs behind every verdict are in **`evidence.md`** — you need only this file to apply.")
     L.append("")
     if total > 0:
         L.append("**$%s in verified savings per %s** — ↓ $%s model downgrade · ⚡ $%s cache-prefix · − $%s compression."
@@ -153,10 +160,11 @@ def _report_md(f, proof):
         ni, si, k = det.get("n", 0), det.get("safe_inputs", 0), det.get("k", 0)
         L += ["", "**Why it's safe**"]
         if lever == "downgrade":
-            L.append("- Re-ran %d distinct real inputs × %d each on `%s`, judged against the original model's own "
-                     "behaviour envelope (the commitments it holds constant vs the variation it naturally allows); "
-                     "held on **%d/%d**. The cheaper model gets exactly the latitude the original itself takes, so it "
-                     "is never blamed for normal variance." % (ni, k, det.get("cheaper"), si, ni))
+            L.append("- Re-ran %d distinct real input(s). On each, we ran your current model %d times to capture its "
+                     "own outputs — the **reference set**, i.e. the behaviour and the natural variation it already "
+                     "shows — then ran `%s` and judged each of its outputs against that set. It stayed within the set "
+                     "on **%d/%d**. The cheaper model is only held to the latitude your current model itself takes, so "
+                     "it is never penalised for variation the original already shows." % (ni, k, det.get("cheaper"), si, ni))
         elif lever == "compress":
             L.append("- The compressor kept every rule, number, code and tool name verbatim; behaviour then held on "
                      "**%d/%d** distinct real inputs × %d re-runs, judged against your recorded outputs." % (si, ni, k))
@@ -165,8 +173,8 @@ def _report_md(f, proof):
                      "output), **and** a live provider round-trip confirmed the new prefix actually cached." % (si, ni, k))
         L.append("- Saves **$%s per %s**." % (_fmt(usd), unit))
         L += ["", "**Verify & caveats**",
-              "- After applying, re-audit this call-site (or re-run these inputs and diff behaviour). Full evidence: "
-              "`evidence/%s/%s/`." % (lever, _slug(key))]
+              "- After applying, re-audit this call-site (or re-run these inputs and diff behaviour). Full proof: "
+              "**`evidence.md`** → `%s` (%s)." % (key, _EV_LABEL[lever])]
         if lever == "compress":
             L.append("- Do **not** further shorten this text — it was proven exactly as written; more cuts void the proof.")
         if lever == "cache":
@@ -187,7 +195,8 @@ def _report_md(f, proof):
     # ── the honest 'no' — tested and rejected, so nothing is silently touched ──
     if rejects:
         L += ["## Tested and not recommended (keep current)",
-              "We tried these and the proof said no — listed so you know what was tested and *not* to touch:"]
+              "We tried these and the proof said no — listed so you know what was tested and *not* to touch. The runs "
+              "behind each are in `evidence.md`:"]
         for key, lever, verdict, reason in rejects:
             L.append("- `%s` · %s → **%s**%s" % (key, lever, verdict, (" — %s" % reason) if reason else ""))
         L.append("")
@@ -198,93 +207,97 @@ def _report_md(f, proof):
     return "\n".join(L) + "\n"
 
 
-# per-INPUT rollup verdict, shown with the system's own words — BORDERLINE is its own state, NOT "not safe".
-_IV = {"SAFE": "safe", "NOT-SAFE": "not safe", "BORDERLINE": "borderline", "LOW-EVIDENCE": "low evidence"}
+# ────────────────────────────────────────── evidence.md — the proof appendix ───────────────────────────────────────
+
+def _first_system(inputs):
+    for inp in inputs:
+        s = inp.get("system") or inp.get("system_before")
+        if s:
+            return s
+    return ""
 
 
-def _rate(inp):
-    r = "%d/%d" % (inp.get("kept", 0), inp.get("k", 0))
-    if inp.get("self_rate"):                                  # profiled downgrade: original's own self-consistency
-        r += " · original %s" % inp["self_rate"]
-    elif inp.get("self_kept") is not None:                    # legacy cache/compress engine
-        r += " · baseline %d/%d" % (inp["self_kept"], inp.get("k", 0))
-    return r
+def _ev_headline(lever, det, x):
+    """The one-line summary under a call-site×lever heading in evidence.md."""
+    if lever == "downgrade":
+        return "current `%s` → `%s` · verdict **%s** (%d/%d input(s) safe)" % (
+            det.get("model") or x.get("model"), det.get("cheaper"), det.get("verdict"),
+            det.get("safe_inputs", 0), det.get("n", 0))
+    if lever == "cache":
+        return "verdict **%s**" % ("recommended" if det.get("recommend") else "not recommended")
+    tok = (" · %s → %s tokens" % (det.get("before_tok"), det.get("after_tok"))) if det.get("after_tok") else ""
+    return "verdict **%s**%s" % (det.get("verdict", "?"), tok)
 
 
-def _verdict_md(node_name, lever_label, headline, r):
-    """The judge's findings for one call-site's lever — written NEXT TO the raw text so 'what the judge found' is
-    readable without cross-referencing report.md. Per input: rollup verdict, rate, and the reason."""
-    L = ["# %s — %s" % (node_name, lever_label), "", headline, ""]
-    inputs = r.get("inputs", [])
-    if not inputs:
-        L.append(r.get("reason", "") or "no behaviour test ran for this call-site.")
-        return "\n".join(L) + "\n"
-    L.append("Behaviour test — %d distinct inputs × %d re-runs each; every re-run is judged against the recorded "
-             "original (before-original.txt) and tagged kept/drift in its filename." % (r.get("n", 0), r.get("k", 0)))
-    L.append("")
-    for i, inp in enumerate(inputs, 1):
-        L.append("## input %d — %s (%s)" % (i, _IV.get(inp["verdict"], inp["verdict"]), _rate(inp)))
-        L.append("- request: %s" % ((inp.get("input", "") or "")[:200].replace("\n", " ")))
-        L.append("- judge: %s" % (inp.get("note") or inp.get("reason", "")))
-        if inp.get("commitments"):        # profiled downgrade: the learned contract the cheaper was judged against
-            L.append("- commitments (must hold): %s" % (inp["commitments"].replace("\n", " ")[:400]))
-            L.append("- allowed variation: %s" % ((inp.get("allowed_variation") or "none").replace("\n", " ")[:300]))
-            if inp.get("confidence"):
-                L.append("- profile confidence: %s" % (inp["confidence"].splitlines()[0][:120]))
-        L.append("- raw: `input-%d/before-original.txt` vs `input-%d/after-run-*.txt`%s"
-                 % (i, i, " (+ baseline-*.txt = the original's own re-runs)" if inp.get("baseline") else ""))
-        L.append("")
+def _runs_block(L, title, runs, tag_true, tag_false):
+    """A labelled list of outputs, each tagged (+ votes / reason), one fenced block per output. Full text — this is
+    the proof; truncating it defeats the purpose."""
+    if not runs:
+        return
+    L += ["", "**%s**" % title]
+    for i, r in enumerate(runs, 1):
+        vt = (" · %s" % r["votes"]) if r.get("votes") else ""
+        rs = (" — %s" % r["reason"]) if r.get("reason") else ""
+        L += ["", "%d · _%s_%s%s" % (i, tag_true if r.get("preserved") else tag_false, vt, rs),
+              "```text", (r.get("output") or "(empty)"), "```"]
+
+
+def _evidence_input(L, i, inp, cheaper):
+    req = (inp.get("input") or "").strip().replace("\n", " ")
+    L += ["", "#### input %d — %s" % (i, (req[:100] or "(no user text)")),
+          "", "- verdict: **%s** · %s" % (_IV.get(inp["verdict"], inp["verdict"]), _rate(inp))]
+    if inp.get("note") or inp.get("reason"):
+        L.append("- judge: %s" % (inp.get("note") or inp.get("reason")))
+    if inp.get("orig_runs"):                                   # refset downgrade: reference set vs cheaper
+        _runs_block(L, "Reference set — your current model's own outputs", inp["orig_runs"], "fits", "differs")
+        title = "Cheaper model's outputs" + ((" (`%s`)" % cheaper) if cheaper else "")
+        _runs_block(L, title, inp.get("samples", []), "fits", "differs")
+    else:                                                      # legacy cache/compress: recorded original vs re-runs
+        L += ["", "**Recorded original**", "```text", (inp.get("recorded") or "(empty)"), "```"]
+        _runs_block(L, "Re-runs", inp.get("samples", []), "kept", "drift")
+
+
+def _evidence_md(f, proof):
+    """The raw runs behind every verdict — for verification, not application. Every audited call-site×lever with
+    per-input data is shown (fixes AND rejections), so a skeptic can reproduce any verdict."""
+    results = proof["results"] if proof else []
+    L = ["# Token Audit — %s · Evidence" % f["agent"], "",
+         "> The raw runs behind every verdict in `report.md` — read this to **verify** a recommendation; `report.md` "
+         "alone is enough to **apply** one. Each re-run was judged live against real recorded inputs; nothing here is "
+         "invented.", ""]
+    any_ev = False
+    for x in results:
+        key = x.get("key") or x["node"]
+        for lever in ("downgrade", "cache", "compress"):
+            det = x.get(lever)
+            if not det or (lever == "cache" and det.get("informational")):
+                continue
+            inputs = det.get("inputs") or []
+            if not inputs:
+                continue
+            any_ev = True
+            L += ["## `%s` — %s" % (key, _EV_LABEL[lever]), "", _ev_headline(lever, det, x)]
+            sysm = _first_system(inputs)
+            if sysm:
+                L += ["", "System prompt (constant for this call-site):", "```text", sysm, "```"]
+            for i, inp in enumerate(inputs, 1):
+                _evidence_input(L, i, inp, det.get("cheaper"))
+            L.append("")
+    if not any_ev:
+        L.append("_No per-input evidence was captured — nothing was audited live._")
     return "\n".join(L) + "\n"
 
 
-def _write_inputs(z, root, inputs):
-    """The raw outputs to diff, per input: request, the 'before' (recorded original), each 'after' re-run tagged
-    kept/drift, and the self-variance baseline runs."""
-    for i, inp in enumerate(inputs, 1):
-        base = "%s/input-%d" % (root, i)
-        z.writestr("%s/request.txt" % base, inp.get("input", ""))
-        z.writestr("%s/before-original.txt" % base, inp.get("recorded", ""))
-        for j, s in enumerate(inp.get("samples", []), 1):
-            z.writestr("%s/after-run-%d.%s.txt" % (base, j, "kept" if s.get("preserved") else "drift"), s.get("output", ""))
-        for j, s in enumerate(inp.get("baseline", []), 1):
-            z.writestr("%s/baseline-%d.%s.txt" % (base, j, "kept" if s.get("preserved") else "drift"), s.get("output", ""))
-
-
 def build_zip(f, proof):
-    """Return the audit record as ZIP bytes: report.md (the deliverable) + COMPLETE evidence for BOTH levers."""
+    """Return the audit record as ZIP bytes: exactly two files — report.md (the deliverable) and evidence.md (the
+    proof appendix). evidence.md is written only when there is per-input evidence to show."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("report.md", _report_md(f, proof))
-        for x in (proof["results"] if proof else []):
-            node = _slug(x.get("key") or x["node"])          # slug the UNIQUE key so same-labelled call-sites split
-            d = x.get("downgrade")
-            if d:
-                head = "%s → %s · verdict: %s" % (d.get("model", "?"), d.get("cheaper", "-"),
-                                                  _VERDICT.get(d["verdict"], d["verdict"]))
-                root = "evidence/downgrade/%s" % node
-                z.writestr("%s/verdict.md" % root, _verdict_md(x["node"], "model-tier downgrade", head, d))
-                _write_inputs(z, root, d.get("inputs", []))
-            c = x.get("cache")
-            if c and not c.get("informational"):
-                b = (c.get("before") or {}).get("read", 0) or 0
-                a = (c.get("after") or {}).get("read", 0) or 0
-                head = "cacheable-prefix reorg · verdict: %s" % ("recommended" if c.get("recommend") else "not recommended")
-                if c.get("after"):
-                    head += "\ncached tokens per call: before %d → after %d" % (b, a)
-                root = "evidence/cache/%s" % node
-                z.writestr("%s/verdict.md" % root, _verdict_md(x["node"], "cacheable prefix", head, c))
-                if c.get("prefix"):
-                    z.writestr("%s/reorged-prefix.txt" % root, c.get("prefix", ""))
-                _write_inputs(z, root, c.get("inputs", []))
-            cp = x.get("compress")
-            if cp:
-                head = "prompt compression · verdict: %s" % cp.get("verdict", "?")
-                if cp.get("after_tok"):
-                    head += "\nsystem prompt tokens: before %s → after %s (%s)" % (
-                        cp.get("before_tok"), cp.get("after_tok"), cp.get("mode", "-"))
-                root = "evidence/compress/%s" % node
-                z.writestr("%s/verdict.md" % root, _verdict_md(x["node"], "prompt compression", head, cp))
-                if cp.get("verdict") == "SAFE" and cp.get("compressed"):   # the "what to do": the shorter system prompt
-                    z.writestr("%s/compressed-system.txt" % root, cp.get("compressed", ""))
-                _write_inputs(z, root, cp.get("inputs", []))
+        has_ev = any((x.get(lv) or {}).get("inputs")
+                     for x in (proof["results"] if proof else [])
+                     for lv in ("downgrade", "cache", "compress")
+                     if not (lv == "cache" and (x.get(lv) or {}).get("informational")))
+        if has_ev:
+            z.writestr("evidence.md", _evidence_md(f, proof))
     return buf.getvalue()
