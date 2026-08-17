@@ -30,7 +30,7 @@
 </section>
 
 <script>
-  const STREAM = {{ base | tojson }} + '/build-stream?snap=' + encodeURIComponent({{ snap | tojson }});
+  const STREAM = {{ base | tojson }} + '/build-stream?snap=' + encodeURIComponent({{ snap | tojson }}){% if next %} + '&next=' + encodeURIComponent({{ next | tojson }}){% endif %};
   const stage = document.getElementById('stage'), fill = document.getElementById('fill'),
         err = document.getElementById('err'), spin = document.getElementById('spin');
   let handled = false;

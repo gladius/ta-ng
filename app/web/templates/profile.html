@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% set base = '/s/' ~ source ~ '/ws/' ~ ws_id ~ '/agent/' ~ (project | urlencode) %}
+{% set h = prof.header %}
+{% set d = prof.deployment %}
+{% block title %}{{ h.agent }} · profile{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · profile</b>{% endblock %}
+{% block content %}
+<style>
+  .pf-top{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+  .pf-top .eyebrow{text-transform:uppercase;letter-spacing:.1em;font-size:11px;font-weight:700;color:var(--faint)}
+  .v-agent{font-family:'Plex Mono',ui-monospace,monospace;font-size:13px;color:var(--muted)}
+  .pf-hero h1{font-size:25px;font-weight:700;letter-spacing:-.02em;margin:0 0 4px}
+  .pf-hero .kind{color:var(--accent);font-weight:700}
+  .pf-hero .dsum{color:var(--ink);font-size:15px;margin:.4rem 0 0;max-width:80ch;line-height:1.55}
+  .pf-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:var(--s5) 0}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+  .stat .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+  .stat .v{font-size:20px;font-weight:700;letter-spacing:-.02em;margin-top:3px;font-variant-numeric:tabular-nums}
+  .stat .v small{font-size:12px;font-weight:500;color:var(--muted)}
+  .hotbar{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px;color:var(--muted);margin:0 0 var(--s5)}
+  .hotbar b{color:var(--ink);font-weight:600}
+  .cta-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:0 0 var(--s5)}
+  .btn2{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:8px;border:1px solid var(--accent);
+        background:var(--accent);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer}
+  .btn2[disabled]{opacity:.6;cursor:default}
+  .cta-note{font-size:12.5px;color:var(--muted)}
+  .prog{flex:1;min-width:200px;max-width:360px;height:6px;border-radius:999px;background:rgba(128,128,128,.2);overflow:hidden;display:none}
+  .prog .fill{height:100%;width:6%;background:var(--accent);border-radius:999px;transition:width .4s ease}
+  .sec{margin:var(--s5) 0}
+  .sec-h{display:flex;align-items:baseline;gap:10px;margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  .sec-h .nm{font-size:14px;font-weight:700;letter-spacing:.01em}
+  .sec-h .gp{font-size:11px;color:var(--faint);font-family:'Plex Mono',ui-monospace,monospace}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:13px 15px;margin-bottom:10px}
+  .card.tool{border-left:3px solid #6d4aad}
+  .card.retriever{border-left:3px solid #1f7a5a}
+  .card.llm{border-left:3px solid var(--accent)}
+  .card-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .op{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:6px;background:var(--line);color:var(--muted)}
+  .op.llm{background:var(--accent-weak,#f6e5e4);color:var(--accent)}
+  .op.tool{background:#efe9f6;color:#6d4aad}
+  .op.retriever{background:#e5f2ec;color:#1f7a5a}
+  .nname{font-weight:700;font-size:14.5px}
+  .nmodel{font-family:'Plex Mono',ui-monospace,monospace;font-size:12px;color:var(--muted)}
+  .tier{font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:4px;background:var(--line);color:var(--muted);text-transform:uppercase}
+  .badge{font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:5px;background:#f3ead9;color:#8a5b00}
+  .badge.warn{background:#fbe4e2;color:#a3271f}
+  .summary{font-size:13.5px;color:var(--ink);line-height:1.5;margin:7px 0 0}
+  .summary.faint{color:var(--faint);font-style:italic}
+  .metrics{display:flex;flex-wrap:wrap;gap:5px 16px;margin-top:9px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .metrics b{color:var(--ink);font-weight:600}
+  .note{font-size:12.5px;color:var(--muted);margin:0 0 var(--s4)}
+  .note.warn{color:#9a6a00}
+  .note.faint{color:var(--faint)}
+  .foot{margin-top:var(--s5);padding-top:var(--s4);border-top:1px solid var(--line)}
+</style>
+
+<section class="pf-hero">
+  <div class="pf-top"><span class="eyebrow">Deployment profile</span><span class="v-agent">{{ h.agent }}</span></div>
+  {% if d and d.summary %}
+    <h1>{% if d.kind %}<span class="kind">{{ d.kind }}</span>{% else %}What this deployment does{% endif %}</h1>
+    <p class="dsum">{{ d.summary }}</p>
+  {% else %}
+    <h1>What this deployment does</h1>
+    <p class="dsum faint" style="color:var(--muted)">Measured facts below. Run the per-node analysis to add what each node <em>does</em> (one LLM read per call-site) and a deployment summary.</p>
+  {% endif %}
+</section>
+
+<section class="pf-stats">
+  <div class="stat"><div class="k">Cost / {{ (h.cost_basis // 1000) }}k calls</div><div class="v">${{ '{:,.2f}'.format(h.total_cost_basis) }}</div></div>
+  <div class="stat"><div class="k">Call-sites</div><div class="v">{{ h.call_sites }} <small>llm</small></div></div>
+  <div class="stat"><div class="k">Tool / retriever</div><div class="v">{{ h.tool_count }} <small>/ {{ h.retriever_count }}</small></div></div>
+  <div class="stat"><div class="k">Traces</div><div class="v">{{ '{:,}'.format(h.traces) }}</div></div>
+  <div class="stat"><div class="k">Subgraphs</div><div class="v">{{ h.subgraphs | length }}</div></div>
+  <div class="stat"><div class="k">Error rate</div><div class="v">{{ '{:.1%}'.format(h.error_rate) }}</div></div>
+</section>
+
+{% if prof.hotspots %}
+<div class="hotbar">
+  {% if prof.hotspots.costliest %}<span><b>Costliest:</b> {{ prof.hotspots.costliest.node }} (${{ '{:,.2f}'.format(prof.hotspots.costliest.per_basis) }})</span>{% endif %}
+  <span><b>Busiest:</b> {{ prof.hotspots.busiest.node }} ({{ prof.hotspots.busiest.calls }}×)</span>
+  {% if prof.hotspots.slowest %}<span><b>Slowest:</b> {{ prof.hotspots.slowest.node }} ({{ prof.hotspots.slowest.avg_ms }}ms)</span>{% endif %}
+  {% if prof.hotspots.errors_excluded %}<span><b>Excluded (failed):</b> {{ prof.hotspots.errors_excluded }}</span>{% endif %}
+  {% if h.revisions %}<span><b>Versions:</b> {{ h.revisions | join(', ') }}</span>{% endif %}
+</div>
+{% endif %}
+
+<div class="cta-row">
+  {% if not h.has_comprehension %}
+    <button class="btn2" id="go" onclick="runAnalysis()">▸ Generate per-node analysis</button>
+    <div class="prog" id="prog"><div class="fill" id="fill"></div></div>
+    <span class="cta-note" id="cnote">One LLM read per call-site + a deployment summary — grounded in the system prompt &amp; user frame.</span>
+  {% else %}
+    <span class="cta-note">✓ Per-node analysis computed. <a href="{{ base }}/select?snap={{ snap }}">Audit savings on this snapshot ›</a></span>
+  {% endif %}
+</div>
+
+{% if h.price_incomplete %}<p class="note warn">Some models aren't in the price catalog — their cost shows &ldquo;—&rdquo;. Add them to <code>auditor/models.json</code>.</p>{% endif %}
+
+{% for sec in prof.sections %}
+<section class="sec">
+  <div class="sec-h"><span class="nm">{{ sec.name }}</span>{% if sec.graph_path %}<span class="gp">subgraph</span>{% else %}<span class="gp">top level</span>{% endif %}</div>
+  {% for n in sec.nodes %}
+  <div class="card {{ n.kind }}">
+    <div class="card-top">
+      <span class="op {{ n.kind }}">{{ n.op or n.kind }}</span>
+      <span class="nname">{{ n.node }}</span>
+      {% if n.kind == 'llm' %}
+        <span class="nmodel">{{ n.model }}</span>{% if n.tier %}<span class="tier">{{ n.tier }}</span>{% endif %}
+        {% if n.mixed %}<span class="badge">mixed-model</span>{% endif %}
+        {% if n.untagged %}<span class="badge warn">untagged</span>{% endif %}
+        {% if n.coherence and n.coherence.verdict == 'possible_mixed_bucket' %}<span class="badge warn">possible mixed bucket</span>{% endif %}
+        {% if not n.cost.known %}<span class="badge">price unknown</span>{% endif %}
+      {% endif %}
+    </div>
+    {% if n.kind == 'llm' %}
+      {% if n.unavailable %}
+        <p class="summary faint">analysis unavailable — {{ n.unavailable }}</p>
+      {% elif n.summary %}
+        <p class="summary">{{ n.summary }}</p>
+      {% else %}
+        <p class="summary faint">shape: {{ n.shape }} — run the analysis for what it does.</p>
+      {% endif %}
+      <div class="metrics">
+        <span><b>{{ n.calls }}</b> calls</span>
+        <span>in <b>{{ '{:,}'.format(n.avg_in) }}</b> → out <b>{{ '{:,}'.format(n.avg_out) }}</b>{% if n.out_p95 %} (p95 {{ n.out_p95 }}){% endif %}</span>
+        {% if n.cost.per_basis is not none %}<span><b>${{ '{:,.2f}'.format(n.cost.per_basis) }}</b>/{{ (h.cost_basis // 1000) }}k{% if n.cost.source == 'langsmith' %}*{% endif %}</span>{% endif %}
+        {% if n.cache_mode %}<span>cache: {{ n.cache_mode }}</span>{% endif %}
+        {% if n.error_rate %}<span style="color:#a3271f">err {{ '{:.0%}'.format(n.error_rate) }}</span>{% endif %}
+        {% if n.ttft_ms is not none %}<span>ttft {{ n.ttft_ms }}ms</span>{% endif %}
+        {% if n.feedback_score is not none %}<span>fb {{ n.feedback_score }}</span>{% endif %}
+        {% if n.confidence %}<span class="faint" style="color:var(--faint)">analysis: {{ n.confidence }} conf</span>{% endif %}
+      </div>
+    {% else %}
+      <p class="summary">{{ n.summary }}</p>
+      <div class="metrics">
+        <span><b>{{ n.calls }}</b> calls</span>
+        {% if n.error_rate %}<span style="color:#a3271f">err {{ '{:.0%}'.format(n.error_rate) }}</span>{% endif %}
+        {% if n.avg_ms %}<span><b>{{ n.avg_ms }}</b>ms avg</span>{% endif %}
+        <span class="faint" style="color:var(--faint)">no tokens (non-llm)</span>
+      </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endfor %}
+
+<div class="foot">
+  <p class="note faint">Facts measured over {{ h.traces }} traces in this snapshot — a thin sample means noisy averages (sample size shown, not hidden). Cost = tokens × catalog price (same source the downgrade lever uses); <b>*</b> = LangSmith estimate for a model not in the catalog. The per-node <b>operation</b> + <b>summary</b> and the deployment summary are an <b>advisory</b> LLM read of the system prompt &amp; user frame — descriptive only; no saving is asserted here (the levers prove those).</p>
+  <p class="note faint">Untagged nodes (no LangGraph node metadata) are flagged, not silently merged — distinct untagged operations that share a class name are not yet split apart.</p>
+</div>
+
+<script>
+  function runAnalysis() {
+    var btn = document.getElementById('go'), prog = document.getElementById('prog'),
+        fill = document.getElementById('fill'), note = document.getElementById('cnote');
+    btn.disabled = true; btn.textContent = 'Analyzing…'; prog.style.display = 'block';
+    var url = {{ base | tojson }} + '/comprehend-stream?snap=' + encodeURIComponent({{ snap | tojson }});
+    var es = new EventSource(url), handled = false;
+    es.addEventListener('stage', function(e){ var d = JSON.parse(e.data); note.textContent = d.msg; fill.style.width = (d.pct||6) + '%'; });
+    es.addEventListener('done', function(e){ handled = true; es.close(); fill.style.width = '100%'; note.textContent = 'Done — loading…'; location.reload(); });
+    es.addEventListener('failed', function(e){ handled = true; es.close(); btn.disabled = false; btn.textContent = '▸ Retry analysis';
+      var m = 'analysis failed'; try { m = JSON.parse(e.data).msg || m; } catch(_){} note.textContent = m; });
+    es.onerror = function(){ if (handled) return; handled = true; es.close(); btn.disabled = false; btn.textContent = '▸ Retry analysis'; note.textContent = 'connection interrupted'; };
+  }
+</script>
+{% endblock %}

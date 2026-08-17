@@ -142,11 +142,14 @@ def _resolve_node(rec, by_id):
     return str(rec.get("name") or "llm"), False          # last resort: the model class name (untagged)
 
 
-def _resolve_path(rec, by_id):
-    """The graph/subgraph nesting for an llm run — the chain of NAMED ancestor nodes (outer -> inner), EXCLUDING
-    the run's own node. '' at top level. Framework-agnostic: derived from the run TREE, so multiagent subgraphs
-    group correctly even when LangGraph's checkpoint_ns metadata is absent. Used only as a fallback when the trace
-    doesn't already carry a graph_path."""
+def _resolve_path(rec, by_id, exclude=None):
+    """The graph/subgraph nesting for a run — the chain of NAMED ancestor nodes (outer -> inner), EXCLUDING the
+    run's OWN node (`exclude` = its container chain, which in LangGraph shares the node's name). '' at top level.
+    Derived from the run TREE, so multiagent subgraphs group even when LangGraph's checkpoint_ns is absent; a
+    fallback used only when the trace doesn't already carry a graph_path.
+
+    The exclude is load-bearing: a top-level 'supervisor' llm sits under its own 'supervisor' chain, so without
+    dropping that container EVERY tagged node was mis-nested under itself ('agent/supervisor/supervisor')."""
     path, seen, cur = [], set(), rec.get("parent_run_id")
     while cur and str(cur) not in seen:
         seen.add(str(cur))
@@ -154,21 +157,23 @@ def _resolve_path(rec, by_id):
         if p is None:
             break
         name = p.get("node_hint") or (p.get("name") if p.get("run_type") == "chain" else None)
-        if name and not _is_generic(name):
+        if name and not _is_generic(name) and str(name) != str(exclude):
             path.append(str(name))
         cur = p.get("parent_run_id")
     return "/".join(reversed(path))
 
 
 class Graph:
-    def __init__(self, agent, buckets, nodes, edges, trace_count, errors_excluded=0, revisions=None):
+    def __init__(self, agent, buckets, nodes, edges, trace_count, errors_excluded=0, revisions=None,
+                 structural_nodes=None):
         self.agent = agent
         self.buckets = buckets                           # OrderedDict[key -> list[trace]]  (downstream API)
-        self.nodes = nodes
-        self.edges = edges
+        self.nodes = nodes                               # llm call-sites (tokens/cost/deep facts)
+        self.edges = edges                               # subgraph-qualified node->node flow (all run types)
         self.trace_count = trace_count
         self.errors_excluded = errors_excluded           # failed samples dropped from ALL buckets (honesty count)
         self.revisions = revisions or []                 # distinct agent versions seen (latest-pin / selector later)
+        self.structural_nodes = structural_nodes or []   # typed NON-llm nodes (tool/retriever): the whole deployment
 
 
 def build_graph(records, agent_default="agent"):
@@ -181,28 +186,17 @@ def build_graph(records, agent_default="agent"):
     for r in records:
         by_trace.setdefault(str(r.get("trace_id") or ""), []).append(r)
 
-    # PASS 1 — resolve every llm run to (node_label, tagged, shape_sig); collect the shape variants per node
+    # PASS 1 — resolve every llm run to (node_label, tagged, shape_sig) + its subgraph path. Topology (edges)
+    # is built separately below over ALL run types, so this pass only needs the llm samples (for stats).
     resolved = []                                        # (rec, node_label, tagged, sig)
     paths = {}                                           # rec id -> tree-derived graph/subgraph path (fallback)
-    node_order_per_trace = OrderedDict()                 # trace_id -> [node_label in first-seen dotted order]
     for tid, runs in by_trace.items():
         by_id = {str(r["id"]): r for r in runs if r.get("id")}
-        order = []
         for rec in sorted(runs, key=lambda r: (r.get("dotted_order") or "", r.get("start_time") or "")):
-            node = None
-            elig_sample = True
-            if rec.get("run_type") == "chain" and not _is_generic(rec.get("name")):
-                node = rec.get("node_hint") or rec.get("name")
             if rec.get("trace") is not None and not rec.get("skip"):      # a profileable llm sample
                 nl, tagged = _resolve_node(rec, by_id)
-                paths[str(rec.get("id"))] = _resolve_path(rec, by_id)     # subgraph nesting from the tree (fallback)
-                sig = _shape_sig(rec["trace"])
-                resolved.append((rec, nl, tagged, sig))               # kept for stats + error_rate (all samples)
-                node = node or nl
-                elig_sample = eligible(rec["trace"])[0]               # but only SUCCESSFUL samples define the path
-            if node and elig_sample and (not order or order[-1] != node):
-                order.append(node)
-        node_order_per_trace[tid] = order
+                paths[str(rec.get("id"))] = _resolve_path(rec, by_id, exclude=nl)  # subgraph nesting (OWN node excluded)
+                resolved.append((rec, nl, tagged, _shape_sig(rec["trace"])))  # kept for stats + error_rate (all samples)
 
     # FRAME SUB-SPLIT — a node's NO-TOOL calls that carry DISTINCT authored frames co-occurring in one trace
     # (plan+critique) are DIFFERENT call-sites; the binary tool/no-tool variant alone merges them, polluting
@@ -303,12 +297,67 @@ def build_graph(records, agent_default="agent"):
                       "out_p50": _pct(s["out_list"], 0.50), "out_p95": _pct(s["out_list"], 0.95),  # output distribution
                       "first": s["first"], "last": s["last"]})
 
-    # edges — observed node->node transitions across all traces (topology)
+    # ── whole-DEPLOYMENT topology ────────────────────────────────────────────────────────────────────
+    # Node identity here is the STABLE, subgraph-qualified key 'agent/[path/]label' — the SAME key the llm
+    # nodes use (PASS 2, sans ~variant) — so edges JOIN to nodes, and same-named nodes in different subgraphs
+    # ('billing/worker' vs 'refund/worker') stay distinct instead of blending into one ambiguous 'worker'.
+    def _skey(gp, label):
+        gp = (gp or "").strip("/")
+        return "%s/%s%s" % (agent, (gp + "/") if gp else "", label)
+
+    def _run_key(rec, by_id):
+        """Stable topology key for a run that participates in the flow — an llm's resolved node, a named graph
+        node (chain), or a tool/retriever operation — else None (generic scaffolding, or a FAILED llm, which is
+        not a decision edge). The container chain + its llm resolve to the SAME key, so they collapse to 1 node."""
+        rt = rec.get("run_type")
+        if rt in (None, "llm") and rec.get("trace") is not None and not rec.get("skip"):
+            if not eligible(rec["trace"])[0]:
+                return None
+            nl, _ = _resolve_node(rec, by_id)
+            return _skey(_gp(rec), nl)
+        name = rec.get("node_hint") or rec.get("name")
+        if not name or _is_generic(name):
+            return None
+        if rt in ("chain", "tool", "retriever"):
+            return _skey((rec.get("graph_path") or "").strip("/"), name)
+        return None
+
     edge_ct = {}
-    for order in node_order_per_trace.values():
-        for a, b in zip(order, order[1:]):
+    for tid, runs in by_trace.items():
+        by_id = {str(r["id"]): r for r in runs if r.get("id")}
+        seq = []
+        for rec in sorted(runs, key=lambda r: (r.get("dotted_order") or "", r.get("start_time") or "")):
+            k = _run_key(rec, by_id)
+            if k and (not seq or seq[-1] != k):          # collapse a container chain + its own llm into one node
+                seq.append(k)
+        for a, b in zip(seq, seq[1:]):                    # A->B->A (ReAct: node -> tool -> node) is a real cycle
             edge_ct[(a, b)] = edge_ct.get((a, b), 0) + 1
     edges = [{"src": a, "dst": b, "count": c} for (a, b), c in sorted(edge_ct.items(), key=lambda kv: -kv[1])]
 
+    # typed NON-llm nodes (tool / retriever) — structural facts only (no tokens/cost): the deployment beyond llm.
+    # A tool that ERRORED is surfaced here (error_rate); latency comes from the run's own wall-clock.
+    struct = OrderedDict()
+    for tid, runs in by_trace.items():
+        for rec in runs:
+            if rec.get("run_type") not in ("tool", "retriever"):
+                continue
+            name = rec.get("node_hint") or rec.get("name") or rec.get("run_type")
+            if _is_generic(name):
+                continue
+            gp = (rec.get("graph_path") or "").strip("/")
+            a = struct.setdefault(_skey(gp, name),
+                                  {"key": _skey(gp, name), "type": rec["run_type"], "node": name,
+                                   "graph_path": gp, "calls": 0, "errors": 0, "ms": 0, "traces": set()})
+            a["calls"] += 1
+            a["errors"] += 1 if rec.get("error") else 0
+            a["ms"] += rec.get("runtime_ms") or 0
+            a["traces"].add(str(rec.get("trace_id") or ""))
+    structural_nodes = [{"key": a["key"], "type": a["type"], "node": a["node"], "graph_path": a["graph_path"],
+                         "calls": a["calls"], "errors": a["errors"], "traces": len(a["traces"]),
+                         "error_rate": round(a["errors"] / max(1, a["calls"]), 3),
+                         "avg_ms": round(a["ms"] / max(1, a["calls"]))}
+                        for a in struct.values()]
+
     return Graph(agent, buckets, nodes, edges, len([t for t in by_trace if t]),
-                 errors_excluded=sum(excluded.values()), revisions=sorted(revs))
+                 errors_excluded=sum(excluded.values()), revisions=sorted(revs),
+                 structural_nodes=structural_nodes)

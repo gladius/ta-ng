@@ -78,11 +78,55 @@ def report_view(request: Request, source: str, ws_id: str, project: str, snap: s
                  f=f, proof=proof, dg=dg, ca=ca, co=co, snap=snap, levers=LEVERS)
 
 
+@app.get("/s/{source}/ws/{ws_id}/agent/{project}/profile", response_class=HTMLResponse)
+def profile_view(request: Request, source: str, ws_id: str, project: str, snap: str = ""):
+    """Deployment PROFILE — a read-only VIEW of a PINNED snapshot (identity can't drift). It never builds
+    inline: no/unknown snap -> mint an id and build ONCE via the shared SSE flow (building.html), landing
+    back here on the same snap — exactly like report_view, so a live pull isn't a frozen page and we don't
+    mint a fresh snapshot on every bare hit."""
+    from app.services import snapshot, store
+    from app.services.profile.assemble import build_profile
+    from app.services.profile import comprehend
+    g = snapshot.get(snap, source, ws_id, project) if snap else None
+    if g is None:
+        sid = snapshot.new_id()
+        return _page(request, "building.html", source=source, ws_id=ws_id, project=project,
+                     snap=sid, agent=project, next="profile")
+    comp = store.peek(comprehend.comprehend_key(source, ws_id, project, snap))   # advisory layer, if already run
+    return _page(request, "profile.html", source=source, ws_id=ws_id, project=project, snap=snap,
+                 prof=build_profile(g, comp=comp))
+
+
+@app.get("/s/{source}/ws/{ws_id}/agent/{project}/comprehend-stream")
+def comprehend_stream(source: str, ws_id: str, project: str, snap: str = ""):
+    """SSE — compute the per-node comprehension (op + summary) + a deployment summary over the PINNED snapshot,
+    node by node so the wait is visible, then FREEZE it. Paid: one small PROFILE_MODEL call per llm node + one
+    synthesis call. The report re-renders with it on reload. Sync endpoint -> threadpool, never blocks the loop."""
+    from app.services import snapshot
+    from app.services.profile import comprehend
+
+    def gen():
+        g = snapshot.get(snap, source, ws_id, project)
+        if g is None:
+            yield _sse("failed", {"msg": "snapshot expired — reopen the profile to rebuild"})
+            return
+        try:
+            for evt in comprehend.stream(source, ws_id, project, snap,
+                                         g.get("nodes", []), g.get("buckets", {}), g.get("edges", [])):
+                yield _sse(evt.get("type", "stage"), evt)
+        except Exception as e:
+            yield _sse("failed", {"msg": str(e)[:300]})
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/build-stream")
-def build_stream(source: str, ws_id: str, project: str, snap: str):
+def build_stream(source: str, ws_id: str, project: str, snap: str, next: str = ""):
     """SSE — build the graph ONCE (pinned under `snap`), streaming coarse progress so the wait is visible (not a
-    frozen page), then hand back the SELECT url for this snap. `failed` on a build error. Sync endpoint => runs in
-    the threadpool, never blocks the loop. The heavy work is one bulk pull (~3 paginated calls) + fold."""
+    frozen page), then hand back the url for this snap. `next=profile` lands on the profile view; otherwise the
+    select workbench (default). `failed` on a build error. Sync endpoint => runs in the threadpool, never blocks
+    the loop. The heavy work is one bulk pull (~3 paginated calls) + fold."""
     from app.services import snapshot
 
     def gen():
@@ -94,7 +138,8 @@ def build_stream(source: str, ws_id: str, project: str, snap: str):
             return
         yield _sse("stage", {"msg": "Found %d call-sites across %d traces"
                              % (len(g.get("nodes", [])), g.get("traces", 0)), "pct": 92})
-        base = "/s/%s/ws/%s/agent/%s/select" % (source, ws_id, quote(project, safe=""))
+        target = "profile" if next == "profile" else "select"
+        base = "/s/%s/ws/%s/agent/%s/%s" % (source, ws_id, quote(project, safe=""), target)
         yield _sse("done", {"url": "%s?snap=%s" % (base, snap)})
 
     return StreamingResponse(gen(), media_type="text/event-stream",

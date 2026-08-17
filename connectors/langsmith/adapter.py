@@ -255,6 +255,9 @@ class LangSmithAdapter(Adapter):
                 "start_time": _iso(rec.get("start_time")), "end_time": _iso(rec.get("end_time")),
                 "agent_hint": meta.get("agent_id") or meta.get("agent"),
                 "node_hint": meta.get("langgraph_node") or meta.get("node"),
+                # carried for NON-llm nodes too (tool/retriever have no trace): subgraph, failure, latency
+                "graph_path": _graph_path(meta), "error": rec.get("error") or "",
+                "runtime_ms": _runtime_ms(rec),
                 "trace": trace}
 
 

@@ -38,12 +38,15 @@
   .chip--ca{background:var(--accent-weak);color:var(--accent)}
   .chip--co{background:#efe9f6;color:#6d4aad}
   .selbar{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-top:var(--s4)}
+  .cta{display:inline-block;margin-top:8px;font-size:13.5px;font-weight:600;color:var(--accent);text-decoration:none}
+  .cta:hover{text-decoration:underline}
 </style>
 
 <section class="sel-hero">
   <div class="sel-top"><span class="eyebrow">Token audit</span><span class="v-agent">{{ f.agent }}</span></div>
   <h1>Choose what to audit</h1>
   <p class="sub"><b>{{ f.rows | length }} call-sites</b> from <b>{{ f.traces }} traces</b>, costliest first. Pick the call-sites to re-run live, then Audit — only what you pick is proven.</p>
+  <a class="cta" href="{{ base }}/profile?snap={{ snap }}">View deployment profile ›</a>
 </section>
 
 <section class="panel">
