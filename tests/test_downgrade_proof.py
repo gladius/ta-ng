@@ -47,8 +47,8 @@ def test_replay_forwards_tools_and_choice():
     captured = {}
     class _R:
         content = []
-    orig = audit.llm_client.complete
-    audit.llm_client.complete = lambda **kw: (captured.update(kw), _R())[1]
+    orig = audit.llm_client._complete_raw          # replay -> run() -> _complete_raw (NOT complete: replay stays
+    audit.llm_client._complete_raw = lambda **kw: (captured.update(kw), _R())[1]   # at the model-default temperature)
     try:
         tr = {"model": "claude-sonnet-5", "input_messages": [{"role": "user", "content": "refund order 1"}],
               "tools_defined": [["issue_refund", json.dumps({"name": "issue_refund",
@@ -56,10 +56,12 @@ def test_replay_forwards_tools_and_choice():
               "tool_choice": "required", "usage": {"output_tokens": 5}}
         audit.replay(tr, "claude-haiku-4-5")
     finally:
-        audit.llm_client.complete = orig
+        audit.llm_client._complete_raw = orig
     assert captured.get("tool_choice") == {"type": "any"}, captured.get("tool_choice")
     assert captured.get("tools") and set(captured["tools"][0]["input_schema"]["properties"]) == {"id"}, "real schema bound"
-    print("[ok] replay binds real tool schema + forwards forced tool_choice")
+    # GUARD: replay must NOT pin temperature — the reference-set engine depends on re-runs sampling natural variance.
+    assert "temperature" not in captured, "replay pinned temperature; coherence needs the model-default spread"
+    print("[ok] replay binds real tool schema + forwards forced tool_choice + stays at model-default temperature")
 
 
 def test_render():

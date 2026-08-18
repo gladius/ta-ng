@@ -1,17 +1,16 @@
 """Downgrade audit — shared replay/judge machinery + the (cache/compress) proof engine.
 
-The DOWNGRADE verdict now lives in app/services/profile_downgrade.py (prove_transform_profiled): per input it
-profiles the ORIGINAL model's own behaviour envelope (commitments vs allowed variation) and judges the cheaper model
-against it — stable on re-audit. `audit_node` samples N distinct inputs and delegates to it.
+The DOWNGRADE verdict lives in app/services/downgrade_refset.py (prove_transform_refset): per input the ORIGINAL
+model's own 5 outputs (recorded + re-runs) ARE the acceptable-behaviour reference set, and each cheaper re-run is
+majority-voted to belong to it. `audit_node` samples N distinct inputs and delegates to it.
 
 This module provides the pieces that path shares:
   replay(trace, model)   -> re-run the recorded request on `model`, behaviour as ONE string (text + tool calls).
   _recorded(trace)       -> the ORIGINAL's recorded output — the reference we must preserve (never re-run).
   _distinct / _tools / _tool_choice / _render / _messages -> input sampling + provider-neutral request shaping.
 
-It ALSO keeps `prove_transform` + `judge_preserved` + `_verdict` — the self-variance proof engine still used by the
-CACHE and COMPRESS levers (currently disabled via LEVERS). Downgrade no longer uses them; if/when those levers are
-revisited they move onto the profiled flow too.
+It ALSO keeps `prove_transform` + `judge_preserved` + `_verdict` — the self-variance proof engine used by the
+CACHE and COMPRESS levers (currently disabled via LEVERS). The downgrade path no longer uses them.
 """
 import json
 import re
@@ -21,7 +20,7 @@ from auditor.util import canonical_model, next_cheaper, tier, release, max_outpu
 from app.services import llm_client
 from app.config import (AUDIT_SAMPLES, AUDIT_REPEATS, AUDIT_MIN_EVIDENCE, AUDIT_MAX_PARALLEL,
                         AUDIT_JUDGE_MAX_CHARS, AUDIT_SAFE_RATIO, AUDIT_SELF_BASELINE, AUDIT_SELF_FLOOR,
-                        AUDIT_DOWNGRADE_K,   # cheaper re-run count for the profiled downgrade engine
+                        AUDIT_DOWNGRADE_K,   # cheaper re-run count for the reference-set downgrade engine
                         JUDGE_MODEL)   # judge model role lives in config (.env-overridable), not hardcoded here
 
 
@@ -123,9 +122,13 @@ def replay(trace, model, max_tokens=None):
     This expresses NEUTRAL INTENT only — bind these tools, force this tool_choice, use reasoning if the node did —
     and hands it to llm_client.run, which owns the provider request shape (swap that one boundary for litellm in
     prod). Tools BOUND (read-only), never executed. Output budget SCALES to the recorded output (+headroom), capped
-    at the model's real max_output. temperature not sent (newest models reject it)."""
+    at the model's real max_output. temperature left at the model DEFAULT on purpose — re-runs must SAMPLE the model's
+    natural run-to-run variance (that's exactly what coherence/self-consistency measures), and the thinking path
+    rejects a custom temperature anyway. The deterministic side (judges, optimizer, profiler) goes through complete()."""
     if max_tokens is None:
         rec_out = int((trace.get("usage") or {}).get("output_tokens", 0) or 0)
+        if rec_out <= 0:                                  # usage not recorded -> estimate from the recorded output so
+            rec_out = len(trace.get("output") or "") // 4     # the budget tracks the REAL length, not the 512 floor
         max_tokens = min(max_output(model), max(512, int(rec_out * 1.5) + 128))
     system = "\n".join(m["content"] for m in trace.get("input_messages", []) if m.get("role") == "system")
     tools = _tools(trace)

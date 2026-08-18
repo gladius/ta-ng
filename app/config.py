@@ -62,26 +62,22 @@ AUDIT_SAFE_RATIO = float(os.environ.get("AUDIT_SAFE_RATIO", "0.66"))
 AUDIT_SELF_BASELINE = os.environ.get("AUDIT_SELF_BASELINE", "1") not in ("0", "false", "False", "")
 AUDIT_SELF_FLOOR = float(os.environ.get("AUDIT_SELF_FLOOR", "0.5"))
 
-# ── Profile-based downgrade validation — the stable per-input verdict (replaces the self_kept knife-edge) ───────────
-# Per input we PROFILE the original model's own behaviour from its own runs (COMMITMENTS it holds constant vs ALLOWED
-# VARIATION it legitimately varies), then judge each cheaper run against THAT envelope: a difference inside allowed-
-# variation is forgiven, a broken commitment is a BREAK. Stable because the judge's vibe call becomes a concrete,
-# per-input checklist. See DOWNGRADE-STABILITY-PLAN.md.
-#   PROFILE_RERUNS = fresh ORIGINAL re-runs to build the envelope (+ the recorded output = PROFILE_RERUNS+1 samples).
-#   DOWNGRADE_K    = cheaper re-runs judged against the envelope.
-#   BREAK_FLOOR    = aggregate cushion — how many of the K cheaper runs may BREAK and still be SAFE (residual judge/
-#                    original flicker; the PER-ASPECT cushion is semantic, applied in-judge via allowed-variation).
-#   PROFILER/JUDGE_MAX_TOKENS = OUTPUT ceilings (NOT context): the profiler must fit all its sections, the judge its
-#                    verdict+reason. A ceiling, not a target — generous costs nothing extra, too-low truncates.
-#   PROFILER_SAMPLE_CHARS = per-sample INPUT cap when packing several original outputs into the profiler prompt.
-AUDIT_PROFILE_RERUNS = int(os.environ.get("AUDIT_PROFILE_RERUNS", "4"))
+# ── Reference-set downgrade engine — re-run counts & judge budgets (verdict math is the next block) ────────────────
+# The ONE live downgrade validator (app/services/downgrade_refset.py). Per input the ORIGINAL model's 5 own outputs
+# ARE the acceptable-behaviour set (recorded output + ORIG_RERUNS fresh re-runs); each cheaper re-run is judged to
+# belong to that set. Re-runs go through audit.replay, whose generation budget scales to the recorded output length.
+#   ORIG_RERUNS      = fresh ORIGINAL re-runs building the set (+ the recorded output = ORIG_RERUNS+1 = 5).
+#   DOWNGRADE_K      = cheaper re-runs judged against the set.
+#   JUDGE_MAX_TOKENS = OUTPUT ceiling for a judge reply (verdict + short reason). A ceiling, not a target.
+#   JUDGE_REF_CHARS  = per-output cap when packing reference outputs into a judge prompt. Set generously so real
+#                      outputs fit WHOLE; anything beyond it is marked truncated in-prompt AND flags its input
+#                      "unverified" — never a silent compare-on-a-clipped-view (which could read as a false SAFE).
+AUDIT_PROFILE_RERUNS = int(os.environ.get("AUDIT_PROFILE_RERUNS", "4"))   # env name kept; = ORIG_RERUNS
 AUDIT_DOWNGRADE_K = int(os.environ.get("AUDIT_DOWNGRADE_K", "5"))
-AUDIT_DOWNGRADE_BREAK_FLOOR = int(os.environ.get("AUDIT_DOWNGRADE_BREAK_FLOOR", "1"))
-AUDIT_PROFILER_MAX_TOKENS = int(os.environ.get("AUDIT_PROFILER_MAX_TOKENS", "2200"))
 AUDIT_JUDGE_MAX_TOKENS = int(os.environ.get("AUDIT_JUDGE_MAX_TOKENS", "512"))
-AUDIT_PROFILER_SAMPLE_CHARS = int(os.environ.get("AUDIT_PROFILER_SAMPLE_CHARS", "4000"))
+AUDIT_JUDGE_REF_CHARS = int(os.environ.get("AUDIT_JUDGE_REF_CHARS", "16000"))
 
-# ── Reference-set downgrade validation (DOWNGRADE-STABILITY-LOGIC.md) — the current engine ─────────────────────────
+# ── Reference-set downgrade engine — verdict math ──────────────────────────────────────────────────────────────────
 # No prose contract. The original's 5 own outputs ARE the acceptable range; ONE fit-judge decides "does this candidate
 # belong to that set?", and every judgement is a MAJORITY VOTE (the probe proved a single judge flips on borderline
 # outputs). Per input we get two rates by the IDENTICAL mechanism: original self-consistency (each original vs the

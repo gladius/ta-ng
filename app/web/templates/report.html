@@ -167,6 +167,7 @@
       <summary class="ev-sum">
         <span class="f-caret">&#9654;</span>
         {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% else %}<span class="ev-tag ev-drift">not safe</span>{% endif %}
+        {% if iv.unverified %}<span class="ev-tag" style="background:#7a5c00;color:#ffe9a8" title="An output here exceeds the judge's character budget, so it was compared on a truncated view — this input is not certified.">&#9888; too long to verify</span>{% endif %}
         <span class="ev-in">{{ iv.note or iv.reason or 'judged' }}</span>
         <span class="ev-rate mono">preserved {{ iv.kept }}/{{ iv.k }}{% if iv.self_rate %} &middot; original {{ iv.self_rate }}{% elif iv.self_kept is not none %} &middot; vs original {{ iv.self_kept }}/{{ iv.k }}{% endif %}</span>
       </summary>

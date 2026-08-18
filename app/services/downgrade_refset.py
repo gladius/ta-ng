@@ -29,10 +29,25 @@ from app.services import llm_client
 from app.services.audit import replay, _recorded, _user_text, _system_text
 from app.config import (JUDGE_MODEL, AUDIT_JUDGE_MAX_CHARS, AUDIT_MAX_PARALLEL, AUDIT_PROFILE_RERUNS,
                         AUDIT_DOWNGRADE_K, AUDIT_JUDGE_VOTES, AUDIT_COHERENCE_FLOOR, AUDIT_DOWNGRADE_MARGIN,
-                        AUDIT_NODE_SAFE_RATIO, AUDIT_JUDGE_MAX_TOKENS, AUDIT_PROFILER_SAMPLE_CHARS)
+                        AUDIT_NODE_SAFE_RATIO, AUDIT_JUDGE_MAX_TOKENS, AUDIT_JUDGE_REF_CHARS)
 
 CAP = AUDIT_JUDGE_MAX_CHARS
-OUT = AUDIT_PROFILER_SAMPLE_CHARS       # per-output cap when packing outputs into a prompt
+OUT = AUDIT_JUDGE_REF_CHARS             # per-output cap when packing reference outputs into a judge prompt
+
+
+def _cap(s, n):
+    """Slice for a judge prompt, but NEVER silently: when we cut, SAY so in-prompt, so the judge knows its view is
+    partial (and _oversize below flags the input unverified rather than letting a truncated compare read as SAFE)."""
+    s = s or ""
+    if len(s) <= n:
+        return s
+    return s[:n] + "\n…[TRUNCATED %d chars — output exceeds the judge's %dk-char budget]" % (len(s) - n, n // 1000)
+
+
+def _oversize(originals, cheaper):
+    """True if any output is too long to show the judge WHOLE — references are packed at OUT, candidates at CAP.
+    When true we can't fully verify the input, so we refuse to certify (never a false SAFE from a clipped view)."""
+    return any(len(o or "") > OUT for o in originals) or any(len(c or "") > CAP for c in cheaper)
 
 
 def _pmap(fn, items):
@@ -68,8 +83,8 @@ _FIT_TMPL = (
 
 
 def _fit_once(refset, cand, request):
-    ref = "\n\n".join("--- acceptable %d ---\n%s" % (i + 1, (o or "")[:OUT]) for i, o in enumerate(refset))
-    p = _FIT_TMPL % (request[:CAP], len(refset), ref, (cand or "")[:CAP])
+    ref = "\n\n".join("--- acceptable %d ---\n%s" % (i + 1, _cap(o, OUT)) for i, o in enumerate(refset))
+    p = _FIT_TMPL % (request[:CAP], len(refset), ref, _cap(cand, CAP))
     r = llm_client.complete(model=JUDGE_MODEL, max_tokens=AUDIT_JUDGE_MAX_TOKENS, system=_FIT_SYS,
                             messages=[{"role": "user", "content": p}])
     raw = "".join(x.text for x in r.content if x.type == "text")
@@ -106,7 +121,7 @@ _COH_TMPL = (
 
 def coherence(request, outputs):
     """One call -> (rate, divergent_set): how many of `outputs` agree materially, and which NUMBERS (1-based) diverge."""
-    ref = "\n\n".join("--- output %d ---\n%s" % (i + 1, (o or "")[:OUT]) for i, o in enumerate(outputs))
+    ref = "\n\n".join("--- output %d ---\n%s" % (i + 1, _cap(o, OUT)) for i, o in enumerate(outputs))
     total = len(outputs)
     r = llm_client.complete(model=JUDGE_MODEL, max_tokens=AUDIT_JUDGE_MAX_TOKENS, system=_COH_SYS,
                             messages=[{"role": "user", "content": _COH_TMPL % (request[:CAP], total, ref, total)}])
@@ -168,7 +183,12 @@ def prove_transform_refset(sample, cheaper, original, k=None):
         cheap_res = [majority(idx, j) for j in range(len(C))]
         cheap_rate, nc = sum(1 for kp, _, _, _ in cheap_res if kp), len(C)
 
-        if orig_rate < AUDIT_COHERENCE_FLOOR:                    # original too inconsistent to verify against -> abstain
+        unverified = _oversize(O, C)                             # any output too long for the judge to read whole
+        if unverified:                                           # honest refusal — never certify on a truncated view
+            verdict = "NOT-SAFE"
+            note = ("couldn't fully verify — an output here exceeds the judge's %dk-char budget, so the comparison "
+                    "would run on a truncated view; not certifying a downgrade" % (OUT // 1000))
+        elif orig_rate < AUDIT_COHERENCE_FLOOR:                  # original too inconsistent to verify against -> abstain
             verdict = "NOT-SAFE"
             note = ("couldn't verify — your current model gave different answers here (%d/%d consistent), so there is "
                     "no stable behaviour to certify a downgrade against" % (orig_rate, no))
@@ -181,7 +201,7 @@ def prove_transform_refset(sample, cheaper, original, k=None):
 
         inputs.append({
             "input": _user_text(t)[:CAP], "system": _system_text(t)[:CAP], "recorded": _recorded(t)[:CAP],
-            "kept": cheap_rate, "k": nc, "verdict": verdict, "note": note,
+            "kept": cheap_rate, "k": nc, "verdict": verdict, "note": note, "unverified": unverified,
             "self_rate": "%d/%d" % (orig_rate, no),
             "orig_runs": [{"preserved": (i + 1) not in divergent, "reason": "", "votes": "",
                            "output": (O[i] or "")[:CAP]} for i in range(no)],   # fits/differs from the coherence call

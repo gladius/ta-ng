@@ -31,9 +31,10 @@ def client():
     return _client
 
 
-def complete(**kw):
-    """messages.create with retry. Retries 429 / 5xx / connection with backoff; a 4xx (bad request) raises at
-    once — retrying a malformed call only wastes time and money."""
+def _complete_raw(**kw):
+    """Transport only: messages.create with bounded retry. Retries 429 / 5xx / connection with backoff; a 4xx (bad
+    request) raises at once — retrying a malformed call only wastes time and money. No temperature policy lives here,
+    so the sampling path (run) and the deterministic path (complete) can share ONE retry without sharing a default."""
     last = None
     for attempt in range(4):
         try:
@@ -46,6 +47,17 @@ def complete(**kw):
             last = e
         time.sleep(min(8.0, 1.5 * (2 ** attempt)))
     raise last
+
+
+def complete(**kw):
+    """Deterministic single-shot for EVALUATION / REWRITE callers — the fit judge, coherence, the compress optimizer,
+    the profiler. Defaults temperature=0 so verdicts are reproducible run-to-run; a flaky verdict is the one thing
+    this tool can't have. The variance-SAMPLING path (original + cheaper re-runs) does NOT come through here — it uses
+    run(), which calls _complete_raw directly and leaves temperature at the model default so coherence can measure the
+    model's own spread. Callers may pass temperature=... to override. No complete() caller enables extended thinking,
+    so a custom temperature is accepted (the thinking path, which rejects it, lives only in run())."""
+    kw.setdefault("temperature", 0)
+    return _complete_raw(**kw)
 
 
 def _anthropic_tool_choice(tc):
@@ -79,11 +91,11 @@ def run(*, model, messages, max_tokens, system=None, tools=None, tool_choice=Non
         kw["output_config"] = {"effort": "low"}
         kw["max_tokens"] = max(max_tokens, 1536)
     try:
-        r = complete(**kw)
-    except Exception:
+        r = _complete_raw(**kw)                              # NOT complete(): replay must keep the model-default
+    except Exception:                                        # temperature to sample natural run-to-run variance
         if "thinking" in kw or "tool_choice" in kw:          # target can't reason / force -> best-effort, retry once
             kw.pop("thinking", None); kw.pop("output_config", None); kw.pop("tool_choice", None)
-            r = complete(**kw)
+            r = _complete_raw(**kw)
         else:
             raise
     text, tool_calls = [], []
