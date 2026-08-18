@@ -48,6 +48,14 @@
   .summary.faint{color:var(--faint);font-style:italic}
   .metrics{display:flex;flex-wrap:wrap;gap:5px 16px;margin-top:9px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
   .metrics b{color:var(--ink);font-weight:600}
+  .facts{font-size:11.5px;color:var(--faint);margin-top:8px;font-family:'Plex Mono',ui-monospace,monospace;line-height:1.5}
+  .facts .flow{color:var(--muted)}
+  .opps{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .opp{font-size:11px;font-weight:600;padding:3px 9px;border-radius:6px;letter-spacing:.2px}
+  .opp b{font-weight:800}
+  .opp.dg{background:rgba(31,122,90,.12);color:#1f7a5a}
+  .opp.ca{background:rgba(200,70,60,.12);color:var(--accent)}
+  .opp.co{background:rgba(109,74,173,.12);color:#6d4aad}
   .note{font-size:12.5px;color:var(--muted);margin:0 0 var(--s4)}
   .note.warn{color:#9a6a00}
   .note.faint{color:var(--faint)}
@@ -67,6 +75,7 @@
 
 <section class="pf-stats">
   <div class="stat"><div class="k">Cost / {{ (h.cost_basis // 1000) }}k calls</div><div class="v">${{ '{:,.2f}'.format(h.total_cost_basis) }}</div></div>
+  {% if h.opportunity_total or h.opp_wins %}<div class="stat" style="border-color:var(--accent)"><div class="k">Opportunity / {{ (h.cost_basis // 1000) }}k</div><div class="v" style="color:var(--accent)">${{ '{:,.2f}'.format(h.opportunity_total) }} <small>{{ h.opp_wins }} node{{ 's' if h.opp_wins != 1 else '' }}</small></div></div>{% endif %}
   <div class="stat"><div class="k">Call-sites</div><div class="v">{{ h.call_sites }} <small>llm</small></div></div>
   <div class="stat"><div class="k">Tool / retriever</div><div class="v">{{ h.tool_count }} <small>/ {{ h.retriever_count }}</small></div></div>
   <div class="stat"><div class="k">Traces</div><div class="v">{{ '{:,}'.format(h.traces) }}</div></div>
@@ -138,6 +147,16 @@
         {% if n.avg_ms %}<span><b>{{ n.avg_ms }}</b>ms avg</span>{% endif %}
         <span class="faint" style="color:var(--faint)">no tokens (non-llm)</span>
       </div>
+    {% endif %}
+    {% if n.opp %}
+    <div class="opps">
+      {% if n.opp.downgrade_to %}<span class="opp dg">↓ downgrade → {{ n.opp.downgrade_to }} <b>~${{ '{:,.2f}'.format(n.opp.downgrade_usd) }}</b></span>{% endif %}
+      {% if n.opp.cache_verdict == 'BREAKER' %}<span class="opp ca">⚡ cache reorg <b>~${{ '{:,.2f}'.format(n.opp.cache_usd) }}</b></span>{% endif %}
+      {% if n.opp.compress %}<span class="opp co">− compress candidate</span>{% endif %}
+    </div>
+    {% endif %}
+    {% if n.facts or n.flow %}
+    <div class="facts">{% if n.facts %}{{ n.facts | join(' · ') }}{% endif %}{% if n.flow %}{% if n.facts %} · {% endif %}<span class="flow">flow: {{ n.flow }}</span>{% endif %}</div>
     {% endif %}
   </div>
   {% endfor %}

@@ -12,6 +12,7 @@ alone with no model spend.
 """
 from app.config import CALLS_BASIS
 from auditor.util import PRICE, usd, canonical_model, tier, cache_mode
+from app.services.profile.facts import fact_pack     # the deterministic $0 fact-pack (Phase 1)
 
 
 def _node_cost(n):
@@ -64,11 +65,54 @@ def _struct_summary(s):
     return "%s node · %s" % (s["type"], ", ".join(bits))
 
 
+def _facts_line(f):
+    """Compact human-facing deterministic facts (supporting context, NOT the headline) from the fact-pack."""
+    if not f:
+        return []
+    bits = []
+    ds = f.get("distinct_system")
+    if ds is not None:
+        bits.append("frame: fixed" if ds == 1 else "frame: varies (%d)" % ds)
+    if f.get("distinct_output") is not None and f.get("n"):
+        bits.append("distinct out: %d/%d" % (f["distinct_output"], f["n"]))
+    if f.get("tools"):
+        bits.append("calls: " + ", ".join(f["tools"]))
+    if f.get("multi_turn"):
+        bits.append("multi-turn")
+    if f.get("rag_present"):
+        bits.append("RAG")
+    return bits
+
+
+def _flow_str(f):
+    """'upstream → this → downstream' from the fact-pack flow (empty on flat sources)."""
+    fl = (f or {}).get("flow") or {}
+    up, down = fl.get("upstream") or [], fl.get("downstream") or []
+    return "%s → this → %s" % (", ".join(up) or "·", ", ".join(down) or "·") if (up or down) else ""
+
+
+def _opp_of(r):
+    """Per-node optimization opportunity from the funnel row (candidacy + $), or None if nothing to act on."""
+    if not r:
+        return None
+    o = {"usd": round(r.get("opportunity") or 0, 2), "downgrade_to": r.get("downgrade_to"),
+         "downgrade_usd": round(r.get("downgrade_usd") or 0, 2), "cache_verdict": r.get("cache_verdict"),
+         "cache_usd": round(r.get("cache_usd") or 0, 2), "compress": bool(r.get("compress_candidate"))}
+    return o if (o["downgrade_to"] or o["cache_usd"] or o["compress"]) else None
+
+
 def build_profile(g, comp=None):
     """graph dict (pinned snapshot) [+ optional per-node comprehension] -> a one-page deployment report:
     {header, sections (grouped by subgraph), hotspots, edges}. Facts are deterministic/measured; `comp` adds
     the advisory op (one word) + summary per llm node once the LLM pass has run (else those fields are empty)."""
     comp = comp or {}
+    fp = fact_pack(g)                                    # deterministic $0 facts per node (Phase 1)
+    try:                                                 # the $0 OPTIMIZATION MAP — reuse the funnel's lever detectors
+        from app.services import funnel
+        _opp = {r["key"]: r for r in funnel.build("", "", g.get("agent", "agent"),
+                                                   levers=["downgrade", "cache", "compress"], g=g)["rows"]}
+    except Exception:
+        _opp = {}
     nodes = []
     total_basis, total_in, total_out, any_unknown = 0.0, 0, 0, False
     for n in g.get("nodes", []):
@@ -92,6 +136,8 @@ def build_profile(g, comp=None):
             "op": c.get("op", ""), "summary": c.get("summary", ""),
             "coherence": c.get("coherence") or {}, "confidence": c.get("confidence", ""),
             "unavailable": c.get("unavailable", ""),
+            "facts": _facts_line(fp.get(n["key"])), "flow": _flow_str(fp.get(n["key"])),
+            "opp": _opp_of(_opp.get(n["key"])),          # optimization candidacy + $ (the "where's the money")
         })
         total_in += n["avg_in"] * n["calls"]
         total_out += n["avg_out"] * n["calls"]
@@ -108,6 +154,7 @@ def build_profile(g, comp=None):
             "calls": s["calls"], "errors": s.get("errors", 0), "error_rate": s.get("error_rate", 0.0),
             "avg_ms": s.get("avg_ms"), "traces": s.get("traces", 0),
             "op": s["type"], "summary": _struct_summary(s),
+            "facts": [], "flow": _flow_str(fp.get(s["key"])),
         })
 
     total_calls = sum(n["calls"] for n in nodes)
@@ -122,6 +169,11 @@ def build_profile(g, comp=None):
         "cost_basis": CALLS_BASIS, "total_cost_basis": round(total_basis, 2),
         "error_rate": round(total_err / max(1, total_calls + total_err), 3),
         "price_incomplete": any_unknown, "has_comprehension": bool(comp),
+        # the OPTIMIZATION MAP totals ($0, deterministic) — the "where's the money" headline
+        "opportunity_total": round(sum((r.get("opportunity") or 0) for r in _opp.values()), 2),
+        "downgrade_total": round(sum((r.get("downgrade_usd") or 0) for r in _opp.values()), 2),
+        "cache_total": round(sum((r.get("cache_usd") or 0) for r in _opp.values()), 2),
+        "opp_wins": sum(1 for r in _opp.values() if (r.get("opportunity") or 0) > 0 or r.get("compress_candidate")),
     }
 
     hotspots = None
