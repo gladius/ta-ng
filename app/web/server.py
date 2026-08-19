@@ -79,11 +79,12 @@ def report_view(request: Request, source: str, ws_id: str, project: str, snap: s
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/profile", response_class=HTMLResponse)
-def profile_view(request: Request, source: str, ws_id: str, project: str, snap: str = ""):
+def profile_view(request: Request, source: str, ws_id: str, project: str, snap: str = "", skip: int = 0):
     """Deployment PROFILE — a read-only VIEW of a PINNED snapshot (identity can't drift). It never builds
     inline: no/unknown snap -> mint an id and build ONCE via the shared SSE flow (building.html), landing
-    back here on the same snap — exactly like report_view, so a live pull isn't a frozen page and we don't
-    mint a fresh snapshot on every bare hit."""
+    back here on the same snap. The per-node analysis is generated ON THE WAY IN (analyzing.html progress
+    page) rather than behind a button — so arriving at the profile means it's already there. `skip=1` is the
+    escape hatch (from the progress page's failure state) to view the deterministic profile without it."""
     from app.services import snapshot, store
     from app.services.profile.assemble import build_profile
     from app.services.profile import comprehend
@@ -93,6 +94,8 @@ def profile_view(request: Request, source: str, ws_id: str, project: str, snap: 
         return _page(request, "building.html", source=source, ws_id=ws_id, project=project,
                      snap=sid, agent=project, next="profile")
     comp = store.peek(comprehend.comprehend_key(source, ws_id, project, snap))   # advisory layer, if already run
+    if comp is None and not skip:                        # not computed yet -> run it on a progress page, then land here
+        return _page(request, "analyzing.html", source=source, ws_id=ws_id, project=project, snap=snap, agent=project)
     return _page(request, "profile.html", source=source, ws_id=ws_id, project=project, snap=snap,
                  prof=build_profile(g, comp=comp))
 
@@ -198,15 +201,45 @@ def prove_clear(source: str, ws_id: str, project: str, snap: str = ""):
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/report/download")
 def report_download(source: str, ws_id: str, project: str, snap: str = ""):
-    """Download the audit record as a ZIP (folder of small files) — scales for large agents. Frozen proof only."""
+    """Download the audit record as a ZIP — report.html (the self-contained styled report, opens anywhere & prints to
+    PDF), report.md (the apply guide for a dev/coding assistant) and evidence.md (proof appendix). Frozen proof only."""
     from fastapi.responses import Response
     from app.services import funnel, prove, store, report_doc, snapshot
+    from app.web.export import render as export_render
     g = snapshot.get(snap, source, ws_id, project)
     proof = store.peek(prove.proof_key(source, ws_id, project, snap))
-    f = funnel.build(source, ws_id, project, g=g)
-    data = report_doc.build_zip(f, proof)
+    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g)
+    html = None
+    if g is not None and proof is not None:                                   # render the same report page, portably
+        results = proof["results"]
+        dg = [r for r in results if r.get("downgrade")]
+        ca = [r for r in results if r.get("cache") and not r["cache"].get("informational")]
+        co = [r for r in results if r.get("compress")]
+        html = export_render(templates, "report.html",
+                             dict(source=source, ws_id=ws_id, project=project,
+                                  f=f, proof=proof, dg=dg, ca=ca, co=co, snap=snap, levers=LEVERS))
+    data = report_doc.build_zip(f, proof, html=html)
     return Response(data, media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="token-audit-%s.zip"' % project})
+
+
+@app.get("/s/{source}/ws/{ws_id}/agent/{project}/profile/download")
+def profile_download(source: str, ws_id: str, project: str, snap: str = ""):
+    """Download the deployment profile as a ZIP — profile.html (self-contained styled profile, opens anywhere & prints
+    to PDF) + profile.md (a compact markdown summary). Built from the pinned snapshot + advisory analysis if present."""
+    from fastapi.responses import Response
+    from app.services import snapshot, store, profile_doc
+    from app.services.profile.assemble import build_profile
+    from app.services.profile import comprehend
+    from app.web.export import render as export_render
+    g = snapshot.get(snap, source, ws_id, project)
+    comp = store.peek(comprehend.comprehend_key(source, ws_id, project, snap)) if g is not None else None
+    prof = build_profile(g, comp=comp) if g is not None else {}
+    html = export_render(templates, "profile.html",
+                         dict(source=source, ws_id=ws_id, project=project, snap=snap, prof=prof)) if g is not None else None
+    data = profile_doc.build_zip(prof, html=html)
+    return Response(data, media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="token-profile-%s.zip"' % project})
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% set base = '/s/' ~ source ~ '/ws/' ~ ws_id ~ '/agent/' ~ (project | urlencode) %}
 {% block title %}{{ f.agent }} · token audit{% endblock %}
+{% block export_title %}{{ f.agent }} &middot; token audit{% endblock %}
 {% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · audit</b>{% endblock %}
 {% block content %}
 <style>
@@ -428,11 +429,12 @@
 </div>
 {% endif %}
 
+{% if not export %}
 <div class="actions">
   <a class="btn" href="{{ base }}/report/download?snap={{ snap | urlencode }}">Download report (.zip)</a>
-  <button type="button" class="btn ghost" onclick="window.print()">Print / PDF</button>
   <button type="button" class="btn ghost" onclick="reaudit()">Re-audit fresh</button>
 </div>
+{% endif %}
 
 <p class="foot-note">Audited {{ audited }} of {{ f.rows | length }} call-sites. Detection is deterministic; every dollar is earned by a live re-run of real recorded inputs, and unproven potential is never counted as savings. Figures shown per {{ '{:,}'.format(f.calls) }} calls &mdash; a fixed basis, not a monthly figure; multiply by your agent's real call volume.</p>
 

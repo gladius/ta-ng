@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% set base = '/s/' ~ source ~ '/ws/' ~ ws_id ~ '/agent/' ~ (project | urlencode) %}
+{% block title %}Analyzing {{ project }}…{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · analyzing…</b>{% endblock %}
+{% block content %}
+<style>
+  .build{max-width:600px;margin:11vh auto 0;text-align:center}
+  .build .eyebrow{color:var(--faint,#9a9aa2);text-transform:uppercase;letter-spacing:.1em;font-size:11px;font-weight:700;margin:0 0 1.4rem}
+  .build h1{font-size:22px;font-weight:700;letter-spacing:-.015em;margin:0 0 .3rem}
+  .build .agent{color:var(--accent,#b3231d)}
+  .spinner{width:34px;height:34px;margin:0 auto 1.5rem;border:3px solid rgba(128,128,128,.25);border-top-color:var(--accent,#b3231d);border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.spinner{animation-duration:2.4s}}
+  .stage{font-size:15px;color:var(--ink,#18181b);margin:.2rem 0 1rem;min-height:1.4em}
+  .bar{height:6px;border-radius:999px;background:rgba(128,128,128,.2);overflow:hidden;max-width:400px;margin:0 auto}
+  .fill{height:100%;width:8%;border-radius:999px;background:var(--accent,#b3231d);transition:width .45s ease}
+  .note{color:var(--muted,#6b6b72);font-size:13.5px;margin:1.3rem auto 0;max-width:440px;line-height:1.5}
+  .err{margin:1.2rem auto 0;max-width:460px;color:var(--accent,#b3231d);font-size:14px;border:1px solid rgba(179,35,29,.3);border-radius:8px;padding:.7rem .9rem;background:rgba(179,35,29,.05)}
+  .err a{color:inherit;font-weight:600}
+</style>
+
+<section class="build">
+  <p class="eyebrow">Token audit · per-node analysis</p>
+  <div class="spinner" id="spin"></div>
+  <h1>Analyzing <span class="agent">{{ project }}</span></h1>
+  <p class="stage" id="stage">Starting…</p>
+  <div class="bar"><div class="fill" id="fill"></div></div>
+  <p class="note">Reading each call-site once (system prompt &amp; user frame) to describe what it does, plus a deployment summary. A few seconds — then the profile opens.</p>
+  <p class="err" id="err" hidden></p>
+</section>
+
+<script>
+  const STREAM = {{ base | tojson }} + '/comprehend-stream?snap=' + encodeURIComponent({{ snap | tojson }});
+  const PROFILE = {{ base | tojson }} + '/profile?snap=' + encodeURIComponent({{ snap | tojson }});
+  const SKIP = PROFILE + '&skip=1';
+  const stage = document.getElementById('stage'), fill = document.getElementById('fill'),
+        err = document.getElementById('err'), spin = document.getElementById('spin');
+  let handled = false;
+  function fail(headline, detail) {
+    spin.style.animationPlayState = 'paused'; spin.style.borderTopColor = 'var(--muted,#888)';
+    stage.textContent = headline; err.hidden = false;
+    err.innerHTML = detail + ' &middot; <a href="' + location.href + '">retry</a> &middot; <a href="' + SKIP + '">view profile without analysis</a>';
+  }
+  const es = new EventSource(STREAM);
+  es.addEventListener('stage', e => { const d = JSON.parse(e.data); stage.textContent = d.msg; fill.style.width = (d.pct || 8) + '%'; });
+  es.addEventListener('done', e => { handled = true; es.close(); fill.style.width = '100%'; stage.textContent = 'Ready.'; location.replace(PROFILE); });
+  es.addEventListener('failed', e => { handled = true; es.close(); let m = 'The analysis could not complete.'; try { m = JSON.parse(e.data).msg || m; } catch (_) {} fail('Could not analyze the deployment.', m); });
+  es.onerror = () => { if (handled) return; handled = true; es.close(); fail('Connection interrupted.', 'The analysis stream dropped'); };
+</script>
+{% endblock %}

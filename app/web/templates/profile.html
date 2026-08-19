@@ -3,6 +3,7 @@
 {% set h = prof.header %}
 {% set d = prof.deployment %}
 {% block title %}{{ h.agent }} · profile{% endblock %}
+{% block export_title %}{{ h.agent }} &middot; deployment profile{% endblock %}
 {% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/s/{{ source }}/workspaces">{{ source }}</a> <span class="sep">›</span> <a href="/s/{{ source }}/ws/{{ ws_id }}/agents">agents</a> <span class="sep">›</span> <b>{{ project }} · profile</b>{% endblock %}
 {% block content %}
 <style>
@@ -66,7 +67,7 @@
   <div class="pf-top"><span class="eyebrow">Deployment profile</span><span class="v-agent">{{ h.agent }}</span></div>
   {% if d and d.summary %}
     <h1>{% if d.kind %}<span class="kind">{{ d.kind }}</span>{% else %}What this deployment does{% endif %}</h1>
-    <p class="dsum">{{ d.summary }}</p>
+    <p class="dsum {% if export %}md-render{% endif %}">{{ d.summary }}</p>
   {% else %}
     <h1>What this deployment does</h1>
     <p class="dsum faint" style="color:var(--muted)">Measured facts below. Run the per-node analysis to add what each node <em>does</em> (one LLM read per call-site) and a deployment summary.</p>
@@ -93,15 +94,18 @@
 </div>
 {% endif %}
 
+{% if not export %}
 <div class="cta-row">
-  {% if not h.has_comprehension %}
-    <button class="btn2" id="go" onclick="runAnalysis()">▸ Generate per-node analysis</button>
-    <div class="prog" id="prog"><div class="fill" id="fill"></div></div>
-    <span class="cta-note" id="cnote">One LLM read per call-site + a deployment summary — grounded in the system prompt &amp; user frame.</span>
+  {% if h.has_comprehension %}
+    <span class="cta-note">&#10003; Per-node analysis computed.</span>
+    <a class="btn2" href="{{ base }}/profile/download?snap={{ snap | urlencode }}">Download profile (.zip)</a>
+    <a class="cta-note" href="{{ base }}/select?snap={{ snap }}">Audit savings on this snapshot &rsaquo;</a>
   {% else %}
-    <span class="cta-note">✓ Per-node analysis computed. <a href="{{ base }}/select?snap={{ snap }}">Audit savings on this snapshot ›</a></span>
+    <span class="cta-note">Per-node analysis was skipped. <a href="{{ base }}/profile?snap={{ snap }}">Generate it &rsaquo;</a></span>
+    <a class="btn2" href="{{ base }}/profile/download?snap={{ snap | urlencode }}">Download profile (.zip)</a>
   {% endif %}
 </div>
+{% endif %}
 
 {% if h.price_incomplete %}<p class="note warn">Some models aren't in the price catalog — their cost shows &ldquo;—&rdquo;. Add them to <code>auditor/models.json</code>.</p>{% endif %}
 
@@ -125,7 +129,7 @@
       {% if n.unavailable %}
         <p class="summary faint">analysis unavailable — {{ n.unavailable }}</p>
       {% elif n.summary %}
-        <p class="summary">{{ n.summary }}</p>
+        <p class="summary {% if export %}md-render{% endif %}">{{ n.summary }}</p>
       {% else %}
         <p class="summary faint">shape: {{ n.shape }} — run the analysis for what it does.</p>
       {% endif %}
@@ -140,7 +144,7 @@
         {% if n.confidence %}<span class="faint" style="color:var(--faint)">analysis: {{ n.confidence }} conf</span>{% endif %}
       </div>
     {% else %}
-      <p class="summary">{{ n.summary }}</p>
+      <p class="summary {% if export %}md-render{% endif %}">{{ n.summary }}</p>
       <div class="metrics">
         <span><b>{{ n.calls }}</b> calls</span>
         {% if n.error_rate %}<span style="color:#a3271f">err {{ '{:.0%}'.format(n.error_rate) }}</span>{% endif %}
@@ -168,18 +172,4 @@
   <p class="note faint">Untagged nodes (no LangGraph node metadata) are flagged, not silently merged — distinct untagged operations that share a class name are not yet split apart.</p>
 </div>
 
-<script>
-  function runAnalysis() {
-    var btn = document.getElementById('go'), prog = document.getElementById('prog'),
-        fill = document.getElementById('fill'), note = document.getElementById('cnote');
-    btn.disabled = true; btn.textContent = 'Analyzing…'; prog.style.display = 'block';
-    var url = {{ base | tojson }} + '/comprehend-stream?snap=' + encodeURIComponent({{ snap | tojson }});
-    var es = new EventSource(url), handled = false;
-    es.addEventListener('stage', function(e){ var d = JSON.parse(e.data); note.textContent = d.msg; fill.style.width = (d.pct||6) + '%'; });
-    es.addEventListener('done', function(e){ handled = true; es.close(); fill.style.width = '100%'; note.textContent = 'Done — loading…'; location.reload(); });
-    es.addEventListener('failed', function(e){ handled = true; es.close(); btn.disabled = false; btn.textContent = '▸ Retry analysis';
-      var m = 'analysis failed'; try { m = JSON.parse(e.data).msg || m; } catch(_){} note.textContent = m; });
-    es.onerror = function(){ if (handled) return; handled = true; es.close(); btn.disabled = false; btn.textContent = '▸ Retry analysis'; note.textContent = 'connection interrupted'; };
-  }
-</script>
 {% endblock %}
