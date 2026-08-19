@@ -28,6 +28,7 @@ import credentials
 credentials.load()
 from connectors.datasource import get_source
 from connectors import get_adapter
+from tools.diag import _common                               # key + endpoint + workspace all come from .env
 
 
 def _meta(rec):
@@ -148,8 +149,8 @@ def main():
     ap.add_argument("--project")
     ap.add_argument("--n", type=int, default=150)
     a = ap.parse_args()
-    if a.ws and a.project:
-        inspect(a.source, a.ws, a.project, a.n)
+    if a.project:
+        inspect(a.source, _common.ws_id(a.ws), a.project, a.n)   # --ws or LANGSMITH_WORKSPACE_ID from .env
     else:
         list_all(a.source)
 

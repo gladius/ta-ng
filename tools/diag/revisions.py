@@ -25,8 +25,7 @@ try:
 except Exception:
     pass
 
-import credentials
-credentials.load()
+from tools.diag import _common                               # key + endpoint + workspace all come from .env
 
 # Ordered by how likely each is to be the CODE version. HOST_REVISION_ID = deployment revision (-> a commit);
 # assistant_id/graph_id = the deployed agent identity; langgraph_*version = the LIBRARY version (too coarse).
@@ -35,27 +34,12 @@ CANDIDATES = ["LANGSMITH_HOST_REVISION_ID", "LANGSMITH_LANGGRAPH_API_REVISION", 
               "langgraph_version", "langgraph_api_version"]
 
 
-def _key():
-    return credentials.get_secret("LANGSMITH_API_KEY", aliases=("LANGCHAIN_API_KEY", "LANGSMITH_KEY")) or ""
-
-
-def _endpoint():
-    return credentials.get_config("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com",
-                                  aliases=("LANGCHAIN_ENDPOINT",)).rstrip("/")
-
-
-def _client():
-    from langsmith import Client
-    return Client(api_key=_key(), api_url=credentials.get_config("LANGSMITH_ENDPOINT", None,
-                                                                 aliases=("LANGCHAIN_ENDPOINT",)))
-
-
 def _meta(r):
     return (getattr(r, "extra", None) or {}).get("metadata") or {}
 
 
 def _get_json(url, ws):
-    req = urllib.request.Request(url, headers={"X-Api-Key": _key(), "X-Tenant-Id": ws})
+    req = urllib.request.Request(url, headers={"X-Api-Key": _common.key(), "X-Tenant-Id": ws})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -80,7 +64,7 @@ def matrix(roots):
 def resolve(roots, ws, control_plane):
     dep = next((_meta(r).get("LANGSMITH_HOST_PROJECT_ID") for r in roots if _meta(r).get("LANGSMITH_HOST_PROJECT_ID")), None)
     revs = sorted({_meta(r).get("LANGSMITH_HOST_REVISION_ID") for r in roots if _meta(r).get("LANGSMITH_HOST_REVISION_ID")})
-    base = (control_plane or _endpoint()).rstrip("/")
+    base = (control_plane or _common.endpoint()).rstrip("/")
     print("\n=== REVISION → COMMIT  (LangGraph Control Plane) ===")
     print("control-plane base: %s   deployment_id (LANGSMITH_HOST_PROJECT_ID): %s   revisions: %d" % (base, dep, len(revs)))
     if not dep or not revs:
@@ -113,15 +97,15 @@ def resolve(roots, ws, control_plane):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ws", required=True)
+    ap.add_argument("--ws", default=None, help="workspace id (default: LANGSMITH_WORKSPACE_ID from .env)")
     ap.add_argument("--project", required=True)
     ap.add_argument("--control-plane", default=None, help="Control Plane base URL if it differs from LANGSMITH_ENDPOINT")
     ap.add_argument("--n", type=int, default=300, help="max root runs (traces) to scan — bounds the one query")
     a = ap.parse_args()
-    os.environ["LANGSMITH_WORKSPACE_ID"] = a.ws
+    ws = _common.ws_id(a.ws)                                      # --ws or LANGSMITH_WORKSPACE_ID from .env
     roots = []                                                    # roots ONLY (ids+metadata) — light; capped at --n
-    for r in _client().list_runs(project_name=a.project, is_root=True,
-                                 select=["id", "trace_id", "start_time", "extra"]):
+    for r in _common.client().list_runs(project_name=a.project, is_root=True,
+                                        select=["id", "trace_id", "start_time", "extra"]):
         roots.append(r)
         if len(roots) >= a.n:
             break
@@ -129,7 +113,7 @@ def main():
         print("no traces (root runs) found — check ws/project.")
         return
     matrix(roots)
-    resolve(roots, a.ws, a.control_plane)
+    resolve(roots, ws, a.control_plane)
 
 
 if __name__ == "__main__":

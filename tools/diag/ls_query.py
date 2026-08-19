@@ -23,6 +23,7 @@ import credentials
 credentials.load()
 from connectors.datasource import get_source
 from connectors import get_adapter
+from tools.diag import _common                               # key + endpoint + workspace all come from .env
 try:
     from connectors.langsmith.adapter import _revision
 except Exception:
@@ -34,9 +35,7 @@ except Exception:
 
 
 def _client():
-    from langsmith import Client
-    return Client(api_key=credentials.get_secret("LANGSMITH_API_KEY", aliases=("LANGCHAIN_API_KEY", "LANGSMITH_KEY")),
-                  api_url=credentials.get_config("LANGSMITH_ENDPOINT", None, aliases=("LANGCHAIN_ENDPOINT",)))
+    return _common.client()                                  # key + endpoint from .env, same as the connector
 
 
 def _count(it, cap):
@@ -122,8 +121,8 @@ def main():
     ap.add_argument("--cap", type=int, default=5000, help="max root runs to count for a trace total")
     ap.add_argument("--runs", type=int, nargs="?", const=4000, default=0, help="also tally up to N runs")
     a = ap.parse_args()
-    if a.ws and a.project:
-        deep(a.source, a.ws, a.project, a.cap, a.runs)
+    if a.project:
+        deep(a.source, _common.ws_id(a.ws), a.project, a.cap, a.runs)   # --ws or LANGSMITH_WORKSPACE_ID from .env
     else:
         overview(a.source, a.cap)
 
