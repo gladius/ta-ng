@@ -15,8 +15,10 @@ from collections import OrderedDict
 from connectors.datasource import get_source
 
 
-def build(source_id, ws_id, project, limit=300):
+def build(source_id, ws_id, project, limit=150):
     """Fold an agent's traces into {agent, nodes, edges, graphs, buckets} via the one rich builder. Read-only, no LLM.
+    `limit` = the number of COMPLETE traces to pull — the connector fetches whole trace trees (roots, then all their
+    runs), NOT a run-window, so N here means N traces, not N spans (a fat agent is ~10-40 runs per trace).
 
     Call-site identity is STABLE and sample-independent: `agent / subgraph-path / node-label` (all metadata-derived).
     NOT the connector's content-variant key (`...~<frame>`), which is derived by clustering the fetched traces and

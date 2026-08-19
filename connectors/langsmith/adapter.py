@@ -140,7 +140,7 @@ class LangSmithAdapter(Adapter):
     name = "langsmith"
 
     def fetch(self, *, project=None, run_type=None, since_hours=None, limit=None,
-              runs=None, api_key=None, api_url=None, **_):
+              traces=None, revision=None, runs=None, api_key=None, api_url=None, **_):
         # run_type=None -> fetch the WHOLE tree (chain + llm + tool), which the graph layer needs to
         # resolve node identity + topology. (Was llm-only; that flat view lost the tree — see connectors/graph.)
         if runs is not None:                                   # -- offline --
@@ -163,21 +163,54 @@ class LangSmithAdapter(Adapter):
                                                                   aliases=("LANGCHAIN_API_KEY", "LANGSMITH_KEY")),
                         api_url=api_url or credentials.get_config("LANGSMITH_ENDPOINT", None,
                                                                   aliases=("LANGCHAIN_ENDPOINT",)))
-        # Fetch in ONE paginated query (list_runs paginates internally, ~100/page), stopping after `limit` runs. This
-        # is a few calls, not per-trace. NOTE: it's a run-WINDOW (can slice a trace tree at the boundary) — the pinned
-        # snapshot keeps that stable; a completeness pass (group by trace, keep whole trees, in ~the SAME few calls) is
-        # the proper follow-up. Per-trace hydration (one call each) was reverted: ~N calls -> report timed out.
-        kw = {"project_name": project, "select": _SELECT}
-        if run_type:                                           # None -> all run types (the whole tree, windowed)
-            kw["run_type"] = run_type
+        # TRACE-COMPLETE fetch — the default for a whole-tree pull. Get the last N WHOLE traces, never a run-WINDOW
+        # that slices a trace tree at the boundary (which lost nodes/edges + under-counted traces). Two BULK phases,
+        # not one-call-per-trace: (1) the N most-recent ROOT runs = N trace ids; (2) every run whose trace_id is in
+        # that set, batched ~50/query. `traces` (or `limit`, in a whole-tree pull) = the COUNT OF TRACES; `revision`
+        # optionally pins ONE agent version so the audit's reference set is version-coherent.
+        n = int(traces) if traces else (int(limit) if limit else None)
+        if n and not run_type:
+            yield from self._fetch_traces(client, project, n, revision, since_hours)
+            return
+        # legacy RUN-WINDOW — only when a caller scopes by run_type (e.g. llm-only): stop after `limit` runs.
+        kw = {"project_name": project, "select": _SELECT, "run_type": run_type}
         if since_hours:
             kw["start_time"] = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-        n = 0
+        m = 0
         for r in client.list_runs(**kw):
             yield _run_to_dict(r)
-            n += 1
-            if limit and n >= limit:
+            m += 1
+            if limit and m >= limit:
                 break
+
+    def _fetch_traces(self, client, project, n, revision, since_hours):
+        """Last `n` COMPLETE traces (every run in each tree) of one agent, optionally pinned to a `revision`.
+        TWO bulk list_runs queries (+ batching), never per-trace: roots first (cheap — id/trace_id/revision only),
+        then every run whose trace_id is in that set. Verified against live data: roots come newest-first and a
+        present root means the whole tree is captured, so `in(trace_id, [...])` rebuilds complete trees."""
+        rkw = {"project_name": project, "is_root": True, "select": ["id", "trace_id", "start_time", "extra"]}
+        if since_hours:
+            rkw["start_time"] = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+        cap = n if not revision else max(n * 4, n + 100)       # over-fetch a little so a revision filter still reaches n
+        roots = []
+        for r in client.list_runs(**rkw):
+            roots.append(r)
+            if len(roots) >= cap:
+                break
+
+        def _rev(r):
+            return ((getattr(r, "extra", None) or {}).get("metadata") or {}).get("revision_id")
+        if revision:                                           # pin one version -> coherent reference set for the audit
+            roots = [r for r in roots if _rev(r) == revision]
+        roots = roots[:n]                                      # the newest n (matching) traces
+        tids = [str(r.trace_id) for r in roots if getattr(r, "trace_id", None)]
+        if not tids:
+            return
+        B = 50                                                 # batch trace ids so each filter string stays bounded
+        for i in range(0, len(tids), B):
+            flt = "in(trace_id, [%s])" % ", ".join('"%s"' % t for t in tids[i:i + B])
+            for r in client.list_runs(project_name=project, select=_SELECT, filter=flt):
+                yield _run_to_dict(r)
 
     def to_trace(self, rec, *, project=None, group_by=None, **_):
         rec = _run_to_dict(rec)
