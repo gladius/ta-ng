@@ -66,6 +66,10 @@ def _meta(rec):
     return (rec.get("extra") or {}).get("metadata") or {}
 
 
+_REV_KEYS = ("revision_id", "revision", "ls_revision_id",
+             "LANGSMITH_HOST_REVISION_ID", "LANGSMITH_LANGGRAPH_API_REVISION")
+
+
 def _has_model(r):
     ip = (r.get("extra") or {}).get("invocation_params") or {}
     return bool(ip.get("model") or ip.get("model_name") or _meta(r).get("ls_model_name"))
@@ -96,13 +100,14 @@ def _capture_md(source, project, g, sample, avail):
     llm = [r for r in sample if r.get("run_type") in (None, "llm")]
     struct_runs = [r for r in sample if r.get("run_type") in ("tool", "retriever")]
     rt = Counter(r.get("run_type") for r in sample)
-    revs = sorted({_meta(r).get("revision_id") for r in sample if _meta(r).get("revision_id")})
+    rev_key = next((k for r in sample for k in _REV_KEYS if _meta(r).get(k)), None)
+    revs = sorted({_meta(r).get(rev_key) for r in sample if rev_key and _meta(r).get(rev_key)})
     tagged = sum(1 for r in llm if _meta(r).get("langgraph_node"))
     has_parent = sum(1 for r in sample if r.get("parent_run_id"))
     has_dotted = sum(1 for r in sample if r.get("dotted_order"))
     has_tid = sum(1 for r in sample if r.get("trace_id"))
     has_rt = sum(1 for r in sample if r.get("run_type") is not None)
-    has_rev = sum(1 for r in sample if _meta(r).get("revision_id"))
+    has_rev = sum(1 for r in sample if any(_meta(r).get(k) for k in _REV_KEYS))
     has_model = sum(1 for r in llm if _has_model(r))
     has_in = sum(1 for r in llm if r.get("inputs"))
     has_out = sum(1 for r in llm if r.get("outputs"))
@@ -113,14 +118,23 @@ def _capture_md(source, project, g, sample, avail):
     tool_names = sorted({(r.get("name") or "") for r in struct_runs})
     tool_generic = sum(1 for r in struct_runs if _is_generic(r.get("name") or ""))
     nl = len(llm)
+    m0 = _meta(llm[0]) if llm else {}
+    provider = m0.get("ls_provider") or "?"
+    model0 = (m0.get("ls_model_name")
+              or ((llm[0].get("extra") or {}).get("invocation_params") or {}).get("model")) if llm else "?"
+    from collections import defaultdict
+    census = defaultdict(Counter)
+    for r in sample:
+        census[_meta(r).get("langgraph_node") or "(no node)"][r.get("run_type") or "?"] += 1
 
     L = ["# Trace capture — `%s`  (source: %s)\n" % (project, source),
          "## Availability & fetch",
          "- Traces available in project (roots): **%s**%s" % (
              av_n if av_n is not None else "n/a", "  _(capped — at least this many)_" if av_cap else ""),
          "- Traces built into the graph: **%s**   _(fetch limit)_" % g.get("traces"),
-         "- Sample analysed: **%d traces / %d runs**  (~%.1f runs/trace)\n" % (
+         "- Sample analysed: **%d traces / %d runs**  (~%.1f runs/trace)" % (
              len(by_tr), n, n / max(1, len(by_tr))),
+         "- Model / provider (sample llm): **%s** / **%s**\n" % (model0, provider),
          "## Format conformance — does the data carry what the code reads?",
          "| field the code reads | present in sample | drives |",
          "|---|---|---|",
@@ -129,13 +143,21 @@ def _capture_md(source, project, g, sample, avail):
          "| `dotted_order` | %s | run ordering / completeness |" % _pc(has_dotted, n),
          "| `run_type` | %s | llm-vs-tool classification |" % _pc(has_rt, n),
          "| `metadata.langgraph_node` (llm) | %s | **call-site labels (tagged)** |" % _pc(tagged, nl),
-         "| `metadata.revision_id` | %s | version scoping |" % _pc(has_rev, n),
+         "| revision (any known key) | %s%s | version scoping |" % (
+             _pc(has_rev, n), ("  ← via `%s`" % rev_key) if rev_key else "  ← **none present**"),
          "| model (invocation / ls_model_name) (llm) | %s | model downgrade |" % _pc(has_model, nl),
          "| `inputs` (llm) | %s | the prompt (audit) |" % _pc(has_in, nl),
          "| `outputs` (llm) | %s | the behavior (audit) |" % _pc(has_out, nl),
          "| token usage (llm) | %s | cost |\n" % _pc(has_usage, nl),
          "- run_type mix: `%s`  ·  revisions: %s\n" % (dict(rt), revs or "_(none)_"),
-         "## Why the graph looks like it does (root cause)"]
+         "## Node census — distinct `langgraph_node` × run_type (the true graph node set)",
+         "- Distinct nodes seen: **%d**" % len(census),
+         "| node | llm | chain | tool | total |",
+         "|---|---|---|---|---|"]
+    for _node, _c in sorted(census.items(), key=lambda kv: -sum(kv[1].values())):
+        L.append("| %s | %d | %d | %d | %d |" % (
+            _node, _c.get("llm", 0) + _c.get(None, 0), _c.get("chain", 0), _c.get("tool", 0), sum(_c.values())))
+    L += ["", "## Why the graph looks like it does (root cause)"]
 
     if av_n is not None and not av_cap and av_n <= 12:
         L.append("- **Traces:** only ~%s exist in the project — the low count is the DATA, not the fetch." % av_n)

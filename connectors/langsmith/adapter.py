@@ -119,6 +119,20 @@ def _is_generic_seg(p):
     return p.lower() in ("", "__start__", "__end__", "langgraph")
 
 
+_REV_KEYS = ("revision_id", "revision", "ls_revision_id",
+             "LANGSMITH_HOST_REVISION_ID", "LANGSMITH_LANGGRAPH_API_REVISION")
+
+
+def _revision(meta):
+    """The whole-agent version. A LOCAL LangGraph run tags it `revision_id`; a HOSTED LangGraph Platform deployment
+    uses `LANGSMITH_HOST_REVISION_ID` / `LANGSMITH_LANGGRAPH_API_REVISION` instead — check them all so version
+    scoping works on both formats."""
+    for k in _REV_KEYS:
+        if meta.get(k):
+            return str(meta[k])
+    return ""
+
+
 def _callsite(rec, meta, project, group_by):
     """Return (agent_id, node_id): agent = the agent, node = the call-site within it.
 
@@ -199,7 +213,7 @@ class LangSmithAdapter(Adapter):
                 break
 
         def _rev(r):
-            return ((getattr(r, "extra", None) or {}).get("metadata") or {}).get("revision_id")
+            return _revision((getattr(r, "extra", None) or {}).get("metadata") or {})
         if revision:                                           # pin one version -> coherent reference set for the audit
             roots = [r for r in roots if _rev(r) == revision]
         roots = roots[:n]                                      # the newest n (matching) traces
@@ -288,8 +302,7 @@ class LangSmithAdapter(Adapter):
         t["cost_ls"] = float(_c) if _c is not None else None   # Decimal -> float so it stays JSON/arith-safe
         t["feedback_score"], t["feedback_n"] = _feedback(rec.get("feedback_stats"))   # quality, when evals exist
         t["ttft_ms"] = _ttft_ms(rec)                           # time-to-first-token (streaming latency)
-        t["revision"] = str(meta.get("revision_id") or meta.get("revision")     # whole-agent version (git SHA),
-                            or meta.get("ls_revision_id") or "")                 # present only when the team tags it
+        t["revision"] = _revision(meta)                          # git SHA (local) or LANGSMITH_HOST_REVISION_ID (hosted)
         return t
 
     def to_record(self, rec, *, project=None, group_by=None, **_):
