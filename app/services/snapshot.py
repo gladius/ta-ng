@@ -25,6 +25,7 @@ def build_into(sid, source, ws, project):
     g = graph.build(source, ws, project)
     store.put(("snapshot", sid), {"source": source, "ws": ws, "project": project, "graph": g})
     snapdump.dump_graph(sid, g)                               # dev-only (AUDIT_DEBUG): traces/ + graph/ for this snap
+    snapdump.dump_capture(sid, source, ws, project, g)        # dev-only (AUDIT_DEBUG): CAPTURE.md — raw format + counts
     return g
 
 

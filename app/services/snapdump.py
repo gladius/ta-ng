@@ -59,3 +59,150 @@ def dump_results(snap, proof):
         _write(snap, "results", "proof.json", proof)
     except Exception as e:
         print("[snapdump] results dump failed for %s: %s" % (snap, e))
+
+
+# ── Human-readable RAW-FORMAT capture — the "close it once and for all" report ────────────────────────────────────
+def _meta(rec):
+    return (rec.get("extra") or {}).get("metadata") or {}
+
+
+def _has_model(r):
+    ip = (r.get("extra") or {}).get("invocation_params") or {}
+    return bool(ip.get("model") or ip.get("model_name") or _meta(r).get("ls_model_name"))
+
+
+def _has_usage(r):
+    if r.get("prompt_tokens") is not None or r.get("completion_tokens") is not None:
+        return True
+    return bool(((r.get("outputs") or {}).get("llm_output") or {}).get("token_usage"))
+
+
+def _pc(k, d):
+    return "%d/%d (%d%%)" % (k, d, round(100 * k / d) if d else 0)
+
+
+def _capture_md(source, project, g, sample, avail):
+    """A FORMAT-CONFORMANCE + ROOT-CAUSE report (not raw dumps): does the data carry what the code reads, and if
+    the graph is thin, exactly WHY (few traces / untagged collapse / no structural / no edges)."""
+    from collections import Counter
+    try:
+        from connectors.graph import _is_generic
+    except Exception:
+        _is_generic = lambda s: not s
+    by_tr = {}
+    for r in sample:
+        by_tr.setdefault(r.get("trace_id"), []).append(r)
+    n = len(sample)
+    llm = [r for r in sample if r.get("run_type") in (None, "llm")]
+    struct_runs = [r for r in sample if r.get("run_type") in ("tool", "retriever")]
+    rt = Counter(r.get("run_type") for r in sample)
+    revs = sorted({_meta(r).get("revision_id") for r in sample if _meta(r).get("revision_id")})
+    tagged = sum(1 for r in llm if _meta(r).get("langgraph_node"))
+    has_parent = sum(1 for r in sample if r.get("parent_run_id"))
+    has_dotted = sum(1 for r in sample if r.get("dotted_order"))
+    has_tid = sum(1 for r in sample if r.get("trace_id"))
+    has_rt = sum(1 for r in sample if r.get("run_type") is not None)
+    has_rev = sum(1 for r in sample if _meta(r).get("revision_id"))
+    has_model = sum(1 for r in llm if _has_model(r))
+    has_in = sum(1 for r in llm if r.get("inputs"))
+    has_out = sum(1 for r in llm if r.get("outputs"))
+    has_usage = sum(1 for r in llm if _has_usage(r))
+    av_n, av_cap = avail if isinstance(avail, tuple) else (avail, False)
+    nodes, structn, edges = g.get("nodes", []), g.get("structural_nodes", []), g.get("edges", [])
+    untag = sum(1 for x in nodes if x.get("untagged"))
+    tool_names = sorted({(r.get("name") or "") for r in struct_runs})
+    tool_generic = sum(1 for r in struct_runs if _is_generic(r.get("name") or ""))
+    nl = len(llm)
+
+    L = ["# Trace capture — `%s`  (source: %s)\n" % (project, source),
+         "## Availability & fetch",
+         "- Traces available in project (roots): **%s**%s" % (
+             av_n if av_n is not None else "n/a", "  _(capped — at least this many)_" if av_cap else ""),
+         "- Traces built into the graph: **%s**   _(fetch limit)_" % g.get("traces"),
+         "- Sample analysed: **%d traces / %d runs**  (~%.1f runs/trace)\n" % (
+             len(by_tr), n, n / max(1, len(by_tr))),
+         "## Format conformance — does the data carry what the code reads?",
+         "| field the code reads | present in sample | drives |",
+         "|---|---|---|",
+         "| `trace_id` | %s | grouping runs into traces |" % _pc(has_tid, n),
+         "| `parent_run_id` | %s | topology / edges (roots have none) |" % _pc(has_parent, n),
+         "| `dotted_order` | %s | run ordering / completeness |" % _pc(has_dotted, n),
+         "| `run_type` | %s | llm-vs-tool classification |" % _pc(has_rt, n),
+         "| `metadata.langgraph_node` (llm) | %s | **call-site labels (tagged)** |" % _pc(tagged, nl),
+         "| `metadata.revision_id` | %s | version scoping |" % _pc(has_rev, n),
+         "| model (invocation / ls_model_name) (llm) | %s | model downgrade |" % _pc(has_model, nl),
+         "| `inputs` (llm) | %s | the prompt (audit) |" % _pc(has_in, nl),
+         "| `outputs` (llm) | %s | the behavior (audit) |" % _pc(has_out, nl),
+         "| token usage (llm) | %s | cost |\n" % _pc(has_usage, nl),
+         "- run_type mix: `%s`  ·  revisions: %s\n" % (dict(rt), revs or "_(none)_"),
+         "## Why the graph looks like it does (root cause)"]
+
+    if av_n is not None and not av_cap and av_n <= 12:
+        L.append("- **Traces:** only ~%s exist in the project — the low count is the DATA, not the fetch." % av_n)
+    elif av_n and g.get("traces") is not None and g["traces"] < av_n:
+        L.append("- **Traces:** %s%s available but built %s (fetch limit) — raise the limit to pull more." % (
+            av_n, "+" if av_cap else "", g["traces"]))
+    else:
+        L.append("- **Traces:** built %s (available ~%s)." % (g.get("traces"), av_n))
+
+    if llm and not tagged:
+        L.append("- **Call-sites = %d (untagged %d):** `langgraph_node` MISSING on %s llm runs → every call "
+                 "collapses to ONE untagged call-site. **This is the '1 call-site'.** Fix: tag nodes, or split "
+                 "untagged ops in the connector." % (len(nodes), untag, _pc(nl - tagged, nl)))
+    else:
+        L.append("- **Call-sites = %d (untagged %d):** `langgraph_node` present on %s → nodes label + separate "
+                 "correctly." % (len(nodes), untag, _pc(tagged, nl)))
+
+    if not structn and not struct_runs:
+        L.append("- **Structural (non-llm) nodes = 0:** the sample has NO `tool`/`retriever` runs — this agent uses "
+                 "none, or they aren't traced.")
+    elif not structn and struct_runs:
+        L.append("- **Structural nodes = 0:** %d tool/retriever runs exist but %s have GENERIC names %s → filtered "
+                 "out. They need real names to appear." % (len(struct_runs), _pc(tool_generic, len(struct_runs)), tool_names))
+    else:
+        L.append("- **Structural (non-llm) nodes = %d:** %d tool/retriever runs, names %s → captured." % (
+            len(structn), len(struct_runs), tool_names))
+
+    if not edges:
+        why = []
+        if has_parent < n * 0.5:
+            why.append("`parent_run_id` missing on %s" % _pc(n - has_parent, n))
+        if has_dotted < n * 0.5:
+            why.append("`dotted_order` missing on %s" % _pc(n - has_dotted, n))
+        why = why or ["nodes resolved to generic names (no keyable transitions)"]
+        L.append("- **Edges = 0:** topology couldn't be built — %s." % "; ".join(why))
+    else:
+        L.append("- **Edges = %d:** `parent_run_id` %s + `dotted_order` %s → flow reconstructed." % (
+            len(edges), _pc(has_parent, n), _pc(has_dotted, n)))
+
+    if len(revs) > 1:
+        L.append("- **Revisions:** %d versions in the window (%s) → the audit would MIX versions; pin one."
+                 % (len(revs), revs))
+
+    L.append("\n## Metadata keys on a sample llm run (field names, for a format-diff)")
+    L.append("`%s`" % (sorted(_meta(llm[0]).keys()) if llm else "(no llm run in sample)"))
+    return "\n".join(L) + "\n"
+
+
+def dump_capture(snap, source, ws, project, g):
+    """AUDIT_DEBUG: write .audit_debug/<snap>/CAPTURE.md — a human-readable capture of the RAW trace FORMAT
+    (with a couple of verbatim runs so you can see if metadata/langgraph_node is present) + how many traces are
+    available vs fetched + a plain diagnosis. Does a SMALL extra read-only fetch (debug-only). Never breaks the audit."""
+    if not (enabled() and snap and g):
+        return
+    try:
+        import os as _os
+        from connectors import get_adapter
+        _os.environ["LANGSMITH_WORKSPACE_ID"] = ws or ""
+        ad = get_adapter(source)
+        try:
+            sample = list(ad.fetch(project=project, traces=15))       # small, just to characterize the format
+        except TypeError:
+            sample = list(ad.fetch(project=project, limit=15))        # old connector (no `traces` kw)
+        avail = getattr(ad, "available_traces", lambda *a, **k: (None, False))(project)
+        d = _os.path.join(_ROOT, str(snap))
+        _os.makedirs(d, exist_ok=True)
+        with open(_os.path.join(d, "CAPTURE.md"), "w", encoding="utf-8") as f:
+            f.write(_capture_md(source, project, g, sample, avail))
+    except Exception as e:                                            # diagnostics must never break the audit
+        print("[snapdump] capture dump failed for %s: %s" % (snap, e))

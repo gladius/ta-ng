@@ -212,6 +212,26 @@ class LangSmithAdapter(Adapter):
             for r in client.list_runs(project_name=project, select=_SELECT, filter=flt):
                 yield _run_to_dict(r)
 
+    def available_traces(self, project, cap=500, api_key=None, api_url=None):
+        """Best-effort count of how many traces (root runs) EXIST in the project — so the debug capture can say
+        'available vs fetched'. Cheap (ids only) and CAPPED so a huge project can't run away. Returns (count, capped)."""
+        try:
+            from langsmith import Client
+        except ImportError:
+            return None, False
+        import credentials
+        credentials.load()
+        client = Client(api_key=api_key or credentials.get_secret("LANGSMITH_API_KEY",
+                                                                  aliases=("LANGCHAIN_API_KEY", "LANGSMITH_KEY")),
+                        api_url=api_url or credentials.get_config("LANGSMITH_ENDPOINT", None,
+                                                                  aliases=("LANGCHAIN_ENDPOINT",)))
+        n = 0
+        for _ in client.list_runs(project_name=project, is_root=True, select=["id"]):
+            n += 1
+            if n >= cap:
+                return n, True
+        return n, False
+
     def to_trace(self, rec, *, project=None, group_by=None, **_):
         rec = _run_to_dict(rec)
         if rec.get("run_type") not in (None, "llm"):           # only LLM spans carry prompts + usage
