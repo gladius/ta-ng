@@ -112,7 +112,8 @@ def comprehend_stream(source: str, ws_id: str, project: str, snap: str = ""):
             return
         try:
             for evt in comprehend.stream(source, ws_id, project, snap,
-                                         g.get("nodes", []), g.get("buckets", {}), g.get("edges", [])):
+                                         g.get("nodes", []), g.get("buckets", {}), g.get("edges", []),
+                                         g.get("structural_nodes", [])):
                 yield _sse(evt.get("type", "stage"), evt)
         except Exception as e:
             yield _sse("failed", {"msg": str(e)[:300]})

@@ -122,18 +122,18 @@ def _capture_md(source, project, g, sample, avail):
     provider = m0.get("ls_provider") or "?"
     model0 = (m0.get("ls_model_name")
               or ((llm[0].get("extra") or {}).get("invocation_params") or {}).get("model")) if llm else "?"
-    from collections import defaultdict
-    census = defaultdict(Counter)
-    for r in sample:
-        census[_meta(r).get("langgraph_node") or "(no node)"][r.get("run_type") or "?"] += 1
+    full_rt = g.get("run_totals") or {}                   # run_type counts over ALL fetched traces (the full graph)
+    full_runs = sum(full_rt.values())
+    full_census = g.get("node_run_types") or {}           # per-node run_type census over ALL runs (not the sample)
 
     L = ["# Trace capture — `%s`  (source: %s)\n" % (project, source),
          "## Availability & fetch",
          "- Traces available in project (roots): **%s**%s" % (
              av_n if av_n is not None else "n/a", "  _(capped — at least this many)_" if av_cap else ""),
-         "- Traces built into the graph: **%s**   _(fetch limit)_" % g.get("traces"),
-         "- Sample analysed: **%d traces / %d runs**  (~%.1f runs/trace)" % (
-             len(by_tr), n, n / max(1, len(by_tr))),
+         "- Traces built into the graph: **%s** (the full fetch)   ·   runs across them: **%d**   ·   run_type mix: `%s`" % (
+             g.get("traces"), full_runs, dict(full_rt)),
+         "- _The format table below is checked on a small **%d-trace / %d-run** raw sample (cheap); the graph itself "
+         "uses all %s traces above._" % (len(by_tr), n, g.get("traces")),
          "- Model / provider (sample llm): **%s** / **%s**\n" % (model0, provider),
          "## Format conformance — does the data carry what the code reads?",
          "| field the code reads | present in sample | drives |",
@@ -149,14 +149,17 @@ def _capture_md(source, project, g, sample, avail):
          "| `inputs` (llm) | %s | the prompt (audit) |" % _pc(has_in, nl),
          "| `outputs` (llm) | %s | the behavior (audit) |" % _pc(has_out, nl),
          "| token usage (llm) | %s | cost |\n" % _pc(has_usage, nl),
-         "- run_type mix: `%s`  ·  revisions: %s\n" % (dict(rt), revs or "_(none)_"),
-         "## Node census — distinct `langgraph_node` × run_type (the true graph node set)",
-         "- Distinct nodes seen: **%d**" % len(census),
-         "| node | llm | chain | tool | total |",
-         "|---|---|---|---|---|"]
-    for _node, _c in sorted(census.items(), key=lambda kv: -sum(kv[1].values())):
-        L.append("| %s | %d | %d | %d | %d |" % (
-            _node, _c.get("llm", 0) + _c.get(None, 0), _c.get("chain", 0), _c.get("tool", 0), sum(_c.values())))
+         "- revisions (in sample): %s\n" % (revs or "_(none)_"),
+         "## Node census — distinct `langgraph_node` × run_type (FULL graph — all %s traces)" % g.get("traces"),
+         "Distinct nodes seen: **%d**\n" % len(full_census),     # blank line BEFORE the table so it renders
+         "| node | llm | chain | tool | other | total |",
+         "|---|---|---|---|---|---|"]
+    for _node, _c in sorted(full_census.items(), key=lambda kv: -sum(kv[1].values())):
+        _llm = _c.get("llm", 0) + _c.get(None, 0)
+        _tot = sum(_c.values())
+        _other = _tot - _llm - _c.get("chain", 0) - _c.get("tool", 0)
+        L.append("| %s | %d | %d | %d | %d | %d |" % (
+            _node, _llm, _c.get("chain", 0), _c.get("tool", 0), _other, _tot))
     L += ["", "## Why the graph looks like it does (root cause)"]
 
     if av_n is not None and not av_cap and av_n <= 12:

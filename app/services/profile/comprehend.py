@@ -109,11 +109,16 @@ _DEPLOY_SCHEMA = ('{"kind": "<=8 words: what kind of agent/deployment this is", 
                   '"summary": "2-4 sentences: what it does end to end and how the nodes/subgraphs work together"}')
 
 
-def deployment_summary(agent, per_node, edges):
+def deployment_summary(agent, per_node, edges, function_nodes=None):
     """ONE synthesis call over the per-node roles + observed flow -> a deployment-level 'what this agent does'.
-    Grounded in the node summaries we already produced (no raw prompts re-read), so it's cheap and consistent."""
+    Grounded in the node summaries we already produced (no raw prompts re-read), so it's cheap and consistent.
+    `function_nodes` = non-llm nodes (fetch_x / send_email / …); we describe them by name + what they OUTPUT so
+    the summary sees the WHOLE agent, not just the llm call-sites."""
     roles = [{"node": k.rsplit("/", 1)[-1], "op": v.get("op"), "summary": v.get("summary")}
              for k, v in per_node.items() if not k.startswith("_")]
+    for s in (function_nodes or []):
+        roles.append({"node": s.get("node"), "op": "function",
+                      "summary": "non-LLM function node; sample output: %s" % ((s.get("out_sample") or "(none)")[:200])})
     flow = ["%s -> %s (x%d)" % (e["src"].rsplit("/", 1)[-1], e["dst"].rsplit("/", 1)[-1], e.get("count", 1))
             for e in (edges or [])]
     user = ("AGENT: %s\n\nPER-NODE ROLES:\n%s\n\nOBSERVED FLOW (node -> node):\n%s\n\n%s"
@@ -131,7 +136,7 @@ def deployment_summary(agent, per_node, edges):
     return {"kind": "", "summary": ""}
 
 
-def stream(source, ws, project, snap, nodes, buckets, edges=None):
+def stream(source, ws, project, snap, nodes, buckets, edges=None, structural=None):
     """SSE generator — comprehend each llm call-site node-by-node (so the wait is visible, never a frozen page),
     then ONE deployment-level synthesis, then FREEZE the whole map under comprehend_key so later views are instant.
     Paid: one small PROFILE_MODEL call per node + one synthesis call. The '_deployment' entry holds the summary."""
@@ -147,7 +152,8 @@ def stream(source, ws, project, snap, nodes, buckets, edges=None):
             out[n["key"]] = _fallback(e)
     yield {"type": "stage", "msg": "Summarizing the deployment…", "pct": 95}
     try:
-        out["_deployment"] = deployment_summary(project, out, edges)
+        funcs = [s for s in (structural or []) if s.get("type") == "function"]
+        out["_deployment"] = deployment_summary(project, out, edges, funcs)
     except Exception as e:
         out["_deployment"] = {"kind": "", "summary": "", "unavailable": str(e)[:160]}
     store.put(comprehend_key(source, ws, project, snap), out)

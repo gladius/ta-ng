@@ -165,7 +165,7 @@ def _resolve_path(rec, by_id, exclude=None):
 
 class Graph:
     def __init__(self, agent, buckets, nodes, edges, trace_count, errors_excluded=0, revisions=None,
-                 structural_nodes=None):
+                 structural_nodes=None, run_totals=None, node_run_types=None):
         self.agent = agent
         self.buckets = buckets                           # OrderedDict[key -> list[trace]]  (downstream API)
         self.nodes = nodes                               # llm call-sites (tokens/cost/deep facts)
@@ -174,6 +174,8 @@ class Graph:
         self.errors_excluded = errors_excluded           # failed samples dropped from ALL buckets (honesty count)
         self.revisions = revisions or []                 # distinct agent versions seen (latest-pin / selector later)
         self.structural_nodes = structural_nodes or []   # typed NON-llm nodes (tool/retriever): the whole deployment
+        self.run_totals = run_totals or {}               # run_type -> count over ALL fetched runs (the FULL picture)
+        self.node_run_types = node_run_types or {}        # langgraph_node -> {run_type: count} over ALL runs (census)
 
 
 def build_graph(records, agent_default="agent"):
@@ -358,6 +360,44 @@ def build_graph(records, agent_default="agent"):
                          "avg_ms": round(a["ms"] / max(1, a["calls"]))}
                         for a in struct.values()]
 
+    # FUNCTION nodes — a named langgraph_node that RUNS but never calls an llm and isn't a tool/retriever: a pure
+    # code/logic node (fetch_x, send_email, write_log). LangGraph traces these as `chain`, so the tool/retriever
+    # pass above misses them — yet they're real deployment nodes. Surface them (facts + an output sample) so the
+    # map + deployment summary see the WHOLE agent, not just the llm call-sites.
+    run_totals = Counter()                                # run_type -> count over ALL fetched runs (full picture)
+    node_rt = {}                                          # langgraph_node -> {run_type: count} over ALL runs (census)
+    for tid, runs in by_trace.items():
+        for rec in runs:
+            run_totals[rec.get("run_type")] += 1
+            node_rt.setdefault(rec.get("node_hint") or "(no node)", Counter())[rec.get("run_type")] += 1
+    fn = OrderedDict()
+    for tid, runs in by_trace.items():
+        for rec in runs:
+            if rec.get("run_type") != "chain":
+                continue
+            nl = rec.get("node_hint")
+            if not nl or _is_generic(nl):
+                continue
+            c = node_rt.get(nl) or {}
+            if c.get("llm") or c.get(None) or c.get("tool") or c.get("retriever"):
+                continue                                  # has an llm (=call-site) or a tool -> not a pure function node
+            gp = (rec.get("graph_path") or "").strip("/")
+            a = fn.setdefault(_skey(gp, nl), {"key": _skey(gp, nl), "type": "function", "node": nl,
+                                              "graph_path": gp, "calls": 0, "errors": 0, "ms": 0,
+                                              "traces": set(), "out_sample": ""})
+            a["calls"] += 1
+            a["errors"] += 1 if rec.get("error") else 0
+            a["ms"] += rec.get("runtime_ms") or 0
+            a["traces"].add(str(rec.get("trace_id") or ""))
+            if not a["out_sample"] and rec.get("out_sample"):
+                a["out_sample"] = rec["out_sample"]
+    structural_nodes += [{"key": a["key"], "type": a["type"], "node": a["node"], "graph_path": a["graph_path"],
+                          "calls": a["calls"], "errors": a["errors"], "traces": len(a["traces"]),
+                          "error_rate": round(a["errors"] / max(1, a["calls"]), 3),
+                          "avg_ms": round(a["ms"] / max(1, a["calls"])), "out_sample": a["out_sample"]}
+                         for a in fn.values()]
+
     return Graph(agent, buckets, nodes, edges, len([t for t in by_trace if t]),
                  errors_excluded=sum(excluded.values()), revisions=sorted(revs),
-                 structural_nodes=structural_nodes)
+                 structural_nodes=structural_nodes,
+                 run_totals=dict(run_totals), node_run_types={k: dict(v) for k, v in node_rt.items()})

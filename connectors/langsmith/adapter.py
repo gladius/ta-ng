@@ -150,6 +150,19 @@ def _callsite(rec, meta, project, group_by):
     return str(agent), str(node)
 
 
+def _out_preview(outputs, cap=240):
+    """A tiny, one-line preview of a run's OUTPUTS — lets us describe what a non-llm FUNCTION node produces
+    (llm nodes carry the full trace instead)."""
+    if not outputs:
+        return ""
+    try:
+        s = json.dumps(outputs, default=str, ensure_ascii=False)
+    except Exception:
+        s = str(outputs)
+    s = s.replace("\n", " ")
+    return s if len(s) <= cap else s[:cap] + "…"
+
+
 class LangSmithAdapter(Adapter):
     name = "langsmith"
 
@@ -324,6 +337,8 @@ class LangSmithAdapter(Adapter):
                 # carried for NON-llm nodes too (tool/retriever have no trace): subgraph, failure, latency
                 "graph_path": _graph_path(meta), "error": rec.get("error") or "",
                 "runtime_ms": _runtime_ms(rec),
+                # small output preview for NON-llm nodes — describes what a function node PRODUCES
+                "out_sample": _out_preview(rec.get("outputs")) if rt not in (None, "llm") else "",
                 "trace": trace}
 
 

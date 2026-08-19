@@ -94,4 +94,6 @@ def build(source_id, ws_id, project, limit=150):
             "edges": g.edges, "graphs": graphs, "buckets": buckets,
             "traces": getattr(g, "trace_count", 0), "skipped": len(skipped),    # sample size = # of traces
             "errors_excluded": getattr(g, "errors_excluded", 0),               # failed runs dropped from the audit
-            "revisions": getattr(g, "revisions", [])}                          # agent versions seen (pin/select later)
+            "revisions": getattr(g, "revisions", []),                          # agent versions seen (pin/select later)
+            "run_totals": getattr(g, "run_totals", {}),                        # run_type -> count over ALL runs (full)
+            "node_run_types": getattr(g, "node_run_types", {})}                # per-node run_type census over ALL runs

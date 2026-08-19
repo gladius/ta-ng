@@ -5,10 +5,10 @@ the SAME source the downgrade lever uses — so profile and levers reconcile by 
 own `cost_ls` is used only as a fallback for a model the catalog doesn't price (self-hosted / custom);
 if neither has a price we say so ("price unknown — add it to models.json") rather than invent a number.
 
-Scope note (honest): today the graph carries LLM call-sites only (tool/retriever/chain nodes + threads +
-untagged-agent handling are the next increments), so `type` is always "llm" here. The advisory `role`
-(one LLM call per node) is a separate, optional pass — left None here so the deterministic profile stands
-alone with no model spend.
+Scope note (honest): the graph carries LLM call-sites (kind "llm") AND non-llm nodes — tool/retriever plus
+FUNCTION nodes (a langgraph_node that runs code but never calls an llm: fetch_x / send_email / write_log).
+Non-llm nodes get deterministic facts + a one-liner (no prompt to comprehend, no $ to optimize); the advisory
+LLM `role` (op + summary) is a separate optional pass, filled per llm node once `comp` is provided.
 """
 from app.config import CALLS_BASIS
 from auditor.util import PRICE, usd, canonical_model, tier, cache_mode
@@ -163,6 +163,7 @@ def build_profile(g, comp=None):
         "agent": g.get("agent", "agent"), "traces": g.get("traces", 0), "call_sites": len(nodes),
         "tool_count": sum(1 for s in structural if s["kind"] == "tool"),
         "retriever_count": sum(1 for s in structural if s["kind"] == "retriever"),
+        "function_count": sum(1 for s in structural if s["kind"] == "function"),
         "subgraphs": g.get("graphs", []), "revisions": g.get("revisions", []),
         "errors_excluded": g.get("errors_excluded", 0),
         "total_calls": total_calls, "total_in": total_in, "total_out": total_out,
