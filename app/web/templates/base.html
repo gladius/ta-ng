@@ -14,5 +14,6 @@
   <main class="wrap {% block wrap_extra %}{% endblock %}">
     {% block content %}{% endblock %}
   </main>
+  <script src="/static/md.js?v={{ css_v | default(1) }}" defer></script>
 </body>
 </html>

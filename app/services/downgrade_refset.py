@@ -16,7 +16,7 @@ Verdict (RELATIVE — a noisy-but-coherent original isn't held to perfection):
   else                                  -> NOT-SAFE
 Node: SAFE if >= NODE_SAFE_RATIO of inputs SAFE, else NOT-SAFE.
 
-  coherence(request, outputs)     -> (rate, divergent_set)
+  coherence(request, outputs)     -> (rate, divergent_set, reasons)   reasons[i] = why output i differs
   fit_vote(refset, cand, request) -> (kept, reason)      one candidate vs a reference set, majority of JUDGE_VOTES
   prove_transform_refset(sample, cheaper, original) -> (inputs, node_verdict, safe)   [report-shaped, drop-in]
 """
@@ -64,29 +64,30 @@ def _req(t):
 
 
 # ── The fit judge: does a candidate belong to the reference set? Materiality SELF-CALIBRATED by the set. ────────────
-_FIT_SYS = ("You decide whether a CANDIDATE output belongs to the same behaviour as a REFERENCE SET of outputs the "
-            "model already considers acceptable for the same request.")
-_FIT_TMPL = (
-    "REQUEST:\n%s\n\n"
-    "REFERENCE SET — %d outputs the model considers ACCEPTABLE for this request:\n%s\n\n"
-    "CANDIDATE:\n%s\n\n"
-    "Does the CANDIDATE carry the SAME decision / classification / required facts / values / tool call as the set, "
-    "differing ONLY in ways the set ITSELF already shows? Judge material CONTENT, not surface form:\n"
+_FIT_SYS = (
+    "You decide whether a CANDIDATE output belongs to the same behaviour as a REFERENCE SET of outputs the model "
+    "already considers acceptable for the SAME request. Does the CANDIDATE carry the SAME decision / classification "
+    "/ required facts / values / tool call — SAME tool AND same material arguments — as the set, differing ONLY in "
+    "ways the set ITSELF already shows? Judge material CONTENT, not surface form:\n"
     "- Wording and ordering differences are always fine.\n"
     "- A FORMAT or STRUCTURE difference (e.g. JSON vs plain text) is fine ONLY IF the reference set itself varies "
     "that way. If every output in the set holds one form, a candidate that breaks it does NOT belong.\n"
-    "- A changed decision, a dropped / added material fact or value, or an invented / contradicted claim NEVER "
-    "belongs.\n"
+    "- A changed decision, a changed tool argument, a dropped / added material fact or value, or an invented / "
+    "contradicted claim NEVER belongs.\n"
     "- If unsure -> BROKE.\n"
     "Think in ONE short line (<=15 words), THEN on the FINAL line output exactly KEPT or BROKE."
 )
+# request + reference set — IDENTICAL across the K×votes fit calls for one input, so it's the cache PREFIX (write once,
+# read the rest). Only the CANDIDATE (the tail block) varies. The rubric lives in _FIT_SYS above.
+_FIT_PREFIX = "REQUEST:\n%s\n\nREFERENCE SET — %d outputs the model considers ACCEPTABLE for this request:\n%s\n\n"
 
 
 def _fit_once(refset, cand, request):
     ref = "\n\n".join("--- acceptable %d ---\n%s" % (i + 1, _cap(o, OUT)) for i, o in enumerate(refset))
-    p = _FIT_TMPL % (request[:CAP], len(refset), ref, _cap(cand, CAP))
+    prefix = _FIT_PREFIX % (request[:CAP], len(refset), ref)         # cached breakpoint — shared across votes/candidates
     r = llm_client.complete(model=JUDGE_MODEL, max_tokens=AUDIT_JUDGE_MAX_TOKENS, system=_FIT_SYS,
-                            messages=[{"role": "user", "content": p}])
+                            messages=[{"role": "user", "content": [llm_client.cache_block(prefix),
+                                       {"type": "text", "text": "CANDIDATE:\n%s" % _cap(cand, CAP)}]}])
     raw = "".join(x.text for x in r.content if x.type == "text")
     hits = list(re.finditer(r"\b(KEPT|BROKE)\b", raw, flags=re.I))
     kept = bool(hits) and hits[-1].group(1).upper() == "KEPT"
@@ -115,23 +116,30 @@ _COH_TMPL = (
     "UNLESS they change the meaning; a changed decision or a different material value DOES.\n"
     "Line 1 — output exactly: CONSISTENT n/%d\n"
     "Line 2 — output: DIVERGENT followed by the numbers of the outputs that break from the majority "
-    "(e.g. 'DIVERGENT 2,4'), or 'DIVERGENT none'."
+    "(e.g. 'DIVERGENT 2,4'), or 'DIVERGENT none'.\n"
+    "Then ONE line per divergent number: '<number>: <=12-word reason it differs from the majority'."
 )
 
 
 def coherence(request, outputs):
-    """One call -> (rate, divergent_set): how many of `outputs` agree materially, and which NUMBERS (1-based) diverge."""
+    """One call -> (rate, divergent_set, reasons): how many of `outputs` agree materially, which NUMBERS (1-based)
+    diverge, and a short per-divergent REASON so the report can EXPLAIN a 'differs' instead of a bare 'no'."""
     ref = "\n\n".join("--- output %d ---\n%s" % (i + 1, _cap(o, OUT)) for i, o in enumerate(outputs))
     total = len(outputs)
     r = llm_client.complete(model=JUDGE_MODEL, max_tokens=AUDIT_JUDGE_MAX_TOKENS, system=_COH_SYS,
                             messages=[{"role": "user", "content": _COH_TMPL % (request[:CAP], total, ref, total)}])
     raw = "".join(x.text for x in r.content if x.type == "text")
+    reasons = {}
+    for rm in re.finditer(r"^\s*(\d+)\s*[:\-]\s*(.+)$", raw, flags=re.M):   # '<n>: reason it differs' (per divergent)
+        i = int(rm.group(1))
+        if 1 <= i <= total:
+            reasons[i] = rm.group(2).strip()[:120]
     dm = re.search(r"DIVERGENT[:\s]+([0-9,\s]+)", raw, flags=re.I)
     if dm:                                                    # divergent list is authoritative -> rate = total - |div|
         div = {d for d in (int(x) for x in re.findall(r"\d+", dm.group(1))) if 1 <= d <= total}
-        return total - len(div), div
+        return total - len(div), div, reasons
     m = re.search(r"(\d+)\s*/\s*(\d+)", raw)                  # fallback: the n/N count, can't say which diverged
-    return (max(0, min(int(m.group(1)), total)) if m else total), set()
+    return (max(0, min(int(m.group(1)), total)) if m else total), set(), reasons
 
 
 def prove_transform_refset(sample, cheaper, original, k=None):
@@ -178,7 +186,7 @@ def prove_transform_refset(sample, cheaper, original, k=None):
     inputs = []
     for idx, t in enumerate(sample):
         O, C = originals[idx], cheap[idx]
-        orig_rate, divergent = coh[idx]                          # from the one coherence call
+        orig_rate, divergent, orig_reasons = coh[idx]            # rate + which diverge + why (from the coherence call)
         no = len(O)
         cheap_res = [majority(idx, j) for j in range(len(C))]
         cheap_rate, nc = sum(1 for kp, _, _, _ in cheap_res if kp), len(C)
@@ -203,8 +211,10 @@ def prove_transform_refset(sample, cheaper, original, k=None):
             "input": _user_text(t)[:CAP], "system": _system_text(t)[:CAP], "recorded": _recorded(t)[:CAP],
             "kept": cheap_rate, "k": nc, "verdict": verdict, "note": note, "unverified": unverified,
             "self_rate": "%d/%d" % (orig_rate, no),
-            "orig_runs": [{"preserved": (i + 1) not in divergent, "reason": "", "votes": "",
-                           "output": (O[i] or "")[:CAP]} for i in range(no)],   # fits/differs from the coherence call
+            "orig_runs": [{"preserved": (i + 1) not in divergent,
+                           "reason": ("" if (i + 1) not in divergent else orig_reasons.get(i + 1, "differs from the majority")),
+                           "votes": "", "output": (O[i] or "")[:CAP]} for i in range(no)],   # fits/differs + WHY
+
             "samples": [{"preserved": kp, "reason": why, "votes": vt, "judges": jd, "output": (C[j] or "")[:CAP]}
                         for j, (kp, why, vt, jd) in enumerate(cheap_res)],
         })

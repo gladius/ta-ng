@@ -5,6 +5,7 @@ tuning retry is a one-file change.
 
 The Anthropic client is thread-safe, so `complete()` is safe to call from the parallel proof workers.
 """
+import os
 import time
 import threading
 
@@ -49,15 +50,50 @@ def _complete_raw(**kw):
     raise last
 
 
+def cache_block(text):
+    """An Anthropic prompt-cache breakpoint: mark this text as a cacheable PREFIX. Safe to use anywhere — complete()
+    STRIPS cache_control before a non-Claude model (keyed on the model NAME, so it works whether Claude is reached
+    directly OR via a litellm gateway, and never reaches another provider)."""
+    return {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+
+
+def _is_anthropic(model):
+    return "claude" in (model or "").lower()
+
+
+def _strip_cache(obj):
+    """Recursively drop cache_control keys so a non-Claude provider (via litellm) can't choke on them."""
+    if isinstance(obj, dict):
+        obj.pop("cache_control", None)
+        for v in obj.values():
+            _strip_cache(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            _strip_cache(v)
+
+
 def complete(**kw):
-    """Deterministic single-shot for EVALUATION / REWRITE callers — the fit judge, coherence, the compress optimizer,
-    the profiler. Defaults temperature=0 so verdicts are reproducible run-to-run; a flaky verdict is the one thing
-    this tool can't have. The variance-SAMPLING path (original + cheaper re-runs) does NOT come through here — it uses
-    run(), which calls _complete_raw directly and leaves temperature at the model default so coherence can measure the
-    model's own spread. Callers may pass temperature=... to override. No complete() caller enables extended thinking,
-    so a custom temperature is accepted (the thinking path, which rejects it, lives only in run())."""
-    kw.setdefault("temperature", 0)
-    return _complete_raw(**kw)
+    """EVALUATION / REWRITE calls — the fit judge, coherence, the compress optimizer, the profiler.
+
+    NO temperature — DEPRECATED on current models (claude-sonnet-5 etc.), returns 400 (verified live); determinism
+    comes from VOTING, not a pinned temperature. cache_control is honored on a Claude model (direct or via litellm)
+    and STRIPPED for anything else, so it can never break another provider. Per-call cache/token/latency is recorded
+    to the ONE debugcap store under AUDIT_DEBUG for the judge-cache proof."""
+    if not _is_anthropic(kw.get("model")):
+        _strip_cache(kw.get("messages"))
+        _strip_cache(kw.get("system"))
+    t0 = time.time()
+    r = _complete_raw(**kw)
+    from app.services import debugcap                        # lazy: keep llm_client a leaf, no import cycle
+    if debugcap.enabled():                                   # AUDIT_DEBUG: cache/token/latency -> judge-cache proof
+        u = getattr(r, "usage", None)
+        debugcap.record_call({"model": kw.get("model"),
+                              "cache_write": int(getattr(u, "cache_creation_input_tokens", 0) or 0),
+                              "cache_read": int(getattr(u, "cache_read_input_tokens", 0) or 0),
+                              "input": int(getattr(u, "input_tokens", 0) or 0),
+                              "output": int(getattr(u, "output_tokens", 0) or 0),
+                              "ms": round((time.time() - t0) * 1000)})
+    return r
 
 
 def _anthropic_tool_choice(tc):

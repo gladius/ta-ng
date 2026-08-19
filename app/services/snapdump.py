@@ -61,6 +61,41 @@ def dump_results(snap, proof):
         print("[snapdump] results dump failed for %s: %s" % (snap, e))
 
 
+def dump_judge_cache(snap):
+    """AUDIT_DEBUG: the judge-cache PROOF — did prompt caching actually engage on the audit's judge calls, and is it
+    cheaper + faster? Writes .audit_debug/<snap>/JUDGE_CACHE.md from llm_client's recorded per-call cache stats."""
+    if not (enabled() and snap):
+        return
+    try:
+        from app.services import debugcap
+        stats = debugcap.calls()
+        if not stats:
+            return
+        n = len(stats)
+        writes = sum(1 for s in stats if s["cache_write"] > 0)
+        reads = sum(1 for s in stats if s["cache_read"] > 0)
+        wtok = sum(s["cache_write"] for s in stats)
+        rtok = sum(s["cache_read"] for s in stats)
+        itok = sum(s["input"] for s in stats)
+        avg_ms = round(sum(s["ms"] for s in stats) / n)
+        L = ["# Judge-cache proof  (AUDIT_DEBUG)\n",
+             "- judge / eval calls: **%d**" % n,
+             "- calls that WROTE cache (`cache_creation`): **%d**  (%d tokens, ~+25%% once)" % (writes, wtok),
+             "- calls that READ cache (`cache_read`): **%d**  (%d tokens billed at ~10%%)" % (reads, rtok),
+             "- plain input tokens (uncached): **%d**" % itok,
+             "- cache-hit rate: **%d%%**   ·   avg latency: **%dms**\n" % (round(100 * reads / max(1, n)), avg_ms),
+             ("**Caching ENGAGED** — the shared judge prefix was written once and re-read: cheaper (fewer full-price "
+              "input tokens) and faster." if reads else
+              "**Caching did NOT engage** — likely the prefix is below the model's cache minimum (~1024 tokens) or "
+              "isn't byte-stable. Expected for small agents; the win is on big-context (RAG/tool) agents.")]
+        d = os.path.join(_ROOT, str(snap))
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "JUDGE_CACHE.md"), "w", encoding="utf-8") as f:
+            f.write("\n".join(L) + "\n")
+    except Exception as e:
+        print("[snapdump] judge-cache dump failed for %s: %s" % (snap, e))
+
+
 # ── Human-readable RAW-FORMAT capture — the "close it once and for all" report ────────────────────────────────────
 def _meta(rec):
     return (rec.get("extra") or {}).get("metadata") or {}
@@ -83,6 +118,25 @@ def _has_usage(r):
 
 def _pc(k, d):
     return "%d/%d (%d%%)" % (k, d, round(100 * k / d) if d else 0)
+
+
+def _usage_loc(r):
+    """WHERE token usage lives — a format-diff signal (Gemini/other providers nest it differently)."""
+    if r.get("prompt_tokens") is not None or r.get("completion_tokens") is not None:
+        return "top-level (prompt_tokens/completion_tokens)"
+    if ((r.get("outputs") or {}).get("llm_output") or {}).get("token_usage"):
+        return "outputs.llm_output.token_usage"
+    return "(not found)"
+
+
+def _model_loc(r):
+    """WHERE the model name lives — a format-diff signal."""
+    ip = (r.get("extra") or {}).get("invocation_params") or {}
+    if ip.get("model") or ip.get("model_name"):
+        return "extra.invocation_params.model"
+    if _meta(r).get("ls_model_name"):
+        return "extra.metadata.ls_model_name"
+    return "(not found)"
 
 
 def _capture_md(source, project, g, sample, avail):
@@ -204,8 +258,13 @@ def _capture_md(source, project, g, sample, avail):
         L.append("- **Revisions:** %d versions in the window (%s) → the audit would MIX versions; pin one."
                  % (len(revs), revs))
 
-    L.append("\n## Metadata keys on a sample llm run (field names, for a format-diff)")
+    L.append("\n## Metadata keys on a sample llm run (`extra.metadata` — for a format-diff)")
     L.append("`%s`" % (sorted(_meta(llm[0]).keys()) if llm else "(no llm run in sample)"))
+    L.append("\n## Top-level run keys on a sample llm run (the run object's OWN fields)")
+    L.append("`%s`" % (sorted(llm[0].keys()) if llm else "(no llm run in sample)"))
+    if llm:
+        L.append("- token usage lives in: **%s**" % _usage_loc(llm[0]))
+        L.append("- model name lives in: **%s**" % _model_loc(llm[0]))
     return "\n".join(L) + "\n"
 
 
