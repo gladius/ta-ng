@@ -116,10 +116,15 @@ def main():
     ap.add_argument("--ws", required=True)
     ap.add_argument("--project", required=True)
     ap.add_argument("--control-plane", default=None, help="Control Plane base URL if it differs from LANGSMITH_ENDPOINT")
+    ap.add_argument("--n", type=int, default=300, help="max root runs (traces) to scan — bounds the one query")
     a = ap.parse_args()
     os.environ["LANGSMITH_WORKSPACE_ID"] = a.ws
-    roots = list(_client().list_runs(project_name=a.project, is_root=True,
-                                     select=["id", "trace_id", "start_time", "extra"]))
+    roots = []                                                    # roots ONLY (ids+metadata) — light; capped at --n
+    for r in _client().list_runs(project_name=a.project, is_root=True,
+                                 select=["id", "trace_id", "start_time", "extra"]):
+        roots.append(r)
+        if len(roots) >= a.n:
+            break
     if not roots:
         print("no traces (root runs) found — check ws/project.")
         return
