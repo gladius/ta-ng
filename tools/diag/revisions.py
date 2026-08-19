@@ -102,7 +102,7 @@ def main():
     ap.add_argument("--control-plane", default=None, help="Control Plane base URL if it differs from LANGSMITH_ENDPOINT")
     ap.add_argument("--n", type=int, default=300, help="max root runs (traces) to scan — bounds the one query")
     a = ap.parse_args()
-    ws = _common.ws_id(a.ws)                                      # --ws or LANGSMITH_WORKSPACE_ID from .env
+    ws = _common.ws_for_project(a.project, a.ws)                  # --ws, else the ws that actually holds the agent
     roots = []                                                    # roots ONLY (ids+metadata) — light; capped at --n
     for r in _common.client().list_runs(project_name=a.project, is_root=True,
                                         select=["id", "trace_id", "start_time", "extra"]):

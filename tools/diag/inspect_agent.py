@@ -150,7 +150,7 @@ def main():
     ap.add_argument("--n", type=int, default=150)
     a = ap.parse_args()
     if a.project:
-        inspect(a.source, _common.ws_id(a.ws), a.project, a.n)   # --ws or LANGSMITH_WORKSPACE_ID from .env
+        inspect(a.source, _common.ws_for_project(a.project, a.ws), a.project, a.n)   # ws that holds the agent
     else:
         list_all(a.source)
 

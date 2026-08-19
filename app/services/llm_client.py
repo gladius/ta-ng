@@ -72,6 +72,17 @@ def _strip_cache(obj):
             _strip_cache(v)
 
 
+def _has_cache_ctl(obj):
+    """True if a cache_control breakpoint SURVIVES in this request part — i.e. what we ACTUALLY send after stripping.
+    The judge-cache proof records this so '0 cache writes' can be read correctly: did WE drop the breakpoint, or did
+    the provider/gateway ignore one we really sent?"""
+    if isinstance(obj, dict):
+        return "cache_control" in obj or any(_has_cache_ctl(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_has_cache_ctl(v) for v in obj)
+    return False
+
+
 def complete(**kw):
     """EVALUATION / REWRITE calls — the fit judge, coherence, the compress optimizer, the profiler.
 
@@ -79,15 +90,20 @@ def complete(**kw):
     comes from VOTING, not a pinned temperature. cache_control is honored on a Claude model (direct or via litellm)
     and STRIPPED for anything else, so it can never break another provider. Per-call cache/token/latency is recorded
     to the ONE debugcap store under AUDIT_DEBUG for the judge-cache proof."""
-    if not _is_anthropic(kw.get("model")):
+    is_anth = _is_anthropic(kw.get("model"))
+    if not is_anth:
         _strip_cache(kw.get("messages"))
         _strip_cache(kw.get("system"))
+    sent_cache = _has_cache_ctl(kw.get("messages")) or _has_cache_ctl(kw.get("system"))   # what actually leaves us
     t0 = time.time()
     r = _complete_raw(**kw)
     from app.services import debugcap                        # lazy: keep llm_client a leaf, no import cycle
     if debugcap.enabled():                                   # AUDIT_DEBUG: cache/token/latency -> judge-cache proof
         u = getattr(r, "usage", None)
         debugcap.record_call({"model": kw.get("model"),
+                              "anthropic": is_anth,           # did we treat it as Claude (else cache_control stripped)?
+                              "cache_sent": sent_cache,       # did a cache_control breakpoint actually leave our process?
+                              "base_url": str(getattr(client(), "base_url", "") or ""),   # gateway in the path? (litellm)
                               "cache_write": int(getattr(u, "cache_creation_input_tokens", 0) or 0),
                               "cache_read": int(getattr(u, "cache_read_input_tokens", 0) or 0),
                               "input": int(getattr(u, "input_tokens", 0) or 0),

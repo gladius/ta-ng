@@ -75,7 +75,9 @@ _FIT_SYS = (
     "- A changed decision, a changed tool argument, a dropped / added material fact or value, or an invented / "
     "contradicted claim NEVER belongs.\n"
     "- If unsure -> BROKE.\n"
-    "Think in ONE short line (<=15 words), THEN on the FINAL line output exactly KEPT or BROKE."
+    "Output exactly two lines, nothing else:\n"
+    "REASON: <name the specific decision / fact / value / tool-argument that matches or differs, <=15 words>\n"
+    "VERDICT: KEPT or BROKE"
 )
 # request + reference set — IDENTICAL across the K×votes fit calls for one input, so it's the cache PREFIX (write once,
 # read the rest). Only the CANDIDATE (the tail block) varies. The rubric lives in _FIT_SYS above.
@@ -89,12 +91,15 @@ def _fit_once(refset, cand, request):
                             messages=[{"role": "user", "content": [llm_client.cache_block(prefix),
                                        {"type": "text", "text": "CANDIDATE:\n%s" % _cap(cand, CAP)}]}])
     raw = "".join(x.text for x in r.content if x.type == "text")
-    hits = list(re.finditer(r"\b(KEPT|BROKE)\b", raw, flags=re.I))
-    kept = bool(hits) and hits[-1].group(1).upper() == "KEPT"
-    reason = next((l.strip() for l in raw.splitlines()
-                   if l.strip() and not re.fullmatch(r"(KEPT|BROKE)[\s:.\-]*", l.strip(), flags=re.I)),
-                  "kept" if kept else "broke")
-    return kept, reason[:240]
+    mv = re.search(r"VERDICT:\s*(KEPT|BROKE)", raw, flags=re.I)
+    mr = re.search(r"REASON:\s*(.+)", raw, flags=re.I)
+    if mv:
+        kept = mv.group(1).upper() == "KEPT"
+    else:                                                            # model ignored the labels -> loose token scan
+        hits = list(re.finditer(r"\b(KEPT|BROKE)\b", raw, flags=re.I))
+        kept = bool(hits) and hits[-1].group(1).upper() == "KEPT"    # still "unsure -> BROKE" per the rubric
+    reason = (mr.group(1).strip() if mr else "")[:240] or ("matches the set" if kept else "differs from the set")
+    return kept, reason
 
 
 def fit_vote(refset, cand, request, votes=None):

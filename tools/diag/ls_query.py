@@ -122,7 +122,7 @@ def main():
     ap.add_argument("--runs", type=int, nargs="?", const=4000, default=0, help="also tally up to N runs")
     a = ap.parse_args()
     if a.project:
-        deep(a.source, _common.ws_id(a.ws), a.project, a.cap, a.runs)   # --ws or LANGSMITH_WORKSPACE_ID from .env
+        deep(a.source, _common.ws_for_project(a.project, a.ws), a.project, a.cap, a.runs)   # ws that holds the agent
     else:
         overview(a.source, a.cap)
 

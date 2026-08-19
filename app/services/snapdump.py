@@ -61,6 +61,30 @@ def dump_results(snap, proof):
         print("[snapdump] results dump failed for %s: %s" % (snap, e))
 
 
+def _judge_cache_verdict(n, reads, writes, sent, anth, avg_in):
+    """Explain a 0% cache hit from EVIDENCE (was cache_control sent? treated as Anthropic? tokens above the min?),
+    not a one-size guess — so the note points at the real cause (stripped locally vs. dropped by a gateway vs. below
+    the model's minimum vs. write-but-never-read)."""
+    if reads:
+        return ("**Caching ENGAGED** — the shared judge prefix was written once and re-read: fewer full-price input "
+                "tokens and lower latency on the repeat calls.")
+    if sent == 0:
+        return ("**Caching did NOT engage — `cache_control` was never sent.** Only %d/%d calls were treated as "
+                "Anthropic, so the breakpoint was stripped before the request. If the judge really IS Claude, its model "
+                "string (a litellm alias?) just doesn't contain `claude` — widen `llm_client._is_anthropic` to match "
+                "the alias so the breakpoint survives." % (anth, n))
+    if writes == 0 and avg_in < 1200:
+        return ("**Caching did NOT engage — the prefix is below the model's ~1024-token minimum** (only ~%d input "
+                "tokens/call). Expected for small agents; the win is on big-context (RAG/tool) agents." % avg_in)
+    if writes == 0:
+        return ("**`cache_control` WAS sent on %d/%d calls, but the provider reported 0 cache writes** at ~%d input "
+                "tokens/call (above the ~1024 min). On a Claude judge the usual cause is a **litellm gateway dropping "
+                "`cache_control`** before Anthropic (or not returning cache-usage fields). Confirm by pointing the "
+                "judge directly at the Anthropic API for one run." % (sent, n, avg_in))
+    return ("**Cache was written but never read** — the prefix isn't being reused. Likely the K votes fire in parallel "
+            "and race the first write, or the reference-set prefix isn't byte-identical across the vote calls.")
+
+
 def dump_judge_cache(snap):
     """AUDIT_DEBUG: the judge-cache PROOF — did prompt caching actually engage on the audit's judge calls, and is it
     cheaper + faster? Writes .audit_debug/<snap>/JUDGE_CACHE.md from llm_client's recorded per-call cache stats."""
@@ -77,17 +101,22 @@ def dump_judge_cache(snap):
         wtok = sum(s["cache_write"] for s in stats)
         rtok = sum(s["cache_read"] for s in stats)
         itok = sum(s["input"] for s in stats)
+        otok = sum(s.get("output", 0) for s in stats)
         avg_ms = round(sum(s["ms"] for s in stats) / n)
+        avg_in, avg_out = round(itok / n), round(otok / n)
+        sent = sum(1 for s in stats if s.get("cache_sent"))          # cache_control actually left our process
+        anth = sum(1 for s in stats if s.get("anthropic"))           # treated as Claude (else breakpoint stripped)
+        models = sorted({str(s.get("model")) for s in stats})
+        bases = sorted({s.get("base_url") for s in stats if s.get("base_url")})
         L = ["# Judge-cache proof  (AUDIT_DEBUG)\n",
-             "- judge / eval calls: **%d**" % n,
+             "- judge / eval calls: **%d**   ·   model(s): %s" % (n, ", ".join("`%s`" % m for m in models)),
+             "- base_url (gateway in path?): %s" % (", ".join("`%s`" % b for b in bases) or "_default — direct to Anthropic_"),
+             "- treated as Anthropic (cache honored): **%d/%d**   ·   `cache_control` actually SENT: **%d/%d**" % (anth, n, sent, n),
+             "- input tokens: **%d** (avg **%d**/call)   ·   output tokens: **%d** (avg **%d**/call)" % (itok, avg_in, otok, avg_out),
              "- calls that WROTE cache (`cache_creation`): **%d**  (%d tokens, ~+25%% once)" % (writes, wtok),
              "- calls that READ cache (`cache_read`): **%d**  (%d tokens billed at ~10%%)" % (reads, rtok),
-             "- plain input tokens (uncached): **%d**" % itok,
              "- cache-hit rate: **%d%%**   ·   avg latency: **%dms**\n" % (round(100 * reads / max(1, n)), avg_ms),
-             ("**Caching ENGAGED** — the shared judge prefix was written once and re-read: cheaper (fewer full-price "
-              "input tokens) and faster." if reads else
-              "**Caching did NOT engage** — likely the prefix is below the model's cache minimum (~1024 tokens) or "
-              "isn't byte-stable. Expected for small agents; the win is on big-context (RAG/tool) agents.")]
+             _judge_cache_verdict(n, reads, writes, sent, anth, avg_in)]
         d = os.path.join(_ROOT, str(snap))
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "JUDGE_CACHE.md"), "w", encoding="utf-8") as f:
