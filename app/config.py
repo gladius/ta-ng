@@ -28,6 +28,10 @@ JUDGE_MODEL = credentials.get_config("AUDIT_JUDGE_MODEL", "claude-sonnet-5")
 OPTIMIZER_MODEL = credentials.get_config("AUDIT_OPTIMIZER_MODEL", "claude-sonnet-5")
 FILTER_MODEL = credentials.get_config("AUDIT_FILTER_MODEL", "claude-haiku-4-5")
 PROFILE_MODEL = credentials.get_config("AUDIT_PROFILE_MODEL", "claude-sonnet-5")
+# output ceiling for the per-node + deployment comprehension — same reasoning as AUDIT_JUDGE_MAX_TOKENS below: a
+# thinking model (or a gateway that injects thinking) must have room to think AND still emit the JSON, or the reply
+# comes back empty and the node description silently vanishes. Ceiling only — billed on tokens generated.
+PROFILE_MAX_TOKENS = int(os.environ.get("AUDIT_PROFILE_MAX_TOKENS", "5000"))
 
 
 # Downgrade-audit rigor — the ONE place these knobs live.

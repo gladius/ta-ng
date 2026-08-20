@@ -21,6 +21,7 @@ from app.services import llm_client
 from app.config import (AUDIT_SAMPLES, AUDIT_REPEATS, AUDIT_MIN_EVIDENCE, AUDIT_MAX_PARALLEL,
                         AUDIT_JUDGE_MAX_CHARS, AUDIT_SAFE_RATIO, AUDIT_SELF_BASELINE, AUDIT_SELF_FLOOR,
                         AUDIT_DOWNGRADE_K,   # cheaper re-run count for the reference-set downgrade engine
+                        AUDIT_JUDGE_MAX_TOKENS,   # central judge output ceiling (thinking can't starve the verdict)
                         JUDGE_MODEL)   # judge model role lives in config (.env-overridable), not hardcoded here
 
 
@@ -174,11 +175,10 @@ def judge_preserved(request, a_text, b_text, model=JUDGE_MODEL):
     """The ONE generic, DRIFT-BIASED judge -> (preserved: bool, reason: str). Verdict is on line 1 so a truncated
     reply can't corrupt it. Any doubt -> DRIFT: a false PRESERVED is the only unacceptable error.
 
-    ⚠️ TECH DEBT — this is the OLD single-recorded-vs-rerun path still used by the cache + compress levers. It should
-    be migrated to the SAME flow + config as model-tier downgrade (downgrade_refset: reference-set voting, the labeled
-    single-line KEPT/BROKE parse, and AUDIT_JUDGE_MAX_TOKENS) instead of this outdated judge with its hardcoded
-    max_tokens=200 (which a thinking model / injected reasoning would starve to an empty reply, exactly like the
-    downgrade judge did). Left as-is for now; pick up when cache/compress are revisited.
+    ⚠️ TECH DEBT — this is the OLD single-recorded-vs-rerun path still used by the cache + compress levers. Its output
+    budget now uses the central AUDIT_JUDGE_MAX_TOKENS (so injected thinking can't starve it to an empty reply, as it
+    did before), but the FLOW should still be migrated to model-tier downgrade's (downgrade_refset: reference-set
+    voting + the labeled single-line KEPT/BROKE parse). Pick up when cache/compress are revisited.
 
     The judge reasons in one line FIRST and commits the verdict on the LAST line (reasoning-before-verdict is more
     accurate than deciding cold). We read the LAST PRESERVED/DRIFT token anywhere in the reply, so a preamble like
@@ -190,7 +190,7 @@ def judge_preserved(request, a_text, b_text, model=JUDGE_MODEL):
     if len(a) > cap or len(b) > cap:                     # unverifiable at full size -> refuse to call it safe
         return False, "output exceeds %dk chars — too long to fully verify -> drift" % (cap // 1000)
     p = _JUDGE_TMPL % (request[:cap], a, b)
-    r = llm_client.complete(model=model, max_tokens=200, system=_JUDGE_SYS,
+    r = llm_client.complete(model=model, max_tokens=AUDIT_JUDGE_MAX_TOKENS, system=_JUDGE_SYS,
                             messages=[{"role": "user", "content": p}])
     raw = "".join(b.text for b in r.content if b.type == "text")
     hits = list(re.finditer(r"\b(PRESERVED|DRIFT)\b", raw, flags=re.I))

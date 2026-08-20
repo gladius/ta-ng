@@ -11,7 +11,7 @@ import json
 
 from app.services import llm_client, store
 from app.services.profile.select import select as _select   # the $0 sampler (pkg re-exports it as a function)
-from app.config import PROFILE_MODEL
+from app.config import PROFILE_MODEL, PROFILE_MAX_TOKENS
 
 _SYS = (
     "You are a senior AI-systems analyst. From a small representative sample of ONE call-site's recorded calls, "
@@ -57,7 +57,7 @@ def comprehend_node(node, selection):
             + json.dumps(facts, indent=2)
             + "\n\nREPRESENTATIVE SAMPLE (structure-aware digests; a big block is shown head+tail with an omission "
               "marker + its char size):\n" + _digests(selection["digests"]) + "\n\n" + _SCHEMA)
-    r = llm_client.complete(model=PROFILE_MODEL, max_tokens=900, system=_SYS,
+    r = llm_client.complete(model=PROFILE_MODEL, max_tokens=PROFILE_MAX_TOKENS, system=_SYS,
                             messages=[{"role": "user", "content": user}])
     raw = "".join(b.text for b in r.content if getattr(b, "type", None) == "text")
     return _parse(raw)
@@ -124,7 +124,7 @@ def deployment_summary(agent, per_node, edges, function_nodes=None):
     user = ("AGENT: %s\n\nPER-NODE ROLES:\n%s\n\nOBSERVED FLOW (node -> node):\n%s\n\n%s"
             % (agent, json.dumps(roles, indent=2), "\n".join(flow) or "(single node / no edges observed)",
                _DEPLOY_SCHEMA))
-    r = llm_client.complete(model=PROFILE_MODEL, max_tokens=500, system=_DEPLOY_SYS,
+    r = llm_client.complete(model=PROFILE_MODEL, max_tokens=PROFILE_MAX_TOKENS, system=_DEPLOY_SYS,
                             messages=[{"role": "user", "content": user}])
     raw = "".join(b.text for b in r.content if getattr(b, "type", None) == "text")
     s, e = raw.find("{"), raw.rfind("}")
