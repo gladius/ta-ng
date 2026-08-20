@@ -125,6 +125,43 @@ def dump_judge_cache(snap):
         print("[snapdump] judge-cache dump failed for %s: %s" % (snap, e))
 
 
+def dump_judge_raw(snap):
+    """AUDIT_DEBUG: EXACTLY what the fit judge returned (`raw`) next to what we parsed — so a canned
+    'differs from the set' can be diagnosed at a glance: is `raw` BLANK / just a verdict word (the model gave no
+    reason — not a parse bug), or does it hold a reason we failed to keep (a parse bug)? Writes JUDGE_RAW.md."""
+    if not (enabled() and snap):
+        return
+    try:
+        from app.services import debugcap
+        js = debugcap.judges()
+        if not js:
+            return
+        blank = sum(1 for j in js if not (j.get("raw") or "").strip())
+        no_reason = sum(1 for j in js if (j.get("reason") or "") in ("matches the set", "differs from the set"))
+        L = ["# Judge raw output  (AUDIT_DEBUG)\n",
+             "The fit judge's ACTUAL reply (`raw`) vs. what we parsed. If `raw` is blank or only a verdict word, the",
+             "model isn't returning a reason (fix the model/gateway, not the parser); if `raw` holds a reason but the",
+             "parsed reason is the canned string, that's a parse bug.\n",
+             "- fit-judge calls: **%d**" % len(js),
+             "- replies that were BLANK: **%d / %d**" % (blank, len(js)),
+             "- parsed reason fell back to the canned string: **%d / %d**\n" % (no_reason, len(js))]
+        for i, j in enumerate(js[:60], 1):                    # bound the file; the counts above cover the whole run
+            L += ["---",
+                  "### call %d · model `%s`" % (i, j.get("model")),
+                  "**parsed → kept=`%s`  reason=`%s`**\n" % (j.get("kept"), j.get("reason")),
+                  "_input being judged (user):_", "```", (j.get("input") or "").strip() or "(none)", "```",
+                  "_candidate (cheaper model's output being judged):_", "```", (j.get("candidate") or "").strip() or "(none)", "```",
+                  "_judge's RAW reply:_", "```", (j.get("raw") or "").strip() or "(EMPTY REPLY — the model returned no text)", "```"]
+        if len(js) > 60:
+            L.append("\n_…and %d more (see the counts at the top for the whole run)._" % (len(js) - 60))
+        d = os.path.join(_ROOT, str(snap))
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "JUDGE_RAW.md"), "w", encoding="utf-8") as f:
+            f.write("\n".join(L) + "\n")
+    except Exception as e:
+        print("[snapdump] judge-raw dump failed for %s: %s" % (snap, e))
+
+
 # ── Human-readable RAW-FORMAT capture — the "close it once and for all" report ────────────────────────────────────
 def _meta(rec):
     return (rec.get("extra") or {}).get("metadata") or {}

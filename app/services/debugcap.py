@@ -11,6 +11,7 @@ import os
 import threading
 
 _calls = []
+_judges = []
 _lock = threading.Lock()
 
 
@@ -26,11 +27,27 @@ def record_call(rec):
         _calls.append(rec)
 
 
+def record_judge(rec):
+    """Record ONE fit-judge call's RAW reply + what we parsed from it (no-op unless AUDIT_DEBUG) — so a canned
+    'differs from the set' can be diagnosed: blank reply / bare verdict (model gave no reason) vs. a real reason
+    we mis-parsed."""
+    if not enabled():
+        return
+    with _lock:
+        _judges.append(rec)
+
+
 def calls():
     with _lock:
         return list(_calls)
 
 
+def judges():
+    with _lock:
+        return list(_judges)
+
+
 def reset():
     with _lock:
         _calls.clear()
+        _judges.clear()

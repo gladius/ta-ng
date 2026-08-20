@@ -112,4 +112,5 @@ def stream(source, ws, project, keys, snap, calls=None, levers=None):
     store.put(proof_key(source, ws, project, snap), res)
     snapdump.dump_results(snap, res)                          # dev-only (AUDIT_DEBUG): results/ for this snap
     snapdump.dump_judge_cache(snap)                           # dev-only (AUDIT_DEBUG): the judge-cache proof
+    snapdump.dump_judge_raw(snap)                             # dev-only (AUDIT_DEBUG): the RAW judge replies vs parsed
     yield {"type": "complete", "total_usd": res["total"]}

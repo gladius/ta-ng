@@ -101,6 +101,11 @@ def _fit_once(refset, cand, request):
     if not reason:                                                  # verdict alone / off-format -> show the model's OWN
         reason = " ".join(re.sub(r"\b(KEPT|BROKE)\b", " ", raw, flags=re.I).split())   # words, never a canned string
     reason = reason[:240] or ("matches the set" if kept else "differs from the set")   # canned ONLY if the reply was empty
+    from app.services import debugcap                          # AUDIT_DEBUG: keep the RAW reply so we can SEE it in prod
+    if debugcap.enabled():
+        user = request.split("USER:")[-1] if "USER:" in request else request   # the input being judged (skip shared system)
+        debugcap.record_judge({"model": JUDGE_MODEL, "raw": raw[:800], "kept": kept, "reason": reason,
+                               "input": user.strip()[:300], "candidate": (cand or "").strip()[:400]})
     return kept, reason
 
 
