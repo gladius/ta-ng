@@ -75,9 +75,10 @@ _FIT_SYS = (
     "- A changed decision, a changed tool argument, a dropped / added material fact or value, or an invented / "
     "contradicted claim NEVER belongs.\n"
     "- If unsure -> BROKE.\n"
-    "Output exactly two lines, nothing else:\n"
-    "REASON: <name the specific decision / fact / value / tool-argument that matches or differs, <=15 words>\n"
-    "VERDICT: KEPT or BROKE"
+    "Reply with ONE line only: the word KEPT or BROKE, then ' - ', then a <=15-word reason naming the specific "
+    "decision / fact / value / tool-argument that matches or differs. Examples:\n"
+    "KEPT - same escalate decision and same account_id argument\n"
+    "BROKE - changed the refund amount from 50 to 100"
 )
 # request + reference set — IDENTICAL across the K×votes fit calls for one input, so it's the cache PREFIX (write once,
 # read the rest). Only the CANDIDATE (the tail block) varies. The rubric lives in _FIT_SYS above.
@@ -90,15 +91,16 @@ def _fit_once(refset, cand, request):
     r = llm_client.complete(model=JUDGE_MODEL, max_tokens=AUDIT_JUDGE_MAX_TOKENS, system=_FIT_SYS,
                             messages=[{"role": "user", "content": [llm_client.cache_block(prefix),
                                        {"type": "text", "text": "CANDIDATE:\n%s" % _cap(cand, CAP)}]}])
-    raw = "".join(x.text for x in r.content if x.type == "text")
-    mv = re.search(r"VERDICT:\s*(KEPT|BROKE)", raw, flags=re.I)
-    mr = re.search(r"REASON:\s*(.+)", raw, flags=re.I)
-    if mv:
-        kept = mv.group(1).upper() == "KEPT"
-    else:                                                            # model ignored the labels -> loose token scan
-        hits = list(re.finditer(r"\b(KEPT|BROKE)\b", raw, flags=re.I))
-        kept = bool(hits) and hits[-1].group(1).upper() == "KEPT"    # still "unsure -> BROKE" per the rubric
-    reason = (mr.group(1).strip() if mr else "")[:240] or ("matches the set" if kept else "differs from the set")
+    # Extract text from ANY content block that carries it (robust to a gateway/SDK returning a slightly different
+    # shape) — not only blocks whose type is exactly "text", so `raw` can't silently come back empty.
+    raw = "".join(getattr(x, "text", "") or "" for x in (getattr(r, "content", None) or [])).strip()
+    m = re.search(r"\b(KEPT|BROKE)\b", raw, flags=re.I)              # verdict = the FIRST KEPT/BROKE token (asked first)
+    kept = bool(m) and m.group(1).upper() == "KEPT"                 # no token at all -> unsure -> BROKE (per the rubric)
+    tail = raw[m.end():].lstrip(" \t:.-–—*_`|\n") if m else ""      # the reason follows the verdict on its line
+    reason = tail.splitlines()[0].strip() if tail else ""
+    if not reason:                                                  # verdict alone / off-format -> show the model's OWN
+        reason = " ".join(re.sub(r"\b(KEPT|BROKE)\b", " ", raw, flags=re.I).split())   # words, never a canned string
+    reason = reason[:240] or ("matches the set" if kept else "differs from the set")   # canned ONLY if the reply was empty
     return kept, reason
 
 

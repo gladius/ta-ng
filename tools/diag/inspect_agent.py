@@ -29,6 +29,14 @@ credentials.load()
 from connectors.datasource import get_source
 from connectors import get_adapter
 from tools.diag import _common                               # key + endpoint + workspace all come from .env
+try:                                                          # SAME revision keys the graph build uses (incl.
+    from connectors.langsmith.adapter import _revision       # LANGSMITH_HOST_REVISION_ID) — not just revision_id
+except Exception:
+    def _revision(meta):
+        for k in ("revision_id", "LANGSMITH_HOST_REVISION_ID", "LANGSMITH_LANGGRAPH_API_REVISION"):
+            if meta.get(k):
+                return str(meta[k])
+        return ""
 
 
 def _meta(rec):
@@ -69,7 +77,7 @@ def inspect(source, ws, project, n):
     llm = [r for r in runs if r.get("run_type") in (None, "llm")]
     tagged = sum(1 for r in llm if _meta(r).get("langgraph_node"))
     roots = [r for r in runs if not r.get("parent_run_id")]
-    revs = sorted({_meta(r).get("revision_id") for r in runs if _meta(r).get("revision_id")})
+    revs = sorted({_revision(_meta(r)) for r in runs if _revision(_meta(r))})   # LANGSMITH_HOST_REVISION_ID et al.
     print("  traces=%d   runs=%d   (~%.1f runs/trace)" % (len(by_tr), len(runs), len(runs) / max(1, len(by_tr))))
     print("  run_type mix: %s" % dict(rt))
     print("  llm runs=%d   with langgraph_node=%d   => %s"
