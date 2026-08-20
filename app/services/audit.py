@@ -126,10 +126,18 @@ def replay(trace, model, max_tokens=None):
     natural run-to-run variance (that's exactly what coherence/self-consistency measures), and the thinking path
     rejects a custom temperature anyway. The deterministic side (judges, optimizer, profiler) goes through complete()."""
     if max_tokens is None:
-        rec_out = int((trace.get("usage") or {}).get("output_tokens", 0) or 0)
-        if rec_out <= 0:                                  # usage not recorded -> estimate from the recorded output so
-            rec_out = len(trace.get("output") or "") // 4     # the budget tracks the REAL length, not the 512 floor
-        max_tokens = min(max_output(model), max(512, int(rec_out * 1.5) + 128))
+        # FAITHFUL budget: give the re-run the SAME room the ORIGINAL ran under (trace's max_output_tokens). A thinking
+        # model (Gemini 2.5 thinks by default) counts thinking tokens AGAINST this budget, so a budget sized to the
+        # visible output alone truncates/empties the re-run — a chopped output then looks "broke" to the judge. Applies
+        # to BOTH the original re-runs and the cheaper re-runs so they're judged on equal footing.
+        rec_max = int(trace.get("max_output_tokens") or 0)
+        if rec_max > 0:
+            max_tokens = min(max_output(model), rec_max)
+        else:                                             # not recorded -> 3x the original's OUTPUT as headroom
+            rec_out = int((trace.get("usage") or {}).get("output_tokens", 0) or 0)
+            if rec_out <= 0:
+                rec_out = len(trace.get("output") or "") // 4
+            max_tokens = min(max_output(model), max(512, rec_out * 3))
     system = "\n".join(m["content"] for m in trace.get("input_messages", []) if m.get("role") == "system")
     tools = _tools(trace)
     res = llm_client.run(model=model, messages=_messages(trace), max_tokens=max_tokens,
@@ -165,6 +173,12 @@ _JUDGE_TMPL = (
 def judge_preserved(request, a_text, b_text, model=JUDGE_MODEL):
     """The ONE generic, DRIFT-BIASED judge -> (preserved: bool, reason: str). Verdict is on line 1 so a truncated
     reply can't corrupt it. Any doubt -> DRIFT: a false PRESERVED is the only unacceptable error.
+
+    ⚠️ TECH DEBT — this is the OLD single-recorded-vs-rerun path still used by the cache + compress levers. It should
+    be migrated to the SAME flow + config as model-tier downgrade (downgrade_refset: reference-set voting, the labeled
+    single-line KEPT/BROKE parse, and AUDIT_JUDGE_MAX_TOKENS) instead of this outdated judge with its hardcoded
+    max_tokens=200 (which a thinking model / injected reasoning would starve to an empty reply, exactly like the
+    downgrade judge did). Left as-is for now; pick up when cache/compress are revisited.
 
     The judge reasons in one line FIRST and commits the verdict on the LAST line (reasoning-before-verdict is more
     accurate than deciding cold). We read the LAST PRESERVED/DRIFT token anywhere in the reply, so a preamble like

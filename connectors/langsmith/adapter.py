@@ -305,6 +305,12 @@ class LangSmithAdapter(Adapter):
         thinking_enabled = bool(reasoning_tok) or bool(
             inv.get("reasoning_effort") or inv.get("thinking") or inv.get("thinking_budget")
             or inv.get("reasoning") or (inv.get("extra_body") or {}).get("thinking"))
+        # the OUTPUT BUDGET the original ran under — a faithful re-run must give the cheaper model the SAME room, or
+        # a thinking model (Gemini 2.5 thinks by default, and thinking tokens count AGAINST this budget) truncates.
+        # Check every shape litellm might normalize to: Gemini (max_output_tokens), OpenAI (max_tokens /
+        # max_completion_tokens), LangSmith (ls_max_tokens); look in invocation_params AND metadata.
+        max_out = int(inv.get("max_output_tokens") or inv.get("max_tokens") or inv.get("max_completion_tokens")
+                      or meta.get("max_output_tokens") or meta.get("ls_max_tokens") or 0)
         agent_id, node_id = _callsite(rec, meta, project, group_by)
         t = schema.build_trace(
             trace_id=rec.get("trace_id") or rec.get("id"),
@@ -325,6 +331,7 @@ class LangSmithAdapter(Adapter):
         )
         _st = rec.get("start_time")                            # a datetime or ISO string, per the SDK
         t["start_time"] = _st.isoformat() if hasattr(_st, "isoformat") else (str(_st) if _st else "")
+        t["max_output_tokens"] = max_out                       # the original's output budget -> faithful re-run budget
         _c = rec.get("total_cost")                             # LangSmith's own $ (cross-check our token×price)
         t["cost_ls"] = float(_c) if _c is not None else None   # Decimal -> float so it stays JSON/arith-safe
         t["feedback_score"], t["feedback_n"] = _feedback(rec.get("feedback_stats"))   # quality, when evals exist

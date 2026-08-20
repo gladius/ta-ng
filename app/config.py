@@ -74,7 +74,9 @@ AUDIT_SELF_FLOOR = float(os.environ.get("AUDIT_SELF_FLOOR", "0.5"))
 #                      "unverified" — never a silent compare-on-a-clipped-view (which could read as a false SAFE).
 AUDIT_PROFILE_RERUNS = int(os.environ.get("AUDIT_PROFILE_RERUNS", "4"))   # env name kept; = ORIG_RERUNS
 AUDIT_DOWNGRADE_K = int(os.environ.get("AUDIT_DOWNGRADE_K", "5"))
-AUDIT_JUDGE_MAX_TOKENS = int(os.environ.get("AUDIT_JUDGE_MAX_TOKENS", "512"))
+AUDIT_JUDGE_MAX_TOKENS = int(os.environ.get("AUDIT_JUDGE_MAX_TOKENS", "5000"))   # ceiling, billed on GENERATED tokens;
+# generous so a reasoning/thinking model (or a gateway that injects thinking) can't consume the budget before it
+# emits the verdict — an empty reply was the "differs from the set" symptom. The judge's real output is one line.
 AUDIT_JUDGE_REF_CHARS = int(os.environ.get("AUDIT_JUDGE_REF_CHARS", "16000"))
 
 # ── Reference-set downgrade engine — verdict math ──────────────────────────────────────────────────────────────────
