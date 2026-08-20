@@ -8,6 +8,10 @@
   .sel-top{display:flex;align-items:center;gap:12px;margin-bottom:8px}
   .sel-top .eyebrow{text-transform:uppercase;letter-spacing:.1em;font-size:11px;font-weight:700;color:var(--faint)}
   .v-agent{font-family:'Plex Mono',ui-monospace,monospace;font-size:13px;color:var(--muted)}
+  .rev-badge{font-family:'Plex Mono',ui-monospace,monospace;font-size:11px;font-weight:600;color:var(--muted);
+    background:rgba(128,128,128,.1);border:1px solid var(--line);padding:2px 8px;border-radius:6px}
+  .empty-state{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:var(--s6);
+    text-align:center;color:var(--muted);font-size:15px}
   .sel-hero h1{font-size:26px;font-weight:700;letter-spacing:-.02em;margin:0 0 6px}
   .sel-hero .sub{color:var(--muted);font-size:15px;margin:0;max-width:66ch}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:var(--s5) var(--s5) var(--s4)}
@@ -43,12 +47,24 @@
 </style>
 
 <section class="sel-hero">
-  <div class="sel-top"><span class="eyebrow">Token audit</span><span class="v-agent">{{ f.agent }}</span></div>
+  <div class="sel-top"><span class="eyebrow">Token audit</span><span class="v-agent">{{ f.agent }}</span>
+    {% if f.revision %}<span class="rev-badge" title="Audited on ONE coherent version — the latest deployment revision. Traces from other revisions are excluded so the comparison can't mix versions.">rev {{ f.revision[:12] }}</span>{% endif %}
+  </div>
   <h1>Choose what to audit</h1>
-  <p class="sub"><b>{{ f.rows | length }} call-sites</b> from <b>{{ f.traces }} traces</b>, costliest first. Pick the call-sites to re-run live, then Audit — only what you pick is proven.</p>
+  {% if f.traces == 0 %}
+  <p class="sub">No traces found for this agent{% if f.revision %} on the latest revision <code>{{ f.revision[:12] }}</code>{% endif %} — there's nothing to audit yet. Once it has recorded runs on the current revision, they'll show up here.</p>
+  {% else %}
+  <p class="sub"><b>{{ f.rows | length }} call-sites</b> from <b>{{ f.traces }} traces</b>{% if f.revision %} on revision <b>{{ f.revision[:12] }}</b> (latest only){% endif %}, costliest first. Pick the call-sites to re-run live, then Audit — only what you pick is proven.</p>
+  {% endif %}
   <a class="cta" href="{{ base }}/profile?snap={{ snap }}">View deployment profile ›</a>
 </section>
 
+{% if not f.rows %}
+<div class="empty-state">
+  {% if f.traces == 0 %}Nothing to audit — no traces on the latest revision yet.
+  {% else %}The latest revision has <b>{{ f.traces }} traces</b> but no auditable LLM call-sites — nothing to downgrade here.{% endif %}
+</div>
+{% else %}
 <section class="panel">
   <div class="modebar">
     <label><input type="radio" name="mode" value="auto" checked onchange="setMode()"> <b>Top 5 costliest</b> <span class="muted">— the biggest opportunities</span></label>
@@ -93,6 +109,7 @@
     <button class="btn" id="auditBtn" onclick="audit()">Audit selected →</button>
   </div>
 </section>
+{% endif %}
 
 <script>
   const BASE = {{ base | tojson }}, SNAP = {{ snap | tojson }};

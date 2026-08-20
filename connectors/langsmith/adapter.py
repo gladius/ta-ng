@@ -133,6 +133,22 @@ def _revision(meta):
     return ""
 
 
+def _root_rev(r):
+    return _revision((getattr(r, "extra", None) or {}).get("metadata") or {})
+
+
+def _scope_to_latest(roots, n, revision=None):
+    """Scope roots to ONE revision, newest `n`. Roots arrive newest-first, so the newest root's revision IS the
+    LATEST (whatever is serving now — true even after a rollback, since traffic then stamps the rolled-back-to
+    revision on the newest traces). Every trace not on that revision is DROPPED before anything is built, so the
+    audit's reference set can NEVER mix code versions (a mixed set makes the downgrade judge unsound). `revision`
+    pins a specific one instead of the latest. Returns (scoped_roots, target_revision)."""
+    if not roots:
+        return [], None
+    target = revision or _root_rev(roots[0])
+    return [r for r in roots if _root_rev(r) == target][:n], target
+
+
 def _callsite(rec, meta, project, group_by):
     """Return (agent_id, node_id): agent = the agent, node = the call-site within it.
 
@@ -211,25 +227,23 @@ class LangSmithAdapter(Adapter):
                 break
 
     def _fetch_traces(self, client, project, n, revision, since_hours):
-        """Last `n` COMPLETE traces (every run in each tree) of one agent, optionally pinned to a `revision`.
-        TWO bulk list_runs queries (+ batching), never per-trace: roots first (cheap — id/trace_id/revision only),
-        then every run whose trace_id is in that set. Verified against live data: roots come newest-first and a
-        present root means the whole tree is captured, so `in(trace_id, [...])` rebuilds complete trees."""
+        """Last `n` COMPLETE traces (every run in each tree) of ONE agent version. LATEST-ONLY by default: the newest
+        root's revision is the target and every trace not on it is DROPPED before anything is built, so the audit's
+        reference set can never mix code versions (a mixed set makes the downgrade judge unsound). An explicit
+        `revision` pins a specific one. TWO bulk list_runs queries (+ batching), never per-trace: roots first (cheap
+        — id/trace_id/revision only), then every run whose trace_id is in the scoped set."""
         rkw = {"project_name": project, "is_root": True, "select": ["id", "trace_id", "start_time", "extra"]}
         if since_hours:
             rkw["start_time"] = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-        cap = n if not revision else max(n * 4, n + 100)       # over-fetch a little so a revision filter still reaches n
+        # over-fetch roots so the hard filter still reaches n; the latest revision's traces are the NEWEST, so a modest
+        # over-scan finds them all — a pinned older revision sits deeper, so scan wider for that.
+        cap = max(n * 4, n + 100) if revision else max(n * 2, n + 100)
         roots = []
         for r in client.list_runs(**rkw):
             roots.append(r)
             if len(roots) >= cap:
                 break
-
-        def _rev(r):
-            return _revision((getattr(r, "extra", None) or {}).get("metadata") or {})
-        if revision:                                           # pin one version -> coherent reference set for the audit
-            roots = [r for r in roots if _rev(r) == revision]
-        roots = roots[:n]                                      # the newest n (matching) traces
+        roots, _target = _scope_to_latest(roots, n, revision)  # HARD filter -> exactly one revision, never a mix
         tids = [str(r.trace_id) for r in roots if getattr(r, "trace_id", None)]
         if not tids:
             return

@@ -436,7 +436,7 @@
 </div>
 {% endif %}
 
-<p class="foot-note">Audited {{ audited }} of {{ f.rows | length }} call-sites. Detection is deterministic; every dollar is earned by a live re-run of real recorded inputs, and unproven potential is never counted as savings. Figures shown per {{ '{:,}'.format(f.calls) }} calls &mdash; a fixed basis, not a monthly figure; multiply by your agent's real call volume.</p>
+<p class="foot-note">Audited {{ audited }} of {{ f.rows | length }} call-sites{% if f.revision %} on revision <b>{{ f.revision[:12] }}</b> (latest deployment revision only — other versions are excluded so the comparison can't mix them){% endif %}. Detection is deterministic; every dollar is earned by a live re-run of real recorded inputs, and unproven potential is never counted as savings. Figures shown per {{ '{:,}'.format(f.calls) }} calls &mdash; a fixed basis, not a monthly figure; multiply by your agent's real call volume.</p>
 
 <script>
   const BASE = {{ base | tojson }};
