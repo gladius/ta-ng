@@ -1,7 +1,7 @@
 """Galileo adapter — recorded LLM spans -> Token Auditor traces.
 
 Live:    pulls LLM spans via Galileo's span-search REST API. Standing config is just KEY + HOST (from
-         the process env or a gitignored auditor/.env — see .env.example; env wins over file). WHICH
+         the process env or a gitignored .env — see .env.example; env wins over file). WHICH
          project to pull is a per-call SELECTION (project_id=<uuid> / project=<name> argument), not config.
 Offline: pass records=<list of dicts> or a path to exported span JSON — no key, no install.
          Handy for tests and for replaying an export.

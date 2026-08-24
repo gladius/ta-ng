@@ -1,6 +1,6 @@
 """Assemble a DEPLOYMENT PROFILE from the pinned graph — deterministic, $0, measured facts only.
 
-Cost is computed from measured tokens x the ONE catalog price map (auditor.util / auditor/models.json),
+Cost is computed from measured tokens x the ONE catalog price map (app.catalog / config/models.json),
 the SAME source the downgrade lever uses — so profile and levers reconcile by construction. LangSmith's
 own `cost_ls` is used only as a fallback for a model the catalog doesn't price (self-hosted / custom);
 if neither has a price we say so ("price unknown — add it to models.json") rather than invent a number.
@@ -11,7 +11,7 @@ Non-llm nodes get deterministic facts + a one-liner (no prompt to comprehend, no
 LLM `role` (op + summary) is a separate optional pass, filled per llm node once `comp` is provided.
 """
 from app.config import CALLS_BASIS
-from auditor.util import PRICE, usd, canonical_model, tier, cache_mode
+from app.catalog import PRICE, usd, canonical_model, tier, cache_mode
 from app.services.profile.facts import fact_pack     # the deterministic $0 fact-pack (Phase 1)
 
 

@@ -29,8 +29,8 @@ except Exception:
     pass
 
 from tools.diag._llm import BASE, KEY, md_write, resolve_catalog
-from auditor import util
-from auditor.util import cache_min, cache_mode, tier, PRICE
+from app import catalog as util
+from app.catalog import cache_min, cache_mode, tier, PRICE
 
 
 def _roots():
@@ -102,7 +102,9 @@ def _normalize(rec):
 def _dump_raw(rec, out):
     """Save one endpoint's raw JSON next to the report, so we can analyze the real shape offline. Returns filename."""
     tag = rec["endpoint"].strip("/").replace("/", "_")
-    fn = os.path.join(os.path.dirname(os.path.abspath(out)) or ".", "capture_%s.json" % tag)
+    d = os.path.dirname(os.path.abspath(out)) or "."
+    os.makedirs(d, exist_ok=True)                             # ensure the (gitignored) out dir exists before writing
+    fn = os.path.join(d, "capture_%s.json" % tag)
     with open(fn, "w", encoding="utf-8") as f:
         json.dump(rec["raw"], f, indent=2, default=str)
     return os.path.basename(fn)
@@ -210,7 +212,7 @@ def run(a):
 def main():
     ap = argparse.ArgumentParser(description="LiteLLM deployment debug: deployed models vs models.json ($0).")
     ap.add_argument("--mock", action="store_true", help="use the built-in representative deployment (no proxy needed)")
-    ap.add_argument("--out", default="litellm_catalog.md")
+    ap.add_argument("--out", default=".diag_out/litellm_catalog.md")
     ap.add_argument("--append", action="store_true")
     run(ap.parse_args())
 

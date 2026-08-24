@@ -14,8 +14,8 @@ that perturbs the leading bytes — a per-call timestamp, an injected RAG chunk,
 
 No LLM. The paid write->read PROOF (that the recovered prefix actually caches) lives in app/services/cache_proof.py.
 """
-from auditor.util import PRICE, approx_tokens, canonical_model, cache_min, cache_mode
-# cache_min / cache_mode come straight from the model catalog (auditor/models.json) — the single source of truth.
+from app.catalog import PRICE, approx_tokens, canonical_model, cache_min, cache_mode
+# cache_min / cache_mode come straight from the model catalog (config/models.json) — the single source of truth.
 # cache_mode gates the whole lever: 'explicit' providers (Anthropic) need a breakpoint → "enable caching" is a
 # real, provable fix; 'auto' providers (OpenAI, Google) cache eligible prefixes on their own → "enable" is a
 # no-op, but a per-call prefix that BREAKS the stable region still defeats that auto-cache, so reorg still applies.

@@ -18,3 +18,6 @@ venv/
 # dev-only traceability dumps (AUDIT_DEBUG)
 .audit_debug/
 
+# generated diag reports + captures (tools/diag/*) — never commit
+.diag_out/
+

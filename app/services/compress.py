@@ -13,7 +13,7 @@ it across the node's diverse recorded inputs. Three guards, in order of authorit
 """
 import re
 
-from auditor.util import canonical_model, approx_tokens, max_output, PRICE
+from app.catalog import canonical_model, approx_tokens, max_output, PRICE
 from app.services import audit, llm_client
 from app.config import OPTIMIZER_MODEL, JUDGE_MODEL   # model roles live in config (.env-overridable), not here
 

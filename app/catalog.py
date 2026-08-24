@@ -1,6 +1,6 @@
 """Shared helpers: the model/price catalog + token estimation.
 
-Pricing lives in auditor/models.json (providers -> models in capability order, $/1M tokens).
+Pricing lives in config/models.json (providers -> models in capability order, $/1M tokens).
 Add or update models THERE, not here. This module loads it and exposes:
 
   PRICE                 {model: {input, output, cache_read, cache_write, cache_min}}   flat lookup
@@ -17,8 +17,9 @@ Add or update models THERE, not here. This module loads it and exposes:
 import os
 import re
 import json
+import datetime
 
-_CATALOG_PATH = os.path.join(os.path.dirname(__file__), "models.json")
+_CATALOG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "models.json")  # repo-root/config
 
 
 def _load_catalog(path=_CATALOG_PATH):
@@ -40,7 +41,10 @@ def _load_catalog(path=_CATALOG_PATH):
         for m in prov["models"]:
             order[m["name"]] = {"provider": prov["provider"], "siblings": names,
                                 "tier": m.get("tier"), "release": m.get("release"),
-                                "max_output": m.get("max_output")}   # per-model output ceiling (optional)
+                                "max_output": m.get("max_output"),    # per-model output ceiling (optional)
+                                "retire_date": m.get("retire_date"),  # announced shutdown (optional) -> lifecycle guard
+                                "mode": m.get("mode", "chat"), "context_window": m.get("context_window"),
+                                "supports_prompt_caching": m.get("supports_prompt_caching")}
     return cat, price, order, aliases, callable_, cmode
 
 
@@ -79,24 +83,73 @@ def is_callable(model):
     return _CALLABLE.get(model, True)
 
 
+_VENDOR_RX = re.compile(r"^(?:(?:us|eu|apac|global)\.)?"
+                        r"(?:anthropic|google|openai|meta|amazon|mistral|cohere|ai21|deepseek)\.")
+_BEDROCK_VER_RX = re.compile(r"[-:]v\d+(?::\d+)?$|:\d+$")    # trailing -v1:0 / v1 / :0
+
+
+def resolve_deployed(underlying):
+    """A gateway's underlying model id -> our catalog name, or None. Handles plain (`gemini/gemini-2.5-flash`),
+    Bedrock (`bedrock/us.anthropic.claude-opus-4-8`), and Vertex (`vertex_ai/gemini-3.7-flash`) shapes: peel every
+    route segment + the region.vendor namespace + the bedrock inference-profile version, then canonical_model finishes."""
+    if not underlying:
+        return None
+    s = underlying
+    while "/" in s:                                          # peel route segments (bedrock/, vertex_ai/google/, …)
+        s = s.split("/", 1)[1]
+    s = _VENDOR_RX.sub("", s)                                # drop region.vendor namespace (us.anthropic. / google. …)
+    s = _BEDROCK_VER_RX.sub("", s)                           # drop bedrock inference-profile version (-v1:0 / :0)
+    return canonical_model(s) or canonical_model(underlying)
+
+
+# ── model lifecycle (retire_date is a MODEL property in config/models.json) ──────────────────────────────────
+# The downgrade guard skips a model whose announced shutdown is near. Vendor MIGRATION PATHS live in app.migration.
+RETIRE_HORIZON_DAYS = 180        # a model retiring within this many days is too soon to be a downgrade TARGET
+
+
+def retire_date(model):
+    """Announced shutdown date (YYYY-MM-DD) for a model, from config/models.json, or None."""
+    info = _ORDER.get(canonical_model(model) or model)
+    return info.get("retire_date") if info else None
+
+
+def _as_of_date(as_of=None):
+    return datetime.date.fromisoformat(as_of) if as_of else datetime.date.today()
+
+
+def is_retired(model, as_of=None):
+    """True if the model's announced shutdown is on/before `as_of` (default today). Retired models stay PRICED
+    (old traces still cost-out) but are never offered as a downgrade target."""
+    d = retire_date(model)
+    return bool(d and datetime.date.fromisoformat(d) <= _as_of_date(as_of))
+
+
+def retiring_within(model, days=RETIRE_HORIZON_DAYS, as_of=None):
+    """True if the model retires on/before `as_of` + `days` — i.e. too soon to be a safe downgrade TARGET."""
+    d = retire_date(model)
+    return bool(d and datetime.date.fromisoformat(d) <= _as_of_date(as_of) + datetime.timedelta(days=days))
+
+
 _TIER_RANK = {"frontier": 0, "balanced": 1, "small": 2, "nano": 3}     # capability classes, most → least capable
 
 
-def next_cheaper(model, avg_in=None, avg_out=None):
+def next_cheaper(model, avg_in=None, avg_out=None, as_of=None, avail=None):
     """The gentlest downgrade CANDIDATE in a lower capability tier, same provider (or None).
 
     Node-aware pick (when a call-site's token mix `avg_in`/`avg_out` is given — the production path): the NEWEST
     callable model in the nearest lower tier that ACTUALLY net-saves for THAT mix. Pricing is NOT monotonic with
-    tier — a newer premium 'flash' can cost MORE per input token than an older 'pro' (gemini-3.6-flash $1.50-in vs
-    gemini-2.5-pro $1.25-in) yet be cheaper on OUTPUT ($7.50 vs $10.00). Whether it saves depends on the node: an
-    output-heavy node genuinely saves on 3.6-flash (the latest, most-capable drop), while an input-heavy node falls
-    to the cheaper 3-flash. Net-saving on the real mix is strictly more precise than a both-axes Pareto rule (which
-    would wrongly exclude 3.6-flash everywhere), and 'newest' is our capability proxy within a tier. The pick is
-    only a candidate — the paid audit re-runs it and only books $ on SAFE, so a mis-ranked pick fails as NOT-SAFE,
-    never a false save.
+    tier — a newer 'flash' can cost MORE per input token than an older model yet be cheaper on OUTPUT — so whether a
+    candidate saves depends on the node's mix. Net-saving on the real mix is strictly more precise than a both-axes
+    Pareto rule, and 'newest' is our capability proxy within a tier. The pick is only a candidate — the paid audit
+    re-runs it and books $ only on SAFE, so a mis-ranked pick fails as NOT-SAFE, never a false save.
 
     No-mix pick (CLI / tests): the legacy Pareto target — most-capable callable model in the nearest lower tier
-    whose price is <= this model's on BOTH axes. Falls back to legacy file order for an untier'd model."""
+    whose price is <= this model's on BOTH axes. Falls back to legacy file order for an untier'd model.
+
+    Lifecycle guard: a candidate retiring within RETIRE_HORIZON_DAYS of `as_of` (retire_date in config/models.json)
+    is NEVER a target. Availability guard: pass `avail` (a callable model->bool, e.g. registry.is_available) and a
+    candidate the gateway does not serve is skipped — we never recommend a model that can't be called.
+    `as_of` defaults to today; pass a fixed date in tests."""
     m = canonical_model(model) or model
     info = _ORDER.get(m)
     if not info:
@@ -105,15 +158,19 @@ def next_cheaper(model, avg_in=None, avg_out=None):
     p0 = PRICE.get(m, {})
     in0, out0 = p0.get("input"), p0.get("output")
 
+    def _ok(s):                                                      # callable, live (not retiring), and served
+        return (_CALLABLE.get(s, True) and not retiring_within(s, as_of=as_of)
+                and (avail is None or avail(s)))
+
     if cur is None:                                                   # untier'd model → legacy next-in-list
         sibs = info["siblings"]
         for j in range(sibs.index(m) + 1, len(sibs)):
-            if _CALLABLE.get(sibs[j], True):
+            if _ok(sibs[j]):
                 return sibs[j]
         return None
 
-    lower = [s for s in info["siblings"]                              # callable + strictly lower capability tier
-             if _CALLABLE.get(s, True) and _TIER_RANK.get(_ORDER[s].get("tier"), 99) > cur]
+    lower = [s for s in info["siblings"]                              # callable, live, strictly lower capability tier
+             if _ok(s) and _TIER_RANK.get(_ORDER[s].get("tier"), 99) > cur]
     if not lower:
         return None
 
@@ -147,6 +204,12 @@ def provider_of(model):
     """The provider name for a catalog model (or None if unknown)."""
     info = _ORDER.get(canonical_model(model) or model)
     return info["provider"] if info else None
+
+
+def meta(model):
+    """The full catalog metadata row for a model (provider, tier, release, mode, context_window, max_output,
+    supports_prompt_caching, retire_date, …) as a plain dict, or {} if unknown. For the models view."""
+    return dict(_ORDER.get(canonical_model(model) or model) or {})
 
 
 def tier(model):

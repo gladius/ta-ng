@@ -57,6 +57,22 @@ def agents(request: Request, source: str, ws_id: str):
 
 
 # ── Savings report: the deliverable. Funnel (free) → prove selected (paid, SSE) → frozen report → download ──
+@app.get("/models", response_class=HTMLResponse)
+def models_view(request: Request):
+    """The CONSOLIDATED model registry — the in-memory reference (config/models.json) × what the gateway actually
+    serves (availability). Read-only. Availability is real only with a gateway; 'unknown' in dev."""
+    from app import registry
+    return _page(request, "models.html", reg=registry.report())
+
+
+@app.get("/migration-path/{provider}", response_class=HTMLResponse)
+def migration_path_view(request: Request, provider: str):
+    """The vendor's recommended migration paths for a provider (config/migrations/<provider>.json) — from→to."""
+    from app.migration import migration_paths
+    paths = [p for p in migration_paths() if (p.get("provider") or "").lower() == provider.lower()]
+    return _page(request, "migration_path.html", provider=provider, paths=paths)
+
+
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/report", response_class=HTMLResponse)
 def report_view(request: Request, source: str, ws_id: str, project: str, snap: str = "", cache: int = 0):
     from app.services import funnel, prove, store, snapshot

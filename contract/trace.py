@@ -1,6 +1,6 @@
 """The trace contract: the canonical field spec, the constructor (build_trace), the validator, and
 the call-site key. Platform-agnostic and self-standing — model-name canonicalization resolves LAZILY
-against a catalog (auditor.util) only when one is present; until then a model is honestly flagged
+against a catalog (app.catalog) only when one is present; until then a model is honestly flagged
 model_known=False. The contract records whether a model is known; it does not own prices.
 
 A Token Auditor trace:
@@ -20,11 +20,11 @@ import json
 
 
 def _canonical_model(raw):
-    """Canonicalize a raw model id against a price/name catalog (auditor.util) IF one is present, else None.
+    """Canonicalize a raw model id against a price/name catalog (app.catalog) IF one is present, else None.
     LAZY: importing the contract pulls in no catalog — the catalog is a later (pricing) concern. Until it
     exists every model resolves to None and is honestly flagged model_known=False, never mis-labeled."""
     try:
-        from auditor.util import canonical_model
+        from app.catalog import canonical_model
         return canonical_model(raw)
     except Exception:
         return None

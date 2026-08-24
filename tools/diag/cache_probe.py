@@ -33,7 +33,7 @@ except Exception:
     pass
 
 from tools.diag._llm import BASE, KEY, md_write
-from auditor.util import canonical_model, cache_min, cache_mode, tier, provider_of, approx_tokens
+from app.catalog import canonical_model, cache_min, cache_mode, tier, provider_of, approx_tokens
 
 _LOREM = ("The auditor proves a prefix caches by reading the provider's own counters rather than estimating. "
           "Caching cannot change the generated output, so the round-trip counters are the entire proof. ")
@@ -234,7 +234,7 @@ def main():
     ap.add_argument("--model", required=True, help="catalog name or a proxy alias (e.g. gem36, gemini-3.7-flash)")
     ap.add_argument("--format", choices=("anthropic", "openai", "both"), default="both")
     ap.add_argument("--n", type=int, default=3, help="calls per format (1 cold + warms)")
-    ap.add_argument("--out", default="cache_probe.md")
+    ap.add_argument("--out", default=".diag_out/cache_probe.md")
     ap.add_argument("--append", action="store_true")
     run(ap.parse_args())
 

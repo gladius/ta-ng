@@ -9,7 +9,7 @@ import re
 
 import credentials
 credentials.load()                                          # the ONE .env loader — same as the app's connector
-from auditor.util import canonical_model
+from app.catalog import canonical_model
 
 # base_url + key: the LiteLLM gateway's PROD names (LLM_GATEWAY_URL / LLM_GATEWAY_KEY — what the Verizon deployment
 # actually sets) take precedence, then the llm_client-style ANTHROPIC_BASE_URL / *_BASE_URL fallbacks for local

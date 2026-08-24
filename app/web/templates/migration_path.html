@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ provider|capitalize }} migration paths · Token Auditor{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/models">Models</a> <span class="sep">›</span> <b>{{ provider }} migration</b>{% endblock %}
+{% block content %}
+  <h1>{{ provider|capitalize }} recommended migration paths</h1>
+  <p class="sub">Regardless of the model an agent runs today, {{ provider|capitalize }} recommends consolidating onto a
+     current GA target. This is the <b>preferred</b> recommendation in the downgrade lever; the same-provider
+     cost-downgrade is the fallback. It's a quality/lifecycle move — the audit shows the honest cost delta.</p>
+
+  {% for p in paths %}
+  <section class="migp">
+    <div class="migp-head">
+      <span class="pill ok">→ {{ p.to }}</span>
+      {% if p.to_status %}<span class="tab-badge">{{ p.to_status }}</span>{% endif %}
+      {% if p.tier %}<span class="migp-tier">{{ p.tier }}</span>{% endif %}
+    </div>
+    {% if p.value %}<p class="sub">{{ p.value }}</p>{% endif %}
+    <div class="migp-from">
+      <span class="migp-lbl">migrate from</span>
+      {% for s in p['from'] %}<span class="pill off">{{ s.label or s.re }}</span>{% endfor %}
+    </div>
+  </section>
+  {% else %}
+  <p class="empty">No migration paths configured for <b>{{ provider }}</b>
+     (<code>config/migrations/{{ provider }}.json</code>).</p>
+  {% endfor %}
+
+  <style>
+    .migp{border:1px solid var(--line,#e5e3e1);border-radius:12px;padding:16px 18px;margin:14px 0;background:var(--card,#fff)}
+    .migp-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .migp-head .pill.ok{font-size:14px;font-weight:700}
+    .migp-tier{font-size:12px;color:var(--muted,#6b6b72);text-transform:uppercase;letter-spacing:.04em}
+    .migp-from{margin-top:12px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+    .migp-lbl{font-size:11.5px;color:var(--faint,#9a9aa2);text-transform:uppercase;letter-spacing:.04em;margin-right:4px}
+  </style>
+{% endblock %}

@@ -23,7 +23,7 @@ Division of labour (the LLM is the reorg brain; it is never trusted blindly):
 """
 import re
 
-from auditor.util import canonical_model, cache_min, approx_tokens, PRICE
+from app.catalog import canonical_model, cache_min, approx_tokens, PRICE
 from app.services import cache, cache_proof, audit, llm_client
 from app.config import OPTIMIZER_MODEL as PLAN_MODEL   # the reorg brain (judgement work) — centralised in config
 

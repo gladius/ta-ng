@@ -16,7 +16,7 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from auditor.util import canonical_model, next_cheaper, tier, release, max_output
+from app.catalog import canonical_model, next_cheaper, tier, release, max_output
 from app.services import llm_client
 from app.config import (AUDIT_SAMPLES, AUDIT_REPEATS, AUDIT_MIN_EVIDENCE, AUDIT_MAX_PARALLEL,
                         AUDIT_JUDGE_MAX_CHARS, AUDIT_SAFE_RATIO, AUDIT_SELF_BASELINE, AUDIT_SELF_FLOOR,

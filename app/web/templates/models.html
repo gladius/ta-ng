@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Models · Token Auditor{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <b>Models</b>{% endblock %}
+{% block content %}
+  <h1>Models</h1>
+  <p class="sub">The in-memory reference (<code>config/models.json</code>) consolidated with what the gateway actually
+     serves. Availability source: <b>{{ reg.source }}</b>.</p>
+
+  {% if not reg.has_gateway %}
+  <p class="note">No gateway configured here — availability is <b>unknown</b> (dev / Anthropic-direct), so the
+     downgrade lever gates on nothing. It resolves automatically in prod (when <code>LLM_GATEWAY_URL</code> is set).</p>
+  {% endif %}
+
+  <p><a href="/migration-path/google">Google recommended migration paths ›</a></p>
+
+  <table class="grid">
+    <thead><tr>
+      <th>Model</th><th>Provider</th><th>Tier</th><th>Mode</th>
+      <th class="num">in $/1M</th><th class="num">out $/1M</th><th class="num">context</th><th>Availability</th>
+    </tr></thead>
+    <tbody>
+    {% for m in reg.models %}
+      <tr>
+        <td class="name">{{ m.model }}{% if m.retire_date %} <span class="pill off">retires {{ m.retire_date }}</span>{% endif %}</td>
+        <td>{{ m.provider or '—' }}</td>
+        <td>{{ m.tier or '—' }}</td>
+        <td>{{ m.mode }}</td>
+        <td class="num">{{ m.input if m.input is not none else '—' }}</td>
+        <td class="num">{{ m.output if m.output is not none else '—' }}</td>
+        <td class="num">{{ m.context_window if m.context_window else '—' }}</td>
+        <td>
+          {% if m.available is none %}<span class="pill">unknown</span>
+          {% elif m.available %}<span class="pill ok">available</span>
+          {% else %}<span class="pill off">not deployed</span>{% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="empty">No models in the catalog.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  {% if reg.uncatalogued %}
+  <h2>Deployed but not in our catalog</h2>
+  <p class="sub">The gateway serves these, but we have no reference details yet — add them to
+     <code>config/models.json</code> to price and audit them.</p>
+  <table class="grid">
+    <thead><tr><th>Underlying model</th><th>Deployed as</th></tr></thead>
+    <tbody>
+    {% for u in reg.uncatalogued %}
+      <tr><td class="name">{{ u.underlying }}</td><td>{{ u.model_name }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+{% endblock %}

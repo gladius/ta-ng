@@ -7,9 +7,32 @@ from collections import OrderedDict
 from connectors.langsmith.adapter import LangSmithAdapter, _graph_path
 from connectors.datasource import DataSource
 from app.services import graph as gmod, downgrade
-from auditor.util import next_cheaper, PRICE
+from app.catalog import next_cheaper, PRICE
 
 _SAMPLE = os.path.join("connectors", "langsmith", "sample_runs.json")
+
+
+# ── synthetic-catalog harness: unit-test the SELECTION LOGIC deterministically, independent of live prices ────
+def _p(i, o):
+    return {"input": i, "output": o, "cache_read": 0.0, "cache_write": 0.0, "cache_min": 1024}
+
+
+def _o(tier, rel, sibs, retire_date=None):
+    return {"provider": "syn", "siblings": sibs, "tier": tier, "release": rel,
+            "max_output": None, "retire_date": retire_date}
+
+
+def _install_synthetic(price, order):
+    """Swap the module catalog for a synthetic one; returns restore(). Works with or without pytest. retire_date
+    lives on the `order` entries (a model property). next_cheaper reads only these — migration paths are separate."""
+    from app import catalog as cat
+    saved = (cat.PRICE, cat._ORDER, cat._CALLABLE)
+    cat.PRICE, cat._ORDER = price, order
+    cat._CALLABLE = {k: True for k in price}
+
+    def restore():
+        cat.PRICE, cat._ORDER, cat._CALLABLE = saved
+    return restore
 
 
 def _parse_sample():
@@ -47,33 +70,74 @@ def test_graph_path_parser():
 
 
 def test_pareto_ladder():
-    # The downgrade target must be cheaper on BOTH axes. gemini-2.5-pro ($1.25/$10): the newer gemini-3.6-flash
-    # ($1.50/$7.50) is PRICIER on input, so it must NOT be chosen — 3-flash ($0.50/$3.0) is the real drop.
+    # Real Gemini prices (LiteLLM master). gemini-2.5-pro ($1.25/$10): the newest+cheapest live flash,
+    # gemini-3.7-flash ($0.75/$3.75), is Pareto-cheaper on BOTH axes -> the gentlest drop.
     tgt = next_cheaper("gemini-2.5-pro")
-    assert tgt == "gemini-3-flash", "2.5-pro must skip the pricier-input flash: got %s" % tgt
+    assert tgt == "gemini-3.7-flash", "2.5-pro -> newest Pareto-cheaper flash: got %s" % tgt
     assert PRICE[tgt]["input"] <= PRICE["gemini-2.5-pro"]["input"] and PRICE[tgt]["output"] <= PRICE["gemini-2.5-pro"]["output"]
-    # healthy cases unchanged: 3.1-pro -> 3.6-flash IS cheaper on both, and sonnet-5 -> haiku-4-5 as before.
-    assert next_cheaper("gemini-3.1-pro") == "gemini-3.6-flash", next_cheaper("gemini-3.1-pro")
+    # gemini-3.1-pro -> gemini-3.5-flash (most-capable balanced still Pareto-cheaper); sonnet-5 -> haiku-4-5 unchanged.
+    assert next_cheaper("gemini-3.1-pro") == "gemini-3.5-flash", next_cheaper("gemini-3.1-pro")
     assert next_cheaper("claude-sonnet-5") == "claude-haiku-4-5", next_cheaper("claude-sonnet-5")
-    print("[ok] pareto ladder: 2.5-pro -> 3-flash (skips pricier-input 3.6-flash); healthy drops unchanged")
+    print("[ok] pareto ladder (real prices): 2.5-pro -> 3.7-flash; 3.1-pro -> 3.5-flash; sonnet-5 -> haiku-4-5")
 
 
 def test_node_aware_pick():
-    # With a call-site's real token mix, the target is the NEWEST lower-tier model that genuinely net-saves for
-    # THAT mix — not a single fixed Pareto pick. gemini-2.5-pro ($1.25/$10):
-    #   output-heavy node -> gemini-3.6-flash: pricier input ($1.50) but far cheaper output ($7.50) -> net saves,
-    #                        and it's the LATEST flash, so the gentlest capable drop.
-    #   input-heavy node  -> gemini-3-flash: 3.6-flash net-LOSES on all that input, so it falls to the cheaper one.
-    assert next_cheaper("gemini-2.5-pro", 100, 2000) == "gemini-3.6-flash", next_cheaper("gemini-2.5-pro", 100, 2000)
-    assert next_cheaper("gemini-2.5-pro", 5000, 50) == "gemini-3-flash", next_cheaper("gemini-2.5-pro", 5000, 50)
-    # a node with no measurable tokens (unknown volume) yields NO candidate rather than an unprovable saving.
-    assert next_cheaper("gemini-2.5-pro", 0, 0) is None
-    # candidates() threads the node mix through: an output-heavy pro node lands on the latest flash.
+    # The node-aware LOGIC on a CONTROLLED catalog (independent of live prices, which change): when the NEWEST
+    # lower-tier model is pricier-input / cheaper-output, the pick flips with the node's mix. syn-pro ($1.0/$10):
+    #   output-heavy -> syn-new ($1.5/$5): pricier input but far cheaper output -> net saves, and it's newest.
+    #   input-heavy  -> syn-old ($0.5/$8): syn-new net-LOSES on all that input, so it falls to the cheaper-input one.
+    price = {"syn-pro": _p(1.0, 10.0), "syn-new": _p(1.5, 5.0), "syn-old": _p(0.5, 8.0)}
+    sibs = ["syn-pro", "syn-new", "syn-old"]
+    order = {"syn-pro": _o("frontier", "2026-01", sibs),
+             "syn-new": _o("balanced", "2026-06", sibs),
+             "syn-old": _o("balanced", "2025-01", sibs)}
+    restore = _install_synthetic(price, order)
+    try:
+        assert next_cheaper("syn-pro", 100, 2000) == "syn-new", "output-heavy -> newest, cheaper-output"
+        assert next_cheaper("syn-pro", 5000, 50) == "syn-old", "input-heavy -> older, cheaper-input (new net-loses)"
+        assert next_cheaper("syn-pro", 0, 0) is None, "no measurable tokens -> no unprovable saving"
+    finally:
+        restore()
+    # real catalog: candidates() threads the node mix through to the latest live flash.
     heavy = [{"key": "a/deep", "node": "deep", "model": "gemini-2.5-pro",
               "avg_in": 200, "avg_out": 4000, "calls": 10, "graph_path": ""}]
     c = downgrade.candidates(heavy, per_calls=10000)[0]
-    assert c["cheaper"] == "gemini-3.6-flash" and c["usd"] > 0, c
-    print("[ok] node-aware pick: output-heavy -> latest 3.6-flash, input-heavy -> cheaper 3-flash, no-tokens -> none")
+    assert c["cheaper"] == "gemini-3.7-flash" and c["usd"] > 0, c
+    print("[ok] node-aware (synthetic logic): mix flips new<->old; real candidates -> latest 3.7-flash")
+
+
+def test_lifecycle_guard():
+    # A candidate retiring within the horizon is NEVER a downgrade target. 'dying' is the most-capable balanced
+    # drop, but it retires 2026-09-01 -> excluded near that date, allowed long before (proves it's the guard).
+    price = {"big": _p(2.0, 10.0), "dying": _p(1.5, 8.0), "safe": _p(1.0, 6.0)}
+    sibs = ["big", "dying", "safe"]
+    order = {"big": _o("frontier", "2026-01", sibs),
+             "dying": _o("balanced", "2026-06", sibs, retire_date="2026-09-01"),
+             "safe": _o("balanced", "2025-06", sibs)}
+    restore = _install_synthetic(price, order)
+    try:
+        assert next_cheaper("big", as_of="2026-08-01") == "safe", "retiring 'dying' excluded near shutdown"
+        assert next_cheaper("big", as_of="2025-01-01") == "dying", "far before shutdown, 'dying' is allowed"
+    finally:
+        restore()
+    print("[ok] lifecycle guard: a soon-retiring model is excluded as a downgrade target")
+
+
+def test_migration_path():
+    from app.migration import migration_target
+    # cross-provider vendor recommendation (Google deck): premium -> 3.7-flash; lite/small -> 3.5-flash-lite.
+    for m in ("claude-sonnet-5", "claude-opus-4-8", "gpt-5.5", "gemini-2.5-pro", "gemini-3.6-flash"):
+        assert migration_target(m)["to"] == "gemini-3.7-flash", (m, migration_target(m))
+    for m in ("claude-haiku-4-5", "gpt-5-mini", "gpt-5-nano", "gemini-2.5-flash", "gemini-2.5-flash-lite"):
+        assert migration_target(m)["to"] == "gemini-3.5-flash-lite", (m, migration_target(m))
+    assert migration_target("gemini-3.7-flash") is None, "a current target has no onward migration"
+    assert migration_target("some-unknown-xyz") is None
+    # preference: candidates() picks the migration target (cross-provider) over cost-downgrade, tagged 'migration'.
+    node = [{"key": "a/x", "node": "svc", "model": "claude-sonnet-5",
+             "avg_in": 2000, "avg_out": 300, "calls": 10, "graph_path": ""}]
+    cand = downgrade.candidates(node, per_calls=10000)[0]
+    assert cand["cheaper"] == "gemini-3.7-flash" and cand["reason"] == "migration" and cand["usd"] > 0, cand
+    print("[ok] migration path: family regex -> Gemini GA targets; preferred over cost-downgrade")
 
 
 def test_thinking_detection():
@@ -133,15 +197,18 @@ def test_spine():
     names = [c["node"] for c in cands]
     assert names == ["triage"], "only triage is a real candidate (responder models are off-catalog): %s" % names
     c = cands[0]
-    assert c["cheaper"] == "claude-haiku-4-5" and c["usd"] > 0, c
-    print("[ok] spine: triage %s -> %s  ~$%.2f/1k calls | responder correctly not a candidate"
-          % (c["model"], c["cheaper"], c["usd"]))
+    # migration path is PREFERRED: triage runs claude-sonnet -> Google's recommended target gemini-3.7-flash.
+    assert c["cheaper"] == "gemini-3.7-flash" and c["reason"] == "migration" and c["usd"] > 0, c
+    print("[ok] spine: triage %s -> %s (%s)  ~$%.2f/1k calls | responder correctly not a candidate"
+          % (c["model"], c["cheaper"], c["reason"], c["usd"]))
 
 
 if __name__ == "__main__":
     test_graph_path_parser()
     test_pareto_ladder()
     test_node_aware_pick()
+    test_lifecycle_guard()
+    test_migration_path()
     test_thinking_detection()
     test_same_label_distinct_keys()
     test_spine()

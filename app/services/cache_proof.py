@@ -7,38 +7,20 @@ cache breakpoint and read the provider's own counters back — 1st call WRITES i
 Caching cannot change model output (Anthropic: "Prompt caching has no effect on output token generation. The
 response is identical."), so there is NO behavior judge here — the round-trip counters are the whole proof.
 """
-from auditor.util import approx_tokens, canonical_model, cache_min
+from app.catalog import approx_tokens, canonical_model, cache_min
 from app.services.cache import _prefix_text, _recoverable_text
 from app.services import llm_client
 
 
 def _usage(model, system_blocks, user):
-    """(cache_write_tokens, cache_read_tokens) from the provider's OWN counters on this one call.
-
-    Reads cache signals from BOTH response shapes so the round-trip proves a real cache READ no matter how the
-    request is routed:
-      - Anthropic-native (direct API, or Anthropic through litellm): `cache_creation_input_tokens` /
-        `cache_read_input_tokens` on `usage`.
-      - litellm-normalized (OpenAI / Google through the gateway report cached reads OpenAI-style):
-        `usage.prompt_tokens_details.cached_tokens`.
-    Anthropic caching is EXPLICIT (the `cache_control` breakpoint on the prefix); OpenAI/Google cache
-    AUTOMATICALLY, so there the breakpoint is a harmless no-op and the cached read only surfaces in
-    `prompt_tokens_details`. We take whichever field is populated. NOTE: confirm the exact litellm field for your
-    gateway version — "read both" is the robust default. A non-zero read on the 2nd (warm) call is the ground
-    truth that this exact prefix caches.
-    """
+    """(cache_write_tokens, cache_read_tokens) via the ONE transport-agnostic reader (llm_client.usage), so the
+    round-trip proves a real cache READ whether it went through Anthropic (dev) or a LiteLLM/OpenAI gateway (prod)
+    — the reader handles the cache_read_input_tokens vs prompt_tokens_details.cached_tokens split (LiteLLM #27763).
+    A non-zero read on the 2nd (warm) call is ground truth that this exact prefix caches."""
     r = llm_client.complete(model=model, max_tokens=1, system=system_blocks,
                             messages=[{"role": "user", "content": user}])
-    u = r.usage
-    write = getattr(u, "cache_creation_input_tokens", 0) or 0
-    read = getattr(u, "cache_read_input_tokens", 0) or 0
-    if not read:                                        # non-Anthropic via litellm -> cached read is OpenAI-shaped
-        det = getattr(u, "prompt_tokens_details", None)
-        cached = getattr(det, "cached_tokens", None) if det is not None else None
-        if cached is None and isinstance(det, dict):    # some gateways hand back usage as plain dicts
-            cached = det.get("cached_tokens")
-        read = int(cached or 0)
-    return (write, read)
+    u = llm_client.usage(r)
+    return (u["cache_write"], u["cache_read"])
 
 
 def prove_prefix(model, prefix, cmin=None):

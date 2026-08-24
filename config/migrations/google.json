@@ -1,0 +1,34 @@
+{
+  "provider": "google",
+  "_source": "Google Cloud deck — 'Transition today to 3.7 Flash' / 'What are the recommended migration paths?'",
+  "_fetched": "2026-08-24",
+  "_note": "Google's VENDOR migration recommendation: regardless of the model an agent runs today, consolidate onto a small set of current Gemini GA targets. Cross-provider by design (Anthropic Opus/Sonnet/Haiku, OpenAI GPT/Mini/Nano, and older Gemini all map onto a Gemini target). This is the PREFERRED recommendation (migration_target); the same-provider cost-downgrade (next_cheaper) is the FALLBACK when no path matches. `from[].re` is a REGEX matched against the canonicalized model id, so 'families' like 'any Opus' / 'any *-mini' resolve without listing every id. First matching path wins. NOTE: Google frames this as a QUALITY gain at maintained price/code, NOT a cost cut — the report shows the honest cost delta.",
+  "paths": [
+    {
+      "to": "gemini-3.7-flash",
+      "to_status": "GA",
+      "tier": "high-capability",
+      "value": "immediate quality gain while maintaining existing price and code",
+      "from": [
+        {"re": "^claude-opus",          "label": "Opus (4.8 or prior)"},
+        {"re": "^claude-sonnet",        "label": "Sonnet (5 or prior)"},
+        {"re": "^gpt-5(\\.\\d+)?$",     "label": "GPT-5.x"},
+        {"re": "^gemini-2\\.5-pro$",    "label": "Gemini 2.5 Pro"},
+        {"re": "^gemini-3\\.[56]-flash$", "label": "Gemini 3.5 / 3.6 Flash"}
+      ]
+    },
+    {
+      "to": "gemini-3.5-flash-lite",
+      "to_status": "GA",
+      "tier": "lite",
+      "value": "low-cost tier for lightweight call-sites",
+      "from": [
+        {"re": "^claude-haiku",             "label": "Haiku"},
+        {"re": "-mini$",                    "label": "Mini"},
+        {"re": "-nano$",                    "label": "Nano"},
+        {"re": "^gemini-2\\.5-flash$",      "label": "Gemini 2.5 Flash"},
+        {"re": "^gemini-2\\.5-flash-lite$", "label": "Gemini 2.5 Flash-Lite"}
+      ]
+    }
+  ]
+}

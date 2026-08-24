@@ -83,6 +83,54 @@ def _has_cache_ctl(obj):
     return False
 
 
+# ── the ONE usage contract — read token counts here, never a provider field directly ─────────────────────────
+# Both real environments flow through this reader and BOTH are handled:
+#   dev  = Anthropic API direct   -> usage.cache_read_input_tokens / cache_creation_input_tokens
+#   prod = LiteLLM (OpenAI-shaped) -> usage.prompt_tokens_details.cached_tokens   (proven: gemini-3.7-flash = 4074)
+# The two shapes just name the cache read differently (LiteLLM issue #27763); usage() reads whichever the response
+# carries, so the cache prefix module never branches on provider. The only shape that HIDES the count is LiteLLM's
+# Anthropic-format /v1/messages passthrough — which neither environment uses, so it isn't a concern here.
+def _u_get(u, *names):
+    """First present numeric field across attribute-style (Anthropic SDK) or dict-style (LiteLLM/OpenAI JSON) usage."""
+    for n in names:
+        v = getattr(u, n, None)
+        if v is None and isinstance(u, dict):
+            v = u.get(n)
+        if isinstance(v, (int, float)):
+            return int(v)
+    return 0
+
+
+def _u_cached_details(u):
+    """OpenAI/LiteLLM cache read nested at usage.prompt_tokens_details.cached_tokens (object OR dict)."""
+    det = getattr(u, "prompt_tokens_details", None)
+    if det is None and isinstance(u, dict):
+        det = u.get("prompt_tokens_details")
+    if det is None:
+        return 0
+    v = getattr(det, "cached_tokens", None)
+    if v is None and isinstance(det, dict):
+        v = det.get("cached_tokens")
+    return int(v or 0)
+
+
+def usage(resp):
+    """Transport-agnostic token usage -> {input, output, cache_read, cache_write}. Accepts a full response, a bare
+    usage object, or a dict; Anthropic- or OpenAI/LiteLLM-shaped. THE reader for cache read/write, so every lever
+    is provider/transport-agnostic."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        u = resp.get("usage", resp) if isinstance(resp, dict) else resp   # dict may be the response OR bare usage
+    if u is None:
+        return {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+    return {"input": _u_get(u, "input_tokens", "prompt_tokens"),
+            "output": _u_get(u, "output_tokens", "completion_tokens"),
+            "cache_read": max(_u_get(u, "cache_read_input_tokens", "cacheReadInputTokens",
+                                     "cachedContentTokenCount", "total_cached_tokens"),
+                              _u_cached_details(u)),
+            "cache_write": _u_get(u, "cache_creation_input_tokens", "cacheWriteInputTokens")}
+
+
 def complete(**kw):
     """EVALUATION / REWRITE calls — the fit judge, coherence, the compress optimizer, the profiler.
 
@@ -99,15 +147,15 @@ def complete(**kw):
     r = _complete_raw(**kw)
     from app.services import debugcap                        # lazy: keep llm_client a leaf, no import cycle
     if debugcap.enabled():                                   # AUDIT_DEBUG: cache/token/latency -> judge-cache proof
-        u = getattr(r, "usage", None)
+        us = usage(r)                                        # the ONE transport-agnostic reader
         debugcap.record_call({"model": kw.get("model"),
                               "anthropic": is_anth,           # did we treat it as Claude (else cache_control stripped)?
                               "cache_sent": sent_cache,       # did a cache_control breakpoint actually leave our process?
                               "base_url": str(getattr(client(), "base_url", "") or ""),   # gateway in the path? (litellm)
-                              "cache_write": int(getattr(u, "cache_creation_input_tokens", 0) or 0),
-                              "cache_read": int(getattr(u, "cache_read_input_tokens", 0) or 0),
-                              "input": int(getattr(u, "input_tokens", 0) or 0),
-                              "output": int(getattr(u, "output_tokens", 0) or 0),
+                              "cache_write": us["cache_write"],
+                              "cache_read": us["cache_read"],
+                              "input": us["input"],
+                              "output": us["output"],
                               "ms": round((time.time() - t0) * 1000)})
     return r
 

@@ -4,7 +4,7 @@ Detection is $0: for every call-site we already know the cache verdict (cache.de
 applies (downgrade.candidates). This joins them by node, prices both on ONE fixed calls basis so the numbers
 reconcile, and ranks costliest-first — the shortlist the user proves. Nothing here is paid; proof is prove.py.
 """
-from auditor.util import PRICE, canonical_model, approx_tokens
+from app.catalog import PRICE, canonical_model, approx_tokens
 from app.services import cache, downgrade
 from app.config import CALLS_BASIS, lever_on
 

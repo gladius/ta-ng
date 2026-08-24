@@ -5,15 +5,19 @@
       "provider": "google",
       "cache_mode": "auto",
       "models": [
-        {"name": "gemini-3.1-pro",         "tier": "frontier", "release": "2026-06", "input": 2.00, "output": 12.0, "cache_read": 0.20,  "cache_write": 0, "cache_min": 4096},
-        {"name": "gemini-2.5-pro",          "tier": "frontier", "release": "2025-06", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0, "cache_min": 2048},
-        {"name": "gemini-3.6-flash",        "tier": "balanced", "release": "2026-07", "input": 1.50, "output": 7.50, "cache_read": 0.15,  "cache_write": 0, "cache_min": 4096},
-        {"name": "gemini-3.5-flash",        "tier": "balanced", "release": "2026-05", "input": 1.50, "output": 9.00, "cache_read": 0.15,  "cache_write": 0, "cache_min": 4096},
-        {"name": "gemini-3-flash",          "tier": "balanced", "release": "2026-03", "input": 0.50, "output": 3.00, "cache_read": 0.05,  "cache_write": 0, "cache_min": 4096},
-        {"name": "gemini-2.5-flash",        "tier": "balanced", "release": "2025-06", "input": 0.30, "output": 2.50, "cache_read": 0.03,  "cache_write": 0, "cache_min": 2048},
-        {"name": "gemini-3.5-flash-lite",   "tier": "small",    "release": "2026-07", "input": 0.30, "output": 2.50, "cache_read": 0.03,  "cache_write": 0, "cache_min": 4096},
-        {"name": "gemini-3.1-flash-lite",   "tier": "small",    "release": "2026-06", "input": 0.25, "output": 1.50, "cache_read": 0.025, "cache_write": 0, "cache_min": 4096},
-        {"name": "gemini-2.5-flash-lite",   "tier": "small",    "release": "2025-06", "input": 0.10, "output": 0.40, "cache_read": 0.01,  "cache_write": 0, "cache_min": 1024}
+        {"name": "gemini-3.1-pro",        "tier": "frontier", "release": "2026-06", "input": 2.00,  "output": 12.0, "cache_read": 0.20,   "cache_write": 0, "cache_min": 4096, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-3-pro",          "tier": "frontier", "release": "2026-03", "input": 2.00,  "output": 12.0, "cache_read": 0.20,   "cache_write": 0, "cache_min": 4096, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-2.5-pro",        "tier": "frontier", "release": "2025-06", "input": 1.25,  "output": 10.0, "cache_read": 0.125,  "cache_write": 0, "cache_min": 2048, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-3.7-flash",      "tier": "balanced", "release": "2026-08", "input": 0.75,  "output": 3.75, "cache_read": 0.075,  "cache_write": 0, "cache_min": 4096, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-3.6-flash",      "tier": "balanced", "release": "2026-07", "input": 0.75,  "output": 3.75, "cache_read": 0.075,  "cache_write": 0, "cache_min": 4096, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-3.5-flash",      "tier": "balanced", "release": "2026-05", "input": 1.50,  "output": 9.00, "cache_read": 0.15,   "cache_write": 0, "cache_min": 4096, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-3-flash",        "tier": "balanced", "release": "2026-03", "input": 0.50,  "output": 3.00, "cache_read": 0.05,   "cache_write": 0, "cache_min": 4096, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-2.5-flash",      "tier": "balanced", "release": "2025-06", "input": 0.30,  "output": 2.50, "cache_read": 0.03,   "cache_write": 0, "cache_min": 2048, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-2.0-flash",      "tier": "balanced", "release": "2025-02", "input": 0.10,  "output": 0.40, "cache_read": 0.025,  "cache_write": 0, "cache_min": 2048, "mode": "chat", "context_window": 1048576, "max_output": 8192,  "supports_prompt_caching": true, "retire_date": "2026-06-01", "callable": false},
+        {"name": "gemini-3.5-flash-lite", "tier": "small",    "release": "2026-07", "input": 0.30,  "output": 2.50, "cache_read": 0.03,   "cache_write": 0, "cache_min": 4096, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-3.1-flash-lite", "tier": "small",    "release": "2026-06", "input": 0.25,  "output": 1.50, "cache_read": 0.025,  "cache_write": 0, "cache_min": 4096, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-2.5-flash-lite", "tier": "small",    "release": "2025-06", "input": 0.10,  "output": 0.40, "cache_read": 0.01,   "cache_write": 0, "cache_min": 1024, "mode": "chat", "context_window": 1048576, "max_output": 65536, "supports_prompt_caching": true},
+        {"name": "gemini-2.0-flash-lite", "tier": "small",    "release": "2025-02", "input": 0.075, "output": 0.30, "cache_read": 0.0187, "cache_write": 0, "cache_min": 1024, "mode": "chat", "context_window": 1048576, "max_output": 8192,  "supports_prompt_caching": true, "retire_date": "2026-06-01", "callable": false}
       ]
     },
     {

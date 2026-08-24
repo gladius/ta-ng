@@ -4,7 +4,7 @@ Every secret the auditor needs (LLM keys, connector tokens) resolves through her
 one auditable place that touches credentials. Precedence:
 
     1. process environment  (the production path — inject from a secrets manager, never a file)
-    2. a gitignored file at repo root or auditor/  (DEV CONVENIENCE ONLY — see SECURITY.md)
+    2. a gitignored file at repo root  (DEV CONVENIENCE ONLY — see SECURITY.md)
 
 A value is returned to the caller for the API call and is NEVER logged, printed, or written back to
 disk. `redact()` masks token-shaped strings for any defensive logging. See docs/SECURITY.md for the
@@ -15,7 +15,7 @@ import os
 import re
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_SEARCH_DIRS = (_HERE, os.path.join(_HERE, "auditor"))      # repo root (canonical), then auditor/ (legacy)
+_SEARCH_DIRS = (_HERE,)                                     # repo root — .env here (dev) or the process env (prod)
 
 # token shapes we mask in logs (Anthropic sk-ant-, LangSmith lsv2_/ls__, generic gl_/api key-ish)
 _SECRET_RX = re.compile(r"\b(sk-ant-[A-Za-z0-9_\-]{6,}|lsv2_[A-Za-z0-9_]{6,}|ls__[A-Za-z0-9]{6,}|"
@@ -49,14 +49,14 @@ def _parse_env_file(path):
 
 
 def load(*, override=False):
-    """THE single config loader: read the gitignored .env (repo root, then auditor/ as a legacy fallback)
-    into the process env ONCE, then mirror known aliases so every consumer agrees. The real process env wins
+    """THE single config loader: read the gitignored .env (repo root) into the process env ONCE, then mirror
+    known aliases so every consumer agrees. The real process env wins
     (override=False). Idempotent + auto-invoked by get_secret/get_config — so ANY config access loads the
     whole app's .env, and there is exactly one loader. No python-dotenv dependency."""
     global _loaded
     if _loaded and not override:
         return
-    for d in _SEARCH_DIRS:                                    # repo root (canonical), then auditor/ (legacy)
+    for d in _SEARCH_DIRS:                                    # repo root
         for fn in _ENV_FILES:
             for k, v in _parse_env_file(os.path.join(d, fn)).items():
                 if override or k not in os.environ:
@@ -123,5 +123,5 @@ def require_secret(name, *, aliases=(), files=(), hint=""):
         return v
     where = "env var %s" % name
     if files:
-        where += " (or a gitignored %s at repo root or auditor/)" % " / ".join(files)
+        where += " (or a gitignored %s at repo root)" % " / ".join(files)
     raise RuntimeError("%s not set — provide it via %s%s" % (name, where, (". " + hint) if hint else ""))

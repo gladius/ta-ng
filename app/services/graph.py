@@ -45,7 +45,7 @@ def build(source_id, ws_id, project, limit=150):
                           "out_type": n.get("out_type"), "untagged": n.get("untagged", False),
                           # MEASURED facts (were computed in connectors/graph but dropped here) — surfaced for
                           # the profile. Summed/weighted across content-variants below; the profile computes $
-                          # from tokens x price (auditor.util), not from cost_ls (kept only as a cross-check).
+                          # from tokens x price (app.catalog), not from cost_ls (kept only as a cross-check).
                           "cost_ls": n.get("cost_ls", 0) or 0, "errors_excluded": n.get("errors_excluded", 0) or 0,
                           "out_p50": n.get("out_p50", 0), "out_p95": n.get("out_p95", 0),
                           "_in": ai * s, "_out": ao * s, "_tsum": n["traces"], "_maxvar": s,
