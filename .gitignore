@@ -21,3 +21,6 @@ venv/
 # generated diag reports + captures (tools/diag/*) — never commit
 .diag_out/
 
+# local dev store + generated local state (SQLite .db + WAL/SHM sidecars live here) — prod uses Postgres via DATABASE_URL
+.data/
+
