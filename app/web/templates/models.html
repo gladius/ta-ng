@@ -13,15 +13,21 @@
 
   <p><a href="/migration-path/google">Google recommended migration paths ›</a></p>
 
+  <p class="note">Rows tagged <span class="pill">open · …</span> are open-weight models served via a host (Bedrock / Vertex),
+     kept separate from the commercial catalog. Each carries a <b>confidence</b> flag on its reference price
+     (<span class="pill ok">verified</span> / estimated / <span class="pill off">unverified</span>), and all are
+     <b>isolated from the commercial downgrade ladder</b> — an opt-in open-weight track is a later, separate choice.
+     <span class="pill off">moderation</span> marks a classifier that is never a general downgrade target.</p>
+
   <table class="grid">
     <thead><tr>
       <th>Model</th><th>Provider</th><th>Tier</th><th>Mode</th>
-      <th class="num">in $/1M</th><th class="num">out $/1M</th><th class="num">context</th><th>Availability</th>
+      <th class="num">in $/1M</th><th class="num">out $/1M</th><th class="num">context</th><th>Availability</th><th>Confidence</th>
     </tr></thead>
     <tbody>
     {% for m in reg.models %}
       <tr>
-        <td class="name">{{ m.model }}{% if m.retire_date %} <span class="pill off">retires {{ m.retire_date }}</span>{% endif %}</td>
+        <td class="name">{{ m.model }}{% if m.retire_date %} <span class="pill off">retires {{ m.retire_date }}</span>{% endif %}{% if m.open_weight %} <span class="pill">open · {{ m.family }}</span>{% if m.host %} <span class="pill">{{ m.host }}</span>{% endif %}{% if m.purpose %} <span class="pill off">{{ m.purpose }}</span>{% endif %}{% endif %}</td>
         <td>{{ m.provider or '—' }}</td>
         <td>{{ m.tier or '—' }}</td>
         <td>{{ m.mode }}</td>
@@ -33,9 +39,12 @@
           {% elif m.available %}<span class="pill ok">available</span>
           {% else %}<span class="pill off">not deployed</span>{% endif %}
         </td>
+        <td>
+          {% if m.open_weight %}{% if m.confidence == 'verified' %}<span class="pill ok" title="{{ m.note }}">verified</span>{% elif m.confidence == 'unverified' %}<span class="pill off" title="{{ m.note }}">unverified</span>{% else %}<span class="pill" title="{{ m.note }}">{{ m.confidence or 'estimated' }}</span>{% endif %}{% else %}—{% endif %}
+        </td>
       </tr>
     {% else %}
-      <tr><td colspan="8" class="empty">No models in the catalog.</td></tr>
+      <tr><td colspan="9" class="empty">No models in the catalog.</td></tr>
     {% endfor %}
     </tbody>
   </table>

@@ -39,7 +39,7 @@
 </section>
 
 <script>
-  const BASE = {{ base | tojson }}, SNAP = {{ snap | tojson }}, KEYS = {{ keys | tojson }}, LEVERS = {{ levers | tojson }};
+  const BASE = {{ base | tojson }}, SNAP = {{ snap | tojson }}, KEYS = {{ keys | tojson }}, LEVERS = {{ levers | tojson }}, DGMODE = {{ dgmode | tojson }};
   const stage = document.getElementById('stage'), fill = document.getElementById('fill'),
         rowsEl = document.getElementById('rows'), err = document.getElementById('err'), spin = document.getElementById('spin');
   const row = {}; let total = 0, done = 0, handled = false;
@@ -52,10 +52,11 @@
   function fail(headline, detail) {
     spin.style.animationPlayState = 'paused'; spin.style.borderTopColor = 'var(--muted,#888)';
     stage.textContent = headline; err.hidden = false;
-    err.innerHTML = esc(detail) + ' &middot; <a href="' + BASE + '/select?snap=' + encodeURIComponent(SNAP) + '">back to select</a>';
+    err.innerHTML = esc(detail) + ' &middot; <a href="' + BASE + '/select?snap=' + encodeURIComponent(SNAP)
+      + '&dgmode=' + encodeURIComponent(DGMODE || 'commercial') + '">back to select</a>';
   }
   const es = new EventSource(BASE + '/prove-stream?keys=' + encodeURIComponent(KEYS) + '&snap=' + encodeURIComponent(SNAP)
-    + (LEVERS ? '&levers=' + encodeURIComponent(LEVERS) : ''));
+    + (LEVERS ? '&levers=' + encodeURIComponent(LEVERS) : '') + '&dgmode=' + encodeURIComponent(DGMODE || 'commercial'));
   es.addEventListener('start', e => { total = JSON.parse(e.data).total || 0; stage.textContent = '0 / ' + total + ' audited'; });
   es.addEventListener('step', e => { const d = JSON.parse(e.data); setRow(d.key, 'run', d.node, d.msg || 'auditing…'); });
   es.addEventListener('done_node', e => { const d = JSON.parse(e.data); done++; setRow(d.key, 'done', d.node, 'audited'); fill.style.width = (total ? Math.round(done / total * 100) : 100) + '%'; stage.textContent = done + ' / ' + total + ' audited'; });

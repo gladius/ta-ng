@@ -24,9 +24,12 @@ def _compressible(bucket):
     return len(systems) == 1 and approx_tokens(next(iter(systems))) >= 400
 
 
-def build(source_id, ws_id, project, calls=None, levers=None, g=None):
+def build(source_id, ws_id, project, calls=None, levers=None, g=None, dgmode="commercial"):
     """Ranked opportunities for an agent. Deterministic, no LLM. Shape is what the report/select pages render.
     `levers` overrides which levers are active for THIS view (e.g. the report's cache checkbox); default = config.
+    `dgmode` selects the downgrade TARGET UNIVERSE — 'commercial' (default: migration path, else one tier down) or
+    'open-weight' (the opt-in same-tier open-weight swap). It flows straight to downgrade.candidates and MUST match
+    between the select render and the proof, so the chip shown is the model actually re-run.
     `g` = a PINNED snapshot graph (the report holds one, from app.services.snapshot). When given, the funnel derives
     EVERYTHING from it — call-sites, per-call-site buckets, cache detection — and never re-fetches, so identity can't
     drift between rendering and proving. Only non-report callers (cli) let it build a fresh graph."""
@@ -44,7 +47,7 @@ def build(source_id, ws_id, project, calls=None, levers=None, g=None):
             d = cache.detect(buckets.get(n["key"], []), model=n["model"])
             if d:
                 cache_by[n["key"]] = d
-    dg_by = {c["key"]: c for c in downgrade.candidates(g["nodes"], per_calls=calls)} if "downgrade" in active else {}
+    dg_by = {c["key"]: c for c in downgrade.candidates(g["nodes"], per_calls=calls, mode=dgmode)} if "downgrade" in active else {}
 
     rows = []
     for n in g["nodes"]:
@@ -71,6 +74,7 @@ def build(source_id, ws_id, project, calls=None, levers=None, g=None):
     rows.sort(key=lambda r: (-r["opportunity"], -r["cost"]))
     return {
         "agent": project, "calls": calls, "rows": rows, "traces": g.get("traces", 0),   # sample size (# traces)
+        "dgmode": dgmode,                                         # which target universe these downgrade picks used
         "revision": (g.get("revisions") or [None])[0],            # the ONE version audited (fetch hard-scopes to latest)
         "graphs": g.get("graphs", []),                             # distinct subgraphs, for the filter control
         "total": round(sum(r["opportunity"] for r in rows), 2),

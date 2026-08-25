@@ -91,6 +91,8 @@ def detect(bucket, model=None):
 
     if cached_avg > 0:
         verdict = "ALREADY"                                         # provider is already returning cache hits
+    elif mode == "none":
+        verdict = "NONE"                                            # host offers no prompt caching (open-weight) -> no lever
     elif recoverable_tok < cmin:
         verdict = "TOO-SMALL"                                       # even reorganized, below the provider minimum
     elif mode == "explicit":

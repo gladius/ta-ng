@@ -21,6 +21,10 @@
   .leverbar .lv-label{color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:11px}
   .leverbar label{display:inline-flex;gap:7px;align-items:center;cursor:pointer}
   .leverbar input{accent-color:var(--accent)}
+  .dgmodebar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:var(--s4);font-size:13px}
+  .dgm{padding:4px 13px;border:1px solid var(--line-strong);border-radius:999px;color:var(--muted);text-decoration:none;font-weight:600}
+  .dgm:hover{border-color:var(--accent)}
+  .dgm.on{background:var(--accent);color:#fff;border-color:var(--accent)}
   .muted{color:var(--muted)}
   .filterbar{display:flex;align-items:center;gap:10px;margin-bottom:var(--s4);font-size:13px;flex-wrap:wrap}
   .filterbar[hidden]{display:none}
@@ -79,6 +83,14 @@
     <label><input type="checkbox" class="lev" value="{{ lv }}" checked> {{ lever_labels[lv] or lv }}</label>
     {% endfor %}
   </div>
+  {% if 'downgrade' in levers %}
+  <div class="dgmodebar" title="Commercial = the vendor migration path, else one tier down. Open-weight = the SAME-tier open-weight peer (kept capability, cheaper via open weights); frontier nodes have no open-weight peer.">
+    <span class="lv-label">Downgrade targets</span>
+    <a class="dgm {{ 'on' if dgmode != 'open-weight' else '' }}" href="{{ base }}/select?snap={{ snap }}&amp;dgmode=commercial">Commercial</a>
+    <a class="dgm {{ 'on' if dgmode == 'open-weight' else '' }}" href="{{ base }}/select?snap={{ snap }}&amp;dgmode=open-weight">Open-weight</a>
+    <span class="muted">{% if dgmode == 'open-weight' %}— same-tier open-weight peer (self-hosted); frontier nodes have none{% else %}— vendor migration path, else one tier down{% endif %}</span>
+  </div>
+  {% endif %}
   {% if f.graphs or f.rows | length > 12 %}
   <div class="filterbar" id="fbar" hidden>
     {% if f.rows | length > 12 %}<input type="search" id="qbox" class="fsearch" placeholder="Filter call-sites by name…" oninput="applyFilters()" autocomplete="off">{% endif %}
@@ -112,7 +124,7 @@
 {% endif %}
 
 <script>
-  const BASE = {{ base | tojson }}, SNAP = {{ snap | tojson }};
+  const BASE = {{ base | tojson }}, SNAP = {{ snap | tojson }}, DGMODE = {{ dgmode | tojson }};
   const sel = () => [...document.querySelectorAll('.sel:checked')].map(b => b.value);
   function note() { const n = sel().length; document.getElementById('selnote').textContent = n ? (n + ' selected') : 'none selected'; document.getElementById('auditBtn').disabled = !n; }
   function setMode() {
@@ -137,7 +149,8 @@
     const keys = sel(); if (!keys.length) { alert('Select at least one call-site to audit.'); return; }
     const lv = levers(); if (!lv.length) { alert('Enable at least one lever to test.'); return; }
     location.href = BASE + '/auditing?snap=' + encodeURIComponent(SNAP)
-      + '&keys=' + encodeURIComponent(keys.join(',')) + '&levers=' + encodeURIComponent(lv.join(','));
+      + '&keys=' + encodeURIComponent(keys.join(',')) + '&levers=' + encodeURIComponent(lv.join(','))
+      + '&dgmode=' + encodeURIComponent(DGMODE || 'commercial');
   }
 </script>
 {% endblock %}

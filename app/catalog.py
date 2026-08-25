@@ -44,7 +44,11 @@ def _load_catalog(path=_CATALOG_PATH):
                                 "max_output": m.get("max_output"),    # per-model output ceiling (optional)
                                 "retire_date": m.get("retire_date"),  # announced shutdown (optional) -> lifecycle guard
                                 "mode": m.get("mode", "chat"), "context_window": m.get("context_window"),
-                                "supports_prompt_caching": m.get("supports_prompt_caching")}
+                                "supports_prompt_caching": m.get("supports_prompt_caching"),
+                                # open-weight reference metadata (optional; see the open-weight block's _note)
+                                "open_weight": bool(m.get("open_weight", False)), "family": m.get("family"),
+                                "host": m.get("host"), "confidence": m.get("confidence"),
+                                "purpose": m.get("purpose"), "note": m.get("note")}
     return cat, price, order, aliases, callable_, cmode
 
 
@@ -198,6 +202,54 @@ def next_cheaper(model, avg_in=None, avg_out=None, as_of=None, avail=None):
         return None
     nearest = min(r for _, r, _ in cands)                             # nearest lower tier that HAS a real-drop model
     return max(((s, p) for s, r, p in cands if r == nearest), key=lambda x: x[1])[0]   # most capable in it
+
+
+def open_weight_target(model, avg_in=None, avg_out=None, as_of=None, avail=None):
+    """The recommended OPEN-WEIGHT downgrade target for a node currently on `model`, or None. This is the OPT-IN
+    open-weight lane — a CROSS-provider jump that next_cheaper (same-provider siblings only) never makes.
+
+    SAME-TIER swap: unlike the commercial lane (one tier DOWN), open-weight keeps the SAME capability class and
+    swaps the commercial model for its open-weight peer — the saving comes from open weights being cheaper to run,
+    not from losing capability. So we consider ONLY open-weight models in the SAME tier as `model`, and pick the
+    STRONGEST in-tier one (first in the catalog's capability order) that: (a) is callable, live (not retiring) and
+    served (`avail`); (b) has a trustworthy price (confidence != 'unverified'); (c) is a general chat model
+    (purpose != 'moderation'); and (d) net-SAVES for this node's mix. There is NO open-weight 'frontier' tier, so a
+    frontier node returns None. Strict: no fall-back to a commercial target. The paid proof (audit_node) is the real
+    equivalence check — a nominal same-tier peer that is actually weaker fails as NOT-SAFE, never a false save."""
+    m = canonical_model(model) or model
+    info0 = _ORDER.get(m, {})
+    cur_tier = info0.get("tier")
+    p0 = PRICE.get(m, {})
+    in0, out0 = p0.get("input"), p0.get("output")
+    if cur_tier is None or None in (in0, out0):
+        return None
+
+    def _saves(si, so):
+        if avg_in is not None and avg_out is not None:
+            return avg_in * (in0 - si) + avg_out * (out0 - so) > 0
+        return si <= in0 and so <= out0 and (si < in0 or so < out0)   # no-mix: both-axes cheaper (CLI/tests)
+
+    def _cap_rank(s):                                                  # position in the capability-ordered block
+        sibs = _ORDER[s].get("siblings", [])
+        return sibs.index(s) if s in sibs else 99
+
+    cands = []
+    for s in PRICE:
+        info = _ORDER.get(s, {})
+        if not info.get("open_weight") or info.get("tier") != cur_tier:   # SAME TIER only
+            continue
+        if info.get("confidence") == "unverified" or info.get("purpose") == "moderation":
+            continue
+        if not (_CALLABLE.get(s, True) and not retiring_within(s, as_of=as_of) and (avail is None or avail(s))):
+            continue
+        ps = PRICE.get(s, {})
+        si, so = ps.get("input"), ps.get("output")
+        if None in (si, so) or not _saves(si, so):
+            continue
+        cands.append(s)
+    if not cands:
+        return None
+    return min(cands, key=_cap_rank)                                  # strongest in-tier by catalog capability order
 
 
 def provider_of(model):

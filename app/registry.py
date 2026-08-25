@@ -109,6 +109,9 @@ def report():
                        "mode": info.get("mode", "chat"), "input": PRICE[name].get("input"),
                        "output": PRICE[name].get("output"), "context_window": info.get("context_window"),
                        "retire_date": info.get("retire_date"), "callable": is_callable(name),
+                       "open_weight": info.get("open_weight", False), "family": info.get("family"),
+                       "host": info.get("host"), "confidence": info.get("confidence"),
+                       "purpose": info.get("purpose"), "note": info.get("note"),
                        "available": (None if dep is None else (name in served))})   # None = unknown (no gateway)
     uncatalogued = []
     if dep is not None:

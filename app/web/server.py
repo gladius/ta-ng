@@ -85,7 +85,8 @@ def report_view(request: Request, source: str, ws_id: str, project: str, snap: s
     if proof is None:                    # built but not audited yet -> pick call-sites first (report = results only)
         return RedirectResponse("/s/%s/ws/%s/agent/%s/select?snap=%s"
                                 % (source, ws_id, quote(project, safe=""), snap), status_code=303)
-    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g)  # all levers, PINNED snapshot
+    dgmode = proof.get("dgmode", "commercial")                   # SAME universe the proof was run under
+    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g, dgmode=dgmode)  # all levers, PINNED snapshot
     results = proof["results"]                                                    # STRATEGY-primary report: one section
     dg = [r for r in results if r.get("downgrade")]                               # per lever, each listing only the
     ca = [r for r in results if r.get("cache") and not r["cache"].get("informational")]  # call-sites it applies to
@@ -167,41 +168,49 @@ def build_stream(source: str, ws_id: str, project: str, snap: str, next: str = "
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/select", response_class=HTMLResponse)
-def select_view(request: Request, source: str, ws_id: str, project: str, snap: str = ""):
+def select_view(request: Request, source: str, ws_id: str, project: str, snap: str = "", dgmode: str = "commercial"):
     """The selection workbench — pick which call-sites to audit (top-5 costliest or manual graph+nodes), then
-    prove them. Reads the PINNED snapshot so identity can't drift. No snap -> go build one."""
+    prove them. Reads the PINNED snapshot so identity can't drift. No snap -> go build one. `dgmode` toggles the
+    downgrade target universe ('commercial' | 'open-weight'); flipping it re-renders the picks and is carried into
+    the audit so the proof re-runs the same targets."""
     from app.services import funnel, snapshot
     g = snapshot.get(snap, source, ws_id, project) if snap else None
     if g is None:
         return RedirectResponse("/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe="")),
                                 status_code=303)
-    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g)
-    return _page(request, "select.html", source=source, ws_id=ws_id, project=project, f=f, snap=snap, levers=LEVERS)
+    dgmode = "open-weight" if dgmode == "open-weight" else "commercial"        # validate -> only the two lanes
+    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g, dgmode=dgmode)
+    return _page(request, "select.html", source=source, ws_id=ws_id, project=project, f=f, snap=snap,
+                 levers=LEVERS, dgmode=dgmode)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/auditing", response_class=HTMLResponse)
 def auditing_view(request: Request, source: str, ws_id: str, project: str, snap: str = "", keys: str = "",
-                  levers: str = ""):
+                  levers: str = "", dgmode: str = "commercial"):
     """Audit-progress page — proves the SELECTED `keys` with the SELECTED `levers` (via prove-stream) with a live
-    N/M list, then redirects to the report. No snap -> go rebuild."""
+    N/M list, then redirects to the report. No snap -> go rebuild. `dgmode` is passed straight through to the
+    prove stream so the proof uses the SAME target universe the select page showed."""
     from app.services import snapshot
     if snapshot.get(snap, source, ws_id, project) is None:
         return RedirectResponse("/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe="")),
                                 status_code=303)
     return _page(request, "auditing.html", source=source, ws_id=ws_id, project=project,
-                 snap=snap, keys=keys, levers=levers, agent=project)
+                 snap=snap, keys=keys, levers=levers, dgmode=dgmode, agent=project)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/prove-stream")
-def prove_stream(source: str, ws_id: str, project: str, keys: str, snap: str = "", levers: str = ""):
+def prove_stream(source: str, ws_id: str, project: str, keys: str, snap: str = "", levers: str = "",
+                 dgmode: str = "commercial"):
     """SSE — prove the selected call-sites with the selected LEVERS live against the PINNED snapshot. Paid; freezes
-    the result for the report. `levers` empty -> all three (prove.stream's default)."""
+    the result for the report. `levers` empty -> all three (prove.stream's default). `dgmode` = downgrade target
+    universe, carried from select so the proof re-runs the model the user actually saw."""
     from app.services import prove
     keylist = [k for k in keys.split(",") if k]
     leverlist = [x for x in levers.split(",") if x] or None
+    dgmode = "open-weight" if dgmode == "open-weight" else "commercial"
 
     def gen():
-        for evt in prove.stream(source, ws_id, project, keylist, snap, levers=leverlist):
+        for evt in prove.stream(source, ws_id, project, keylist, snap, levers=leverlist, dgmode=dgmode):
             yield "event: %s\ndata: %s\n\n" % (evt.get("type", "msg"), json.dumps(evt))
 
     return StreamingResponse(gen(), media_type="text/event-stream",
@@ -224,7 +233,8 @@ def report_download(source: str, ws_id: str, project: str, snap: str = ""):
     from app.web.export import render as export_render
     g = snapshot.get(snap, source, ws_id, project)
     proof = store.peek(prove.proof_key(source, ws_id, project, snap))
-    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g)
+    dgmode = (proof or {}).get("dgmode", "commercial")           # match the proof's target universe
+    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g, dgmode=dgmode)
     html = None
     if g is not None and proof is not None:                                   # render the same report page, portably
         results = proof["results"]

@@ -307,9 +307,10 @@
 <!-- ── Model-tier downgrade ── -->
 <div class="strat-sec">
   <div class="ssec-head">
-    <span class="ssec-title"><span class="ico">&darr;</span>Model-tier downgrade</span>
+    <span class="ssec-title"><span class="ico">&darr;</span>{% if f.dgmode == 'open-weight' %}Open-weight swap{% else %}Model-tier downgrade{% endif %}{% if f.dgmode == 'open-weight' %} <span class="chip chip--muted">same-tier · open-weight</span>{% endif %}</span>
     <span class="ssec-sub">{% if dg %}{% if dg_total > 0 %}<b>${{ '{:,.0f}'.format(dg_total) }}</b><span class="per">/{{ (f.calls // 1000) }}k</span> &middot; {% endif %}{{ dg | length }} audited{% else %}none audited{% endif %}</span>
   </div>
+  {% if f.dgmode == 'open-weight' %}<p class="ssec-empty" style="margin:0 0 10px">These keep the same capability tier but swap to an <b>open-weight</b> model (cheaper via self-hosting) — proven per call-site below. Frontier call-sites have no open-weight peer.</p>{% endif %}
   {% if dg %}
   <div class="findings">
     {% for r in dg %}{% set d = r.downgrade %}

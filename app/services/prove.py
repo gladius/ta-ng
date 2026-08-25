@@ -59,18 +59,20 @@ def _prove_one(key, r, b, calls, levers):
     return out
 
 
-def stream(source, ws, project, keys, snap, calls=None, levers=None):
+def stream(source, ws, project, keys, snap, calls=None, levers=None, dgmode="commercial"):
     """Generator: yields SSE progress while proving the selected nodes CONCURRENTLY (bounded pool), then stores
     the frozen result keyed by the SNAPSHOT. Everything — rows AND per-call-site buckets — comes from the ONE pinned
     snapshot graph, so the keys the checkboxes captured can't drift here. `levers` = which levers to prove (default
-    all three). Paid; overlapped."""
+    all three). `dgmode` = the downgrade target universe ('commercial' | 'open-weight'); it MUST match what the
+    select page showed, so we re-run the very model the user saw, and it is frozen into the proof for the report.
+    Paid; overlapped."""
     levers = levers or list(LEVERS)      # default to config-enabled levers (downgrade only on this branch)
     g = snapshot.get(snap, source, ws, project)
     if g is None:                                                          # snapshot evicted -> don't clobber; reload
         yield {"type": "start", "total": 0, "agent": project}
         yield {"type": "complete", "total_usd": 0.0, "stale": True}
         return
-    f = funnel.build(source, ws, project, calls=calls, levers=levers, g=g)   # the enabled levers, pinned graph
+    f = funnel.build(source, ws, project, calls=calls, levers=levers, g=g, dgmode=dgmode)   # SAME universe as select
     rows = {r["key"]: r for r in f["rows"] if r["key"] in keys}            # identity = UNIQUE key, never the label
     order = [k for k in keys if k in rows]
     if not order:                                                          # selection went stale (no key matched) —
@@ -103,7 +105,7 @@ def stream(source, ws, project, keys, snap, calls=None, levers=None):
             yield {"type": "done_node", "key": k, "node": rows[k]["node"]}
 
     results = [done[k] for k in order]                                     # stable, selection order (not finish order)
-    res = {"agent": project, "calls": f["calls"], "results": results,
+    res = {"agent": project, "calls": f["calls"], "results": results, "dgmode": dgmode,   # frozen: which universe
            "cache_usd": round(sum(x.get("cache_usd", 0) for x in results), 2),
            "downgrade_usd": round(sum(x.get("downgrade_usd", 0) for x in results), 2),
            "compress_usd": round(sum(x.get("compress_usd", 0) for x in results), 2),
