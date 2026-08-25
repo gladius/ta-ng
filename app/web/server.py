@@ -10,7 +10,7 @@ import json
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -21,6 +21,15 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 app = FastAPI(title="Token Auditor")
 app.mount("/static", StaticFiles(directory=os.path.join(_HERE, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(_HERE, "templates"))
+
+
+@app.get("/healthz/db")
+def healthz_db():
+    """Liveness + which store backend is actually in use — 'postgresql' or 'sqlite', plus target host/db (no creds),
+    entry count, and last write. 503 if the DB can't be reached, so uptime monitors catch a broken store."""
+    from app.services import db
+    h = db.health()
+    return JSONResponse(h, status_code=200 if h.get("ok") else 503)
 
 
 _CSS_PATH = os.path.join(_HERE, "static", "app.css")

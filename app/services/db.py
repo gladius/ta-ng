@@ -82,3 +82,31 @@ def reset():
     if _engine is not None:
         _engine.dispose()
     _engine = None
+
+
+def health():
+    """Live DB health for /healthz/db — the answer to 'am I on Postgres or SQLite, and is it connected?'.
+
+    Returns {ok, backend, target, entries, last_write}. `backend` is the live dialect ('postgresql' | 'sqlite');
+    `target` is host+database (SQLite: the file path) with NO credentials (username/password are never read here);
+    `ok` is True only if a real query ran. Best-effort stats (row count + last write) come from the kv table."""
+    from sqlalchemy import text
+    eng = engine()
+    u = eng.url
+    if eng.dialect.name == "sqlite":
+        target = u.database or "(memory)"
+    else:
+        target = "%s%s/%s" % (u.host or "?", (":%s" % u.port) if u.port else "", u.database or "?")
+    out = {"ok": False, "backend": eng.dialect.name, "target": target, "entries": None, "last_write": None}
+    try:
+        from app.services import store
+        store._ensure()                                          # validates connectivity + ensures kv exists (idempotent)
+        with eng.connect() as c:
+            row = c.execute(text("SELECT count(*), max(created_at) FROM kv")).first()
+        out["ok"] = True
+        out["entries"] = int(row[0]) if row and row[0] is not None else 0
+        lw = row[1] if row else None                            # raw SQL: SQLite returns a str, Postgres a datetime
+        out["last_write"] = lw.isoformat() if hasattr(lw, "isoformat") else (str(lw) if lw is not None else None)
+    except Exception as e:                                       # unreachable / auth / etc. — report, don't leak details
+        out["error"] = type(e).__name__
+    return out
