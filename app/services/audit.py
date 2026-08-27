@@ -16,7 +16,8 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from app.catalog import canonical_model, next_cheaper, tier, release, max_output
+from app.catalog import canonical_model, next_cheaper, tier, release
+from app import registry                                     # gateway-first max_output (deployment's real ceiling)
 from app.services import llm_client
 from app.config import (AUDIT_SAMPLES, AUDIT_REPEATS, AUDIT_MIN_EVIDENCE, AUDIT_MAX_PARALLEL,
                         AUDIT_JUDGE_MAX_CHARS, AUDIT_SAFE_RATIO, AUDIT_SELF_BASELINE, AUDIT_SELF_FLOOR,
@@ -133,12 +134,12 @@ def replay(trace, model, max_tokens=None):
         # to BOTH the original re-runs and the cheaper re-runs so they're judged on equal footing.
         rec_max = int(trace.get("max_output_tokens") or 0)
         if rec_max > 0:
-            max_tokens = min(max_output(model), rec_max)
+            max_tokens = min(registry.max_output(model), rec_max)
         else:                                             # not recorded -> 3x the original's OUTPUT as headroom
             rec_out = int((trace.get("usage") or {}).get("output_tokens", 0) or 0)
             if rec_out <= 0:
                 rec_out = len(trace.get("output") or "") // 4
-            max_tokens = min(max_output(model), max(512, rec_out * 3))
+            max_tokens = min(registry.max_output(model), max(512, rec_out * 3))
     system = "\n".join(m["content"] for m in trace.get("input_messages", []) if m.get("role") == "system")
     tools = _tools(trace)
     res = llm_client.run(model=model, messages=_messages(trace), max_tokens=max_tokens,

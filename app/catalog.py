@@ -81,29 +81,49 @@ def canonical_model(raw):
     return None
 
 
+def canonical_exact(raw):
+    """The catalog id for a (possibly gateway-decorated) model name, or None. ONE rule: the LONGEST catalog id that
+    appears in `raw` delimited by separators (string start/end, or any non-alphanumeric char). Every shape a gateway
+    emits resolves the same way — 'bedrock-claude-sonnet-5', 'claude-sonnet-5-us', and
+    'bedrock/us.anthropic.claude-sonnet-5-v1:0' all give 'claude-sonnet-5' — while 'gpt-oss-120bx' gives None (no
+    boundary) and 'gemma-3-1b' gives None (not a catalog id, and never mis-collapsed onto 'gemma-3-12b'). Longest-wins
+    is the override lever: add a specific 'bedrock-claude-sonnet-5' entry and it takes precedence for that name.
+    Explicit aliases win first. This one substring match replaces the old peel-regexes + anchored matcher."""
+    if not raw:
+        return None
+    r = str(raw).strip()
+    if r in PRICE:
+        return r
+    rl = r.lower()
+    if rl in _ALIASES:
+        return _ALIASES[rl]
+    best = None
+    for name in PRICE:
+        nl = name.lower()
+        i = rl.find(nl)
+        while i != -1:
+            before = rl[i - 1] if i > 0 else ""
+            after = rl[i + len(nl)] if i + len(nl) < len(rl) else ""
+            if not before.isalnum() and not after.isalnum():        # id sits between separators / string ends
+                if best is None or len(name) > len(best):           # longest catalog id wins (override precedence)
+                    best = name
+                break
+            i = rl.find(nl, i + 1)                                   # keep looking; the id may recur later in the name
+    return best
+
+
 def is_callable(model):
     """Is this catalog model actually callable on its provider's API? Retired / pricing-only ids (kept for the price
     ladder) are flagged `callable: false` in models.json — the ONE central place that knows this."""
     return _CALLABLE.get(model, True)
 
 
-_VENDOR_RX = re.compile(r"^(?:(?:us|eu|apac|global)\.)?"
-                        r"(?:anthropic|google|openai|meta|amazon|mistral|cohere|ai21|deepseek)\.")
-_BEDROCK_VER_RX = re.compile(r"[-:]v\d+(?::\d+)?$|:\d+$")    # trailing -v1:0 / v1 / :0
-
-
 def resolve_deployed(underlying):
-    """A gateway's underlying model id -> our catalog name, or None. Handles plain (`gemini/gemini-2.5-flash`),
-    Bedrock (`bedrock/us.anthropic.claude-opus-4-8`), and Vertex (`vertex_ai/gemini-3.7-flash`) shapes: peel every
-    route segment + the region.vendor namespace + the bedrock inference-profile version, then canonical_model finishes."""
-    if not underlying:
-        return None
-    s = underlying
-    while "/" in s:                                          # peel route segments (bedrock/, vertex_ai/google/, …)
-        s = s.split("/", 1)[1]
-    s = _VENDOR_RX.sub("", s)                                # drop region.vendor namespace (us.anthropic. / google. …)
-    s = _BEDROCK_VER_RX.sub("", s)                           # drop bedrock inference-profile version (-v1:0 / :0)
-    return canonical_model(s) or canonical_model(underlying)
+    """A gateway's underlying model id (or deployment name) -> our catalog id, or None. Delegates to the ONE catalog
+    match (canonical_exact): the longest catalog id appearing in the name delimited by separators. That single rule
+    covers every shape a gateway emits — route 'bedrock/…', namespace 'us.anthropic.…', host prefix 'bedrock-…',
+    suffix '-us'/'-123', version '-v1:0' — with no shape-specific peeling. Unresolved names are surfaced, not guessed."""
+    return canonical_exact(underlying)
 
 
 # ── model lifecycle (retire_date is a MODEL property in config/models.json) ──────────────────────────────────

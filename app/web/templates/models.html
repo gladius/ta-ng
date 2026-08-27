@@ -49,6 +49,23 @@
     </tbody>
   </table>
 
+  {% if reg.gateway_map %}
+  <h2>Gateway call-name mapping</h2>
+  <p class="sub">Catalog id &rarr; the deployment name we call on this gateway.</p>
+  <table class="grid">
+    <thead><tr><th>Catalog id</th><th>Calls (chosen)</th><th>Flavours seen</th></tr></thead>
+    <tbody>
+    {% for g in reg.gateway_map %}
+      <tr>
+        <td class="name">{{ g.id }}</td>
+        <td class="mono">{{ g.chosen }}</td>
+        <td class="mono id">{% for fl in g.flavours %}{{ fl }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
   {% if reg.uncatalogued %}
   <h2>Deployed but not in our catalog</h2>
   <p class="sub">The gateway serves these, but we have no reference details yet — add them to

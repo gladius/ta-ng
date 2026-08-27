@@ -15,9 +15,21 @@ import urllib.request
 import urllib.error
 
 import credentials
-from app.catalog import PRICE, resolve_deployed, canonical_model, is_callable, provider_of, tier, meta
+from app.catalog import (PRICE, resolve_deployed, canonical_model, canonical_exact,
+                         is_callable, provider_of, tier, meta, max_output as _cat_max_output)
 
-_cache = {}   # lazy one-shot: {'loaded', 'deployment' (list|None), 'source', 'available' (set)}
+_cache = {}   # lazy one-shot: {'loaded', 'deployment' (list|None), 'source', 'available' (set), 'serving', ...}
+
+
+class ModelNotServable(Exception):
+    """Requested for a live call, but the configured gateway neither serves this model nor recognizes it as a catalog
+    id — raised instead of silently sending a name the gateway can't route (which would 404 opaquely). Off-gateway this
+    never fires (the canonical name IS the callable id). Set the model to a catalog id, or the exact deployment name."""
+    def __init__(self, model, served):
+        self.model, self.served = model, served
+        shown = ", ".join(served[:12]) + (" …" if len(served) > 12 else "")
+        super().__init__("model %r is not served by the gateway and is not a known catalog id. Served: %s"
+                         % (model, shown or "(none)"))
 
 
 def _gateway():
@@ -66,16 +78,23 @@ def _load(force=False):
     if base:                                               # a gateway is configured -> availability is REAL
         deployment = _fetch_model_info(base, key)
         source = ("gateway %s" % base) if deployment is not None else ("gateway %s — UNREACHABLE (not gating)" % base)
-    served, serving = set(), {}
+    served, flavours, gwmeta = set(), {}, {}
     if deployment is not None:
         for m in deployment:
-            if (m.get("model_info") or {}).get("mode", "chat") != "chat":
+            mi = m.get("model_info") or {}
+            if mi.get("mode", "chat") != "chat":
                 continue                                   # embeddings/others aren't downgrade/cache targets
             c = resolve_deployed(m["underlying"])
             if c:
                 served.add(c)
-                serving.setdefault(c, m["model_name"])     # canonical -> the gateway's OWN routing name (what we CALL)
-    _cache.update(loaded=True, deployment=deployment, source=source, available=served, serving=serving)
+                flavours.setdefault(c, []).append(m["model_name"])   # every gateway flavour of this catalog model
+                gwmeta.setdefault(c, {"context_window": mi.get("max_input_tokens"),   # the gateway's OWN limits/mode —
+                                      "max_output": mi.get("max_output_tokens"),        # truth for THIS deployment, used
+                                      "mode": mi.get("mode")})                          # over models.json; first wins
+    serving = {c: _pick_flavour(c, names) for c, names in flavours.items()}     # ONE deterministic name we CALL / model
+    names = {n for lst in flavours.values() for n in lst}                        # all wire names (idempotent passthrough)
+    _cache.update(loaded=True, deployment=deployment, source=source, available=served,
+                  serving=serving, serving_names=names, flavours=flavours, gwmeta=gwmeta)
 
 
 def refresh():
@@ -98,18 +117,66 @@ def is_available(model):
     return (canonical_model(model) or model) in _cache["available"]
 
 
-def serving_name(model):
-    """The name to SEND to the transport for a canonical catalog model — the OUTBOUND mirror of resolve_deployed.
+def _pick_flavour(canonical, names):
+    """Deterministic pick among a model's gateway deployment flavours (claude-sonnet-5-us / -1234 / bedrock-…): the
+    plain canonical name if the gateway exposes it, else the SHORTEST name (lexicographic tiebreak) — the least-suffixed
+    one, stable regardless of /model/info order. A specific flavour is always forceable by naming it exactly, since
+    serving_name passes a known wire name straight through."""
+    if canonical in names:
+        return canonical
+    return min(names, key=lambda n: (len(n), n))
 
-    With a reachable gateway this is the gateway's OWN routing name (`model_name` from /model/info) for that model, so
-    a target the app reasons about as `gpt-oss-120b` (for pricing + the ladder) is CALLED by whatever alias the central
-    gateway serves it under (e.g. `bedrock-gpt-oss-12-b-1-0`) — which we don't control and never hardcode. No/unreachable
-    gateway, or a model the gateway doesn't serve -> the canonical name unchanged (dev / Anthropic-direct, where the
-    canonical name already IS the real callable id). Built from the same deployment list as the availability set, so the
-    invariant holds: recommendable => served => mappable; any target we actually offer can be named for the wire."""
+
+def serving_name(model):
+    """Canonical catalog id -> the exact name to SEND on the wire. THE single outbound seam; the app reasons in catalog
+    ids everywhere and only this converts to a gateway deployment name, so identity and address can never be mixed up.
+
+    Resolution order:
+      1. already a known gateway wire name -> pass through unchanged (idempotent; lets a specific flavour be forced).
+      2. resolves EXACTLY / by anchored suffix to a served catalog id -> the gateway's own deployment name for it.
+      3. a gateway is configured but it's neither of the above -> raise ModelNotServable (LOUD, not a silent wrong send).
+      4. no gateway (dev / Anthropic-direct) -> the name unchanged (canonical already IS the real callable id).
+    canonical_exact never reverse-guesses, so a lookalike can't be silently mapped to the wrong model."""
+    _load()
+    if model in _cache.get("serving_names", set()):          # (1) already the gateway's own name -> send as-is
+        return model
+    serving = _cache.get("serving", {})
+    hit = canonical_exact(model)                              # (2) longest catalog id in the name (boundary-delimited)
+    if hit and hit in serving:
+        return serving[hit]
+    if _cache.get("deployment") is not None:                 # (3) gateway up but unplaceable -> fail loudly with options
+        raise ModelNotServable(model, sorted(_cache.get("serving_names", set())))
+    return model                                             # (4) no gateway -> canonical == the real id
+
+
+def gateway_map():
+    """The resolved gateway mapping, for one-glance verification (the /models page renders it). Per catalog id the app
+    can call: the flavour we CHOSE and every flavour the gateway advertised — so a wrong pick or an unresolved name is
+    caught by looking, not by trusting the resolver. Empty off-gateway."""
+    _load()
+    serving, flavours = _cache.get("serving", {}), _cache.get("flavours", {})
+    return [{"id": c, "chosen": serving[c], "flavours": sorted(flavours.get(c, []))} for c in sorted(serving)]
+
+
+def _gwmeta(model, field):
+    """One field of the gateway's own metadata for `model` (its max limits / mode), or None when the gateway doesn't
+    serve it or omits the field. 0 / null / '' count as omitted, so the models.json fallback kicks in."""
     _load()
     c = canonical_model(model) or model
-    return _cache.get("serving", {}).get(c, c)
+    return (_cache.get("gwmeta", {}).get(c) or {}).get(field) or None
+
+
+def max_output(model):
+    """Max OUTPUT tokens: the GATEWAY's max_output_tokens if it serves this model (the truth for what the deployment
+    actually allows), else the catalog value. A replay never asks for more than the served model can return."""
+    v = _gwmeta(model, "max_output")
+    return int(v) if v else _cat_max_output(model)
+
+
+def context_window(model):
+    """Context window: the gateway's max_input_tokens if it serves this model, else the catalog value."""
+    v = _gwmeta(model, "context_window")
+    return int(v) if v else (meta(model) or {}).get("context_window")
 
 
 def report():
@@ -121,8 +188,8 @@ def report():
     for name in PRICE:
         info = meta(name)
         models.append({"model": name, "provider": provider_of(name), "tier": info.get("tier"),
-                       "mode": info.get("mode", "chat"), "input": PRICE[name].get("input"),
-                       "output": PRICE[name].get("output"), "context_window": info.get("context_window"),
+                       "mode": _gwmeta(name, "mode") or info.get("mode", "chat"), "input": PRICE[name].get("input"),
+                       "output": PRICE[name].get("output"), "context_window": context_window(name),
                        "retire_date": info.get("retire_date"), "callable": is_callable(name),
                        "open_weight": info.get("open_weight", False), "family": info.get("family"),
                        "host": info.get("host"), "confidence": info.get("confidence"),
@@ -134,4 +201,4 @@ def report():
             if (m.get("model_info") or {}).get("mode", "chat") == "chat" and not resolve_deployed(m["underlying"]):
                 uncatalogued.append({"model_name": m["model_name"], "underlying": m["underlying"]})
     return {"source": _cache["source"], "has_gateway": dep is not None, "models": models,
-            "uncatalogued": uncatalogued}
+            "uncatalogued": uncatalogued, "gateway_map": gateway_map()}
