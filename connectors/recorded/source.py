@@ -41,6 +41,12 @@ def _path_for(project):
 class RecordedSource(DataSource):
     name = "recorded"
 
+    def configured(self):
+        """DEV/DEMO source — visible only in non-prod. Gated on AUDIT_DEBUG (same truthiness as app's debugcap /
+        snapdump), so with no AUDIT_DEBUG set (production) it drops off the home-page picker entirely. Read from the
+        env directly to keep the connector layer self-contained (no dependency on app.*)."""
+        return os.environ.get("AUDIT_DEBUG") not in (None, "", "0", "false", "False")
+
     def workspaces(self):
         return [{"id": "recorded", "name": "Recorded fixtures"}]
 
