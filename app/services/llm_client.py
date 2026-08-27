@@ -35,7 +35,15 @@ def client():
 def _complete_raw(**kw):
     """Transport only: messages.create with bounded retry. Retries 429 / 5xx / connection with backoff; a 4xx (bad
     request) raises at once — retrying a malformed call only wastes time and money. No temperature policy lives here,
-    so the sampling path (run) and the deterministic path (complete) can share ONE retry without sharing a default."""
+    so the sampling path (run) and the deterministic path (complete) can share ONE retry without sharing a default.
+
+    The model name is translated to the wire form HERE, at the only messages.create in the app: canonical catalog id
+    -> the central gateway's own routing name (registry.serving_name). Everything upstream — pricing, the ladder, the
+    cache_control / thinking decisions that key on the model string — stays canonical; only this create sees the
+    gateway's deployment alias. No-ops off-gateway, and the caller's kw is untouched (debugcap still logs canonical)."""
+    from app.registry import serving_name                 # lazy: registry -> catalog only, no cycle back into llm_client
+    if kw.get("model"):
+        kw = {**kw, "model": serving_name(kw["model"])}
     last = None
     for attempt in range(4):
         try:

@@ -66,7 +66,7 @@ def _load(force=False):
     if base:                                               # a gateway is configured -> availability is REAL
         deployment = _fetch_model_info(base, key)
         source = ("gateway %s" % base) if deployment is not None else ("gateway %s — UNREACHABLE (not gating)" % base)
-    served = set()
+    served, serving = set(), {}
     if deployment is not None:
         for m in deployment:
             if (m.get("model_info") or {}).get("mode", "chat") != "chat":
@@ -74,7 +74,8 @@ def _load(force=False):
             c = resolve_deployed(m["underlying"])
             if c:
                 served.add(c)
-    _cache.update(loaded=True, deployment=deployment, source=source, available=served)
+                serving.setdefault(c, m["model_name"])     # canonical -> the gateway's OWN routing name (what we CALL)
+    _cache.update(loaded=True, deployment=deployment, source=source, available=served, serving=serving)
 
 
 def refresh():
@@ -95,6 +96,20 @@ def is_available(model):
     if _cache["deployment"] is None:
         return True                                        # availability unknown -> do NOT gate
     return (canonical_model(model) or model) in _cache["available"]
+
+
+def serving_name(model):
+    """The name to SEND to the transport for a canonical catalog model — the OUTBOUND mirror of resolve_deployed.
+
+    With a reachable gateway this is the gateway's OWN routing name (`model_name` from /model/info) for that model, so
+    a target the app reasons about as `gpt-oss-120b` (for pricing + the ladder) is CALLED by whatever alias the central
+    gateway serves it under (e.g. `bedrock-gpt-oss-12-b-1-0`) — which we don't control and never hardcode. No/unreachable
+    gateway, or a model the gateway doesn't serve -> the canonical name unchanged (dev / Anthropic-direct, where the
+    canonical name already IS the real callable id). Built from the same deployment list as the availability set, so the
+    invariant holds: recommendable => served => mappable; any target we actually offer can be named for the wire."""
+    _load()
+    c = canonical_model(model) or model
+    return _cache.get("serving", {}).get(c, c)
 
 
 def report():
