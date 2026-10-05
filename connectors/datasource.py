@@ -72,10 +72,6 @@ def load_sources():
     return out
 
 
-def list_sources():
-    return sorted(load_sources())
-
-
 def get_source(name):
     srcs = load_sources()
     key = str(name).lower()

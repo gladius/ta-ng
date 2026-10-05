@@ -15,7 +15,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.services import nav
-from app.config import LEVERS      # enabled levers (default: downgrade only on this branch)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 app = FastAPI(title="Token Auditor")
@@ -83,25 +82,22 @@ def migration_path_view(request: Request, provider: str):
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/report", response_class=HTMLResponse)
-def report_view(request: Request, source: str, ws_id: str, project: str, snap: str = "", cache: int = 0):
+def report_view(request: Request, source: str, ws_id: str, project: str, snap: str = ""):
     from app.services import funnel, prove, store, snapshot
     g = snapshot.get(snap, source, ws_id, project) if snap else None
     if g is None:                        # no/unknown/evicted snap -> mint an id, show a PROGRESS page, build via SSE.
         sid = snapshot.new_id()          # (the multi-second fetch used to block here as a frozen page — now it streams)
         return _page(request, "building.html", source=source, ws_id=ws_id, project=project,
-                     snap=sid, cache=int(cache), agent=project)
+                     snap=sid, agent=project)
     proof = store.peek(prove.proof_key(source, ws_id, project, snap))             # audited result, tied to THIS snapshot
     if proof is None:                    # built but not audited yet -> pick call-sites first (report = results only)
         return RedirectResponse("/s/%s/ws/%s/agent/%s/select?snap=%s"
                                 % (source, ws_id, quote(project, safe=""), snap), status_code=303)
     dgmode = proof.get("dgmode", "commercial")                   # SAME universe the proof was run under
-    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g, dgmode=dgmode)  # all levers, PINNED snapshot
-    results = proof["results"]                                                    # STRATEGY-primary report: one section
-    dg = [r for r in results if r.get("downgrade")]                               # per lever, each listing only the
-    ca = [r for r in results if r.get("cache") and not r["cache"].get("informational")]  # call-sites it applies to
-    co = [r for r in results if r.get("compress")]                               # compression: the call-sites it ran on
+    f = funnel.build(source, ws_id, project, g=g, dgmode=dgmode)                 # PINNED snapshot
+    dg = [r for r in proof["results"] if r.get("downgrade")]                     # call-sites that had a target
     return _page(request, "report.html", source=source, ws_id=ws_id, project=project,
-                 f=f, proof=proof, dg=dg, ca=ca, co=co, snap=snap, levers=LEVERS)
+                 f=f, proof=proof, dg=dg, snap=snap)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/profile", response_class=HTMLResponse)
@@ -188,38 +184,35 @@ def select_view(request: Request, source: str, ws_id: str, project: str, snap: s
         return RedirectResponse("/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe="")),
                                 status_code=303)
     dgmode = "open-weight" if dgmode == "open-weight" else "commercial"        # validate -> only the two lanes
-    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g, dgmode=dgmode)
+    f = funnel.build(source, ws_id, project, g=g, dgmode=dgmode)
     return _page(request, "select.html", source=source, ws_id=ws_id, project=project, f=f, snap=snap,
-                 levers=LEVERS, dgmode=dgmode)
+                 dgmode=dgmode)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/auditing", response_class=HTMLResponse)
 def auditing_view(request: Request, source: str, ws_id: str, project: str, snap: str = "", keys: str = "",
-                  levers: str = "", dgmode: str = "commercial"):
-    """Audit-progress page — proves the SELECTED `keys` with the SELECTED `levers` (via prove-stream) with a live
-    N/M list, then redirects to the report. No snap -> go rebuild. `dgmode` is passed straight through to the
-    prove stream so the proof uses the SAME target universe the select page showed."""
+                  dgmode: str = "commercial"):
+    """Audit-progress page — proves the SELECTED `keys` (via prove-stream) with a live N/M list, then redirects to
+    the report. No snap -> go rebuild. `dgmode` is passed straight through to the prove stream so the proof uses the
+    SAME target universe the select page showed."""
     from app.services import snapshot
     if snapshot.get(snap, source, ws_id, project) is None:
         return RedirectResponse("/s/%s/ws/%s/agent/%s/report" % (source, ws_id, quote(project, safe="")),
                                 status_code=303)
     return _page(request, "auditing.html", source=source, ws_id=ws_id, project=project,
-                 snap=snap, keys=keys, levers=levers, dgmode=dgmode, agent=project)
+                 snap=snap, keys=keys, dgmode=dgmode, agent=project)
 
 
 @app.get("/s/{source}/ws/{ws_id}/agent/{project}/prove-stream")
-def prove_stream(source: str, ws_id: str, project: str, keys: str, snap: str = "", levers: str = "",
-                 dgmode: str = "commercial"):
-    """SSE — prove the selected call-sites with the selected LEVERS live against the PINNED snapshot. Paid; freezes
-    the result for the report. `levers` empty -> all three (prove.stream's default). `dgmode` = downgrade target
-    universe, carried from select so the proof re-runs the model the user actually saw."""
+def prove_stream(source: str, ws_id: str, project: str, keys: str, snap: str = "", dgmode: str = "commercial"):
+    """SSE — prove the selected call-sites live against the PINNED snapshot. Paid; freezes the result for the
+    report. `dgmode` = downgrade target universe, carried from select so the proof re-runs the model the user saw."""
     from app.services import prove
     keylist = [k for k in keys.split(",") if k]
-    leverlist = [x for x in levers.split(",") if x] or None
     dgmode = "open-weight" if dgmode == "open-weight" else "commercial"
 
     def gen():
-        for evt in prove.stream(source, ws_id, project, keylist, snap, levers=leverlist, dgmode=dgmode):
+        for evt in prove.stream(source, ws_id, project, keylist, snap, dgmode=dgmode):
             yield "event: %s\ndata: %s\n\n" % (evt.get("type", "msg"), json.dumps(evt))
 
     return StreamingResponse(gen(), media_type="text/event-stream",
@@ -243,16 +236,13 @@ def report_download(source: str, ws_id: str, project: str, snap: str = ""):
     g = snapshot.get(snap, source, ws_id, project)
     proof = store.peek(prove.proof_key(source, ws_id, project, snap))
     dgmode = (proof or {}).get("dgmode", "commercial")           # match the proof's target universe
-    f = funnel.build(source, ws_id, project, levers=LEVERS, g=g, dgmode=dgmode)
+    f = funnel.build(source, ws_id, project, g=g, dgmode=dgmode)
     html = None
     if g is not None and proof is not None:                                   # render the same report page, portably
-        results = proof["results"]
-        dg = [r for r in results if r.get("downgrade")]
-        ca = [r for r in results if r.get("cache") and not r["cache"].get("informational")]
-        co = [r for r in results if r.get("compress")]
+        dg = [r for r in proof["results"] if r.get("downgrade")]
         html = export_render(templates, "report.html",
                              dict(source=source, ws_id=ws_id, project=project,
-                                  f=f, proof=proof, dg=dg, ca=ca, co=co, snap=snap, levers=LEVERS))
+                                  f=f, proof=proof, dg=dg, snap=snap))
     data = report_doc.build_zip(f, proof, html=html)
     return Response(data, media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="token-audit-%s.zip"' % project})

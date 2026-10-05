@@ -5,7 +5,7 @@ through downgrade.candidates (which consults registry.is_available) pins the gat
 UNKNOWN -> True and nothing hits the network. Commercial mode is asserted UNCHANGED alongside, so the lane is
 provably additive."""
 from app.catalog import open_weight_target, meta
-from app.services import downgrade, cache
+from app.services import downgrade
 
 
 def test_same_tier_swap_picks_strongest_in_tier():
@@ -61,13 +61,3 @@ def test_candidates_open_weight_mode_and_commercial_unchanged(monkeypatch):
         assert not meta(com[0]["cheaper"]).get("open_weight")           # never an open-weight target in commercial mode
     finally:
         registry.refresh()
-
-
-def test_cache_none_verdict_for_open_weight_host():
-    # cache_mode 'none' (open-weight on a host) -> verdict NONE, not a false AUTO/CACHEABLE
-    bucket = [{"model": "gemma-3-27b",
-               "input_messages": [{"role": "system", "content": "x" * 8000}, {"role": "user", "content": "hi"}],
-               "usage": {"cached_tokens": 0}}]
-    d = cache.detect(bucket, model="gemma-3-27b")
-    assert d["verdict"] == "NONE", d["verdict"]
-    assert d["save_per_1k"] == 0

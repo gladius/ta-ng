@@ -25,14 +25,7 @@ def build_into(sid, source, ws, project):
     g = graph.build(source, ws, project)
     store.put(("snapshot", sid), {"source": source, "ws": ws, "project": project, "graph": g})
     snapdump.dump_graph(sid, g)                               # dev-only (AUDIT_DEBUG): traces/ + graph/ for this snap
-    snapdump.dump_capture(sid, source, ws, project, g)        # dev-only (AUDIT_DEBUG): CAPTURE.md — raw format + counts
     return g
-
-
-def create(source, ws, project):
-    """Fetch + build the graph ONCE and pin it under a fresh snapshot id. Returns (snap_id, graph)."""
-    sid = new_id()
-    return sid, build_into(sid, source, ws, project)
 
 
 def get(snap_id, source=None, ws=None, project=None):

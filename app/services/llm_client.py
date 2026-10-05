@@ -1,5 +1,5 @@
 """The ONE place the LLM provider is configured. A single shared Anthropic client + a thin `complete()` wrapper
-with bounded retry on transient errors (429 / 5xx / connection). Every paid caller (audit, cache_proof) goes
+with bounded retry on transient errors (429 / 5xx / connection). Every paid caller (audit, downgrade_refset, profile) goes
 through here, so the key, the client, and the retry policy live in exactly one file — and swapping providers or
 tuning retry is a one-file change.
 
@@ -140,7 +140,7 @@ def usage(resp):
 
 
 def complete(**kw):
-    """EVALUATION / REWRITE calls — the fit judge, coherence, the compress optimizer, the profiler.
+    """EVALUATION calls — the fit judge, coherence, the profiler.
 
     NO temperature — DEPRECATED on current models (claude-sonnet-5 etc.), returns 400 (verified live); determinism
     comes from VOTING, not a pinned temperature. cache_control is honored on a Claude model (direct or via litellm)

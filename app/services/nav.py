@@ -16,7 +16,7 @@ def _safe(fn, default):
 
 def datasources():
     """[{id, name, configured}] for every connector that is CONFIGURED (has credentials / is enabled). An
-    unconfigured source (e.g. Galileo with no key) is HIDDEN entirely, not shown greyed-out. `recorded` gates
+    unconfigured source (e.g. LangSmith with no key) is HIDDEN entirely, not shown greyed-out. `recorded` gates
     itself to non-prod (see connectors/recorded/source.py), so it drops off in production."""
     return [{"id": sid, "name": sid.replace("_", " ").title(), "configured": True}
             for sid, src in sorted(load_sources().items())

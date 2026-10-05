@@ -42,10 +42,6 @@ def engine():
     return _engine
 
 
-def is_sqlite():
-    return engine().dialect.name == "sqlite"
-
-
 def _ensure_sqlite_dir(u):
     """SQLite won't create a missing parent directory — make it (handles the .data/ default and any custom path)."""
     path = u.split("sqlite:///", 1)[-1]

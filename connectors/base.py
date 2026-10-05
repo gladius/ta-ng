@@ -9,10 +9,6 @@ Adding a platform = one SUBPACKAGE (connectors/<name>/) exporting ADAPTER; conne
 auto-discovers it. Grouping into buckets (one per call-site) is generic and lives here.
 """
 
-import os
-import json
-import inspect
-
 from contract import validate_trace
 from connectors.graph import build_graph
 
@@ -37,16 +33,6 @@ class Adapter:
                 "parent_run_id": None, "dotted_order": "", "run_type": "llm",
                 "name": t.get("node_id") or "llm", "start_time": t.get("start_time", ""), "end_time": "",
                 "agent_hint": t.get("agent_id"), "node_hint": t.get("node_id") or None, "trace": t}
-
-    # -- co-located resources: a connector carries its own sample data / fixtures in its folder --
-    def asset(self, name):
-        """Absolute path to a file next to this adapter's module (portable, self-contained)."""
-        return os.path.join(os.path.dirname(inspect.getfile(type(self))), name)
-
-    def sample(self, name="sample_runs.json"):
-        """Load this connector's own offline sample runs (for demos/tests); None if absent."""
-        path = self.asset(name)
-        return json.load(open(path, encoding="utf-8")) if os.path.exists(path) else None
 
 
 def _build(adapter, skip_invalid, opts):

@@ -27,10 +27,6 @@ def load_adapters():
     return out
 
 
-def list_adapters():
-    return sorted(load_adapters())
-
-
 def get_adapter(name):
     ads = load_adapters()
     key = str(name).lower()

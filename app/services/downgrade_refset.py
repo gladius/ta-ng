@@ -17,7 +17,6 @@ Verdict (RELATIVE — a noisy-but-coherent original isn't held to perfection):
 Node: SAFE if >= NODE_SAFE_RATIO of inputs SAFE, else NOT-SAFE.
 
   coherence(request, outputs)     -> (rate, divergent_set, reasons)   reasons[i] = why output i differs
-  fit_vote(refset, cand, request) -> (kept, reason)      one candidate vs a reference set, majority of JUDGE_VOTES
   prove_transform_refset(sample, cheaper, original) -> (inputs, node_verdict, safe)   [report-shaped, drop-in]
 """
 import math
@@ -106,15 +105,6 @@ def _fit_once(refset, cand, request):
         user = request.split("USER:")[-1] if "USER:" in request else request   # the input being judged (skip shared system)
         debugcap.record_judge({"model": JUDGE_MODEL, "raw": raw[:800], "kept": kept, "reason": reason,
                                "input": user.strip()[:300], "candidate": (cand or "").strip()[:400]})
-    return kept, reason
-
-
-def fit_vote(refset, cand, request, votes=None):
-    """Judge `cand` against `refset` `votes` times; MAJORITY KEPT wins. Returns (kept, reason)."""
-    votes = votes or AUDIT_JUDGE_VOTES
-    res = _pmap(lambda _: _fit_once(refset, cand, request), range(votes))
-    kept = sum(1 for k, _ in res if k) * 2 > len(res)
-    reason = next((why for k, why in res if k == kept), res[0][1] if res else "")
     return kept, reason
 
 

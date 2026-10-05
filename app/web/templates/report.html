@@ -67,33 +67,16 @@
   .strat-note .to{font-family:'Plex Mono',ui-monospace,monospace;font-size:12.5px;color:var(--ink)}
   .subtle{color:var(--faint)}
   .evidence{list-style:none;margin:0;padding:0}
-  .ev-row{display:grid;grid-template-columns:74px 1fr;gap:var(--s3);align-items:start;padding:var(--s3) 0;border-top:1px solid var(--line)}
-  .ev-main{min-width:0}
-  .ev-row:first-child{border-top:none}
   .ev-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:2px 0;border-radius:5px;text-align:center}
   .ev-drift{background:var(--bad-weak);color:var(--bad)}
-  .ev-warn{background:#fdf3e0;color:#8a5a00}
   .ev-kept{background:var(--ok-weak);color:var(--ok)}
   .ev-in{font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ev-why{font-size:12.5px;color:var(--muted);margin-top:3px}
   .ev-rate{color:var(--ink);font-variant-numeric:tabular-nums}
 
-  .ba-grid{display:flex;align-items:center;gap:var(--s4);max-width:520px}
-  .ba-col{flex:1;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-  .ba-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:5px 11px}
-  .ba-before{background:var(--bad-weak);color:var(--bad)}
-  .ba-after{background:var(--ok-weak);color:var(--ok)}
-  .ba-metric{padding:10px 11px;font-size:13px}
-  .ba-metric b{font-size:18px;font-variant-numeric:tabular-nums}
-  .ba-arrow{color:var(--ok);font-weight:700;font-size:18px}
 
-  /* reusable scrollable before/after — used for prompt diffs AND per-input output diffs */
-  .diff{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);margin-top:var(--s3)}
-  @media(max-width:640px){.diff{grid-template-columns:1fr}}
+  /* framed, scrollable text boxes (iobox) — inputs and outputs in the evidence */
   .diff-col{border:1px solid var(--line);border-radius:8px;overflow:hidden;min-width:0}
   .diff-tag{display:flex;align-items:center;gap:8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:5px 11px}
-  .diff-before .diff-tag{background:var(--bad-weak);color:var(--bad)}
-  .diff-after .diff-tag{background:var(--ok-weak);color:var(--ok)}
   .diff-tag--n{background:var(--hold-weak);color:var(--faint)}                 /* neutral header for a standalone framed box */
   .fld-meta{margin-left:2px;font-weight:600;color:var(--muted);text-transform:none;letter-spacing:0}
   .fld-x{margin-left:auto;font:inherit;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:none;border:0;cursor:pointer;padding:2px 0}
@@ -102,10 +85,6 @@
   .diff-box{white-space:pre-wrap;font-family:'Plex Mono',ui-monospace,monospace;font-size:11px;line-height:1.5;
     padding:10px 11px;max-height:300px;overflow:auto;resize:vertical;margin:0;color:var(--ink);word-break:break-word}
   .diff-box.tall{max-height:none;resize:none}                                 /* expand: lift the scroll cage, show everything */
-  .ba-text{margin-top:var(--s3)}
-  .ba-toggle{list-style:none;cursor:pointer;font-size:12.5px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:7px}
-  .ba-toggle::-webkit-details-marker{display:none}
-  .ba-text[open]>.ba-toggle .f-caret{transform:rotate(90deg)}
   .ev-item{width:100%}
   .ev-sum{list-style:none;cursor:pointer;display:flex;align-items:center;gap:var(--s3);padding:var(--s3) 0;border-top:1px solid var(--line)}
   .ev-sum::-webkit-details-marker{display:none}
@@ -115,11 +94,7 @@
   .ev-sum .ev-in{flex:1;min-width:0}
   .ev-sum .ev-rate{color:var(--ink);white-space:nowrap;font-size:12.5px}
   .ev-body{padding:var(--s2) 0 var(--s3) 22px}
-  .ev-remark{font-size:12.5px;color:var(--muted);margin:0 0 var(--s2)}
   .io-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:var(--s4) 0 6px}
-  .io{margin-top:9px}
-  .io:first-child{margin-top:0}
-  .io-k{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--faint);display:block;margin-bottom:3px}
   .rtab-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:var(--s3)}
   .rtab{font:inherit;font-size:12px;padding:5px 11px;border:1px solid var(--line-strong);border-radius:7px;background:var(--panel);color:var(--muted);cursor:pointer}
   .rtab.on{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -132,21 +107,9 @@
   .foot-note{color:var(--faint);font-size:12px;line-height:1.65;margin:var(--s5) 2px 0;max-width:84ch}
   @media (max-width:640px){
     .verdict-headline{font-size:24px}.metrics{gap:var(--s5)}
-    .ev-row{grid-template-columns:62px 1fr}
     .f-model{display:none}
   }
 </style>
-
-{# ── reusable scrollable before/after: prompt diff (finding-level) and output diff (per input) ── #}
-{% macro badiff(before, after, blabel, alabel) %}
-<details class="ba-text">
-  <summary class="ba-toggle"><span class="f-caret">&#9654;</span> {{ blabel }} &rarr; {{ alabel }} <span class="subtle">— click to expand</span></summary>
-  <div class="diff">
-    <div class="diff-col diff-before"><div class="diff-tag">{{ blabel }}</div><pre class="diff-box">{{ before or '(none)' }}</pre></div>
-    <div class="diff-col diff-after"><div class="diff-tag">{{ alabel }}</div><pre class="diff-box">{{ after or '(none)' }}</pre></div>
-  </div>
-</details>
-{% endmacro %}
 
 {# Standalone framed box: bordered, shaded header, per-box "expand" to lift the scroll cage. Full text, never
    truncated — the scroll (and drag-resize) is the slider; expand shows everything. Reused for inputs and outputs. #}
@@ -157,9 +120,9 @@
 </div>
 {% endmacro %}
 
-{# Per input: INPUT before/after shown ONCE, then the K re-runs as tabs (recorded-vs-re-run OUTPUT + judge remark).
-   Summary rate shows the re-run's kept/K and, on doubtful inputs, the original's own self-variance ("vs original
-   X/K") so a sub-perfect rate reads against the model's own noise. ONE macro, reused by all levers. #}
+{# Per input: the INPUT shown ONCE, then the original's own outputs (the reference set) and the cheaper model's
+   re-runs as tabs, each with its judge remark. Summary rate shows the cheaper's fit next to the original's own
+   self-consistency, so a sub-perfect rate reads against the model's own noise. #}
 {% macro evidence(inputs) %}
 <ul class="evidence">
   {% for iv in inputs %}
@@ -170,12 +133,11 @@
         {% if iv.verdict == 'SAFE' %}<span class="ev-tag ev-kept">safe</span>{% else %}<span class="ev-tag ev-drift">not safe</span>{% endif %}
         {% if iv.unverified %}<span class="ev-tag" style="background:#7a5c00;color:#ffe9a8" title="An output here exceeds the judge's character budget, so it was compared on a truncated view — this input is not certified.">&#9888; too long to verify</span>{% endif %}
         <span class="ev-in">{{ iv.note or iv.reason or 'judged' }}</span>
-        <span class="ev-rate mono">preserved {{ iv.kept }}/{{ iv.k }}{% if iv.self_rate %} &middot; original {{ iv.self_rate }}{% elif iv.self_kept is not none %} &middot; vs original {{ iv.self_kept }}/{{ iv.k }}{% endif %}</span>
+        <span class="ev-rate mono">preserved {{ iv.kept }}/{{ iv.k }}{% if iv.self_rate %} &middot; original {{ iv.self_rate }}{% endif %}</span>
       </summary>
       <div class="ev-body">
-        {% if iv.orig_runs %}
-        {# Reference-set downgrade: input unchanged — show it once, then the original's own outputs as tabs, each
-           tagged whether it FITS the other 4 (that leave-one-out is what produces original n/5). #}
+        {# Input unchanged — show it once, then the original's own outputs as tabs, each tagged whether it FITS the
+           others (that is what produces original n/5). #}
         <div class="io-lbl">Input (what was sent)</div>
         <div class="iofields">
           {{ iobox('system', iv.system) }}
@@ -195,49 +157,20 @@
           </div>
           {% endfor %}
         </div>
-        {% elif iv.commitments %}
-        <div class="io-lbl">Input (what was sent)</div>
-        <div class="io"><span class="io-k">system</span><pre class="diff-box">{{ (iv.system or '(none)')[:8000] }}</pre></div>
-        <div class="io"><span class="io-k">user</span><pre class="diff-box">{{ (iv.input or '(none)')[:8000] }}</pre></div>
-        <div class="io-lbl">The original&rsquo;s contract{% if iv.confidence %} &middot; profile confidence {{ iv.confidence.split()[0] }}{% endif %}</div>
-        <div class="io"><span class="io-k">commitments</span><pre class="diff-box">{{ iv.commitments }}</pre></div>
-        <div class="io"><span class="io-k">allowed variation</span><pre class="diff-box">{{ iv.allowed_variation or '(none observed &mdash; must match exactly)' }}</pre></div>
-        {% else %}
-        <div class="io-lbl">Input (what was sent)</div>
-        <div class="diff">
-          <div class="diff-col diff-before"><div class="diff-tag">before</div>
-            <div class="io"><span class="io-k">system</span><pre class="diff-box">{{ iv.system_before or '(none)' }}</pre></div>
-            <div class="io"><span class="io-k">user</span><pre class="diff-box">{{ iv.user_before or '(none)' }}</pre></div>
-          </div>
-          <div class="diff-col diff-after"><div class="diff-tag">after</div>
-            <div class="io"><span class="io-k">system</span><pre class="diff-box">{{ iv.system_after or '(none)' }}</pre></div>
-            <div class="io"><span class="io-k">user</span><pre class="diff-box">{{ iv.user_after or '(none)' }}</pre></div>
-          </div>
-        </div>
-        {% endif %}
-        {# Cheaper re-runs. For reference-set downgrade the baseline is ALL the originals shown above, not one
-           recorded output &mdash; so each cheaper output stands on its own, judged against that set (no misleading
-           before/after). Other levers keep the recorded-vs-re-run diff. #}
-        <div class="io-lbl">{% if iv.orig_runs %}Cheaper model&rsquo;s outputs{% else %}Output{% endif %} &middot; {{ iv.samples | length }} re-run{{ 's' if (iv.samples | length) != 1 }}{% if iv.orig_runs %} &middot; judged against the reference set above{% endif %}</div>
+        {# Cheaper re-runs: the baseline is ALL the originals shown above, not one recorded output — so each cheaper
+           output stands on its own, judged against that set. #}
+        <div class="io-lbl">Cheaper model&rsquo;s outputs &middot; {{ iv.samples | length }} re-run{{ 's' if (iv.samples | length) != 1 }} &middot; judged against the reference set above</div>
         {% if iv.samples %}
         <div class="rtabs">
           <div class="rtab-bar">
             {% for s in iv.samples %}
-            <button type="button" class="rtab{{ ' on' if loop.first }}" data-i="{{ loop.index }}">re-run {{ loop.index }} &middot; {% if iv.orig_runs %}{{ 'fits' if s.preserved else 'differs' }}{% else %}{{ 'kept' if s.preserved else 'drift' }}{% endif %}{% if s.votes %} ({{ s.votes }}){% endif %}</button>
+            <button type="button" class="rtab{{ ' on' if loop.first }}" data-i="{{ loop.index }}">re-run {{ loop.index }} &middot; {{ 'fits' if s.preserved else 'differs' }}{% if s.votes %} ({{ s.votes }}){% endif %}</button>
             {% endfor %}
           </div>
           {% for s in iv.samples %}
           <div class="rpanel{{ ' on' if loop.first }}" data-i="{{ loop.index }}">
-            {% if iv.orig_runs %}
             {{ iobox('output', s.output, 'cheaper re-run ' ~ loop.index) }}
             <p class="ev-judge"><b>Fits the reference set:</b> <span class="ev-tag {{ 'ev-kept' if s.preserved else 'ev-drift' }}">{{ 'yes' if s.preserved else 'no' }}</span> {{ s.reason or '' }}</p>
-            {% else %}
-            <div class="diff">
-              <div class="diff-col diff-before"><div class="diff-tag">recorded (before)</div><pre class="diff-box">{{ (iv.recorded or '(none)')[:6000] }}</pre></div>
-              <div class="diff-col diff-after"><div class="diff-tag">re-run (after)</div><pre class="diff-box">{{ (s.output or '(empty)')[:6000] }}</pre></div>
-            </div>
-            <p class="ev-judge"><b>Judge:</b> <span class="ev-tag {{ 'ev-kept' if s.preserved else 'ev-drift' }}">{{ 'kept' if s.preserved else 'drift' }}</span> {{ s.reason or '' }}</p>
-            {% endif %}
           </div>
           {% endfor %}
         </div>
@@ -255,12 +188,10 @@
 {% set audited_cost = (proof.results | sum(attribute='cost')) or 0 %}   {# current spend of the audited call-sites, same 10k basis #}
 {% set pct = ((save / audited_cost * 100) | int) if audited_cost > 0 else 0 %}
 {% set dg_total = (proof.downgrade_usd or 0) %}
-{% set ca_total = (proof.cache_usd or 0) %}
-{% set co_total = (proof.compress_usd or 0) %}
 {% set errored = proof.results | selectattr('error') | list %}
 {% set all_failed = (errored | length == audited and audited > 0) %}
 {% set ns = namespace(safe=0) %}
-{% for r in proof.results %}{% if ((r.downgrade_usd or 0) + (r.cache_usd or 0) + (r.compress_usd or 0)) > 0 %}{% set ns.safe = ns.safe + 1 %}{% endif %}{% endfor %}
+{% for r in proof.results %}{% if (r.downgrade_usd or 0) > 0 %}{% set ns.safe = ns.safe + 1 %}{% endif %}{% endfor %}
 
 {% if errored %}
 <div class="audit-error">
@@ -296,7 +227,7 @@
     <div class="metric">
       <div class="m-k">Verified savings</div>
       <div class="m-v{{ ' pos' if win }}">${{ '{:,.0f}'.format(save) }}<span class="m-u">per {{ '{:,}'.format(f.calls) }} calls</span></div>
-      {% if win %}<div class="m-split">{% if pct > 0 %}<b>{{ pct }}% off</b> &middot; {% endif %}{% if dg_total > 0 %}&darr; ${{ '{:,.0f}'.format(dg_total) }} downgrade{% endif %}{% if ca_total > 0 %}{% if dg_total > 0 %} &middot; {% endif %}&#9889; ${{ '{:,.0f}'.format(ca_total) }} cache{% endif %}{% if co_total > 0 %}{% if dg_total > 0 or ca_total > 0 %} &middot; {% endif %}&#8722; ${{ '{:,.0f}'.format(co_total) }} compress{% endif %}</div>{% endif %}
+      {% if win %}<div class="m-split">{% if pct > 0 %}<b>{{ pct }}% off</b> &middot; {% endif %}{% if dg_total > 0 %}&darr; ${{ '{:,.0f}'.format(dg_total) }} downgrade{% endif %}</div>{% endif %}
     </div>
     <div class="metric"><div class="m-k">Safe to change</div><div class="m-v">{{ ns.safe }}<span class="m-u">/ {{ audited }} audited</span></div></div>
     <div class="metric"><div class="m-k">Sampled</div><div class="m-v">{{ f.traces }}<span class="m-u">traces</span></div></div>
@@ -336,99 +267,6 @@
   <p class="ssec-empty">None of the audited call-sites had a cheaper model to try.</p>
   {% endif %}
 </div>
-
-{% if 'cache' in levers %}
-<!-- ── Cacheable prefix ── -->
-<div class="strat-sec">
-  <div class="ssec-head">
-    <span class="ssec-title"><span class="ico">&#9889;</span>Cacheable prefix</span>
-    <span class="ssec-sub">{% if ca %}{% if ca_total > 0 %}<b>${{ '{:,.0f}'.format(ca_total) }}</b><span class="per">/{{ (f.calls // 1000) }}k</span> &middot; {% endif %}{{ ca | length }} audited{% else %}none audited{% endif %}</span>
-  </div>
-  {% if ca %}
-  <div class="findings">
-    {% for r in ca %}{% set c = r.cache %}
-    <details class="finding">
-      <summary class="finding-head">
-        <span class="f-caret">&#9654;</span>
-        <span class="f-name">{{ r.node }}</span>
-        <span class="f-model">{{ r.model }}</span>
-        <span class="f-spacer"></span>
-        {% if c.recommend %}<span class="chip chip--ok">safe &middot; proven</span><span class="f-amt pos">&minus;${{ '{:,.0f}'.format(r.cache_usd) }}<span class="per">/{{ (f.calls // 1000) }}k</span></span>
-        {% else %}<span class="chip chip--bad">not recommended</span><span class="f-amt none">&mdash;</span>{% endif %}
-      </summary>
-      <div class="finding-body">
-        {% if c.recommend %}
-        <p class="strat-note">Behavior preserved on {{ c.safe_inputs }}/{{ c.n }} inputs &middot; the provider round-trip confirmed the cache read.</p>
-        {% else %}
-        <p class="strat-note">{{ c.reason or 'the reorg changed behavior or did not cache on the round-trip — not recommended.' }}</p>
-        {% endif %}
-        {% if c.after %}
-        <div class="ba-grid">
-          <div class="ba-col"><div class="ba-tag ba-before">before</div><div class="ba-metric"><b class="mono">{{ (c.before.read if c.before else 0) or 0 }}</b> tok cached / call</div></div>
-          <div class="ba-arrow">&rarr;</div>
-          <div class="ba-col"><div class="ba-tag ba-after">after</div><div class="ba-metric"><b class="mono">{{ (c.after.read if c.after else 0) or 0 }}</b> tok cached / call</div></div>
-        </div>
-        {% endif %}
-        {% if c.before_prompt %}{{ badiff(c.before_prompt, c.after_prompt, 'original prompt', 'reorged prompt') }}{% endif %}
-        {% if c.inputs %}{{ evidence(c.inputs) }}{% endif %}
-      </div>
-    </details>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p class="ssec-empty">No cacheable-prefix opportunities among the audited call-sites.</p>
-  {% endif %}
-</div>
-{% endif %}
-
-{% if 'compress' in levers %}
-<!-- ── Prompt compression ── -->
-<div class="strat-sec">
-  <div class="ssec-head">
-    <span class="ssec-title"><span class="ico">&#8722;</span>Prompt compression</span>
-    <span class="ssec-sub">{% if co %}{% if co_total > 0 %}<b>${{ '{:,.0f}'.format(co_total) }}</b><span class="per">/{{ (f.calls // 1000) }}k</span> &middot; {% endif %}{{ co | length }} audited{% else %}none audited{% endif %}</span>
-  </div>
-  {% if co %}
-  <div class="findings">
-    {% for r in co %}{% set c = r.compress %}
-    <details class="finding">
-      <summary class="finding-head">
-        <span class="f-caret">&#9654;</span>
-        <span class="f-name">{{ r.node }}</span>
-        <span class="f-model">{{ r.model }}</span>
-        <span class="f-spacer"></span>
-        {% if c.verdict == 'SAFE' %}<span class="chip chip--ok">safe</span><span class="f-amt pos">&minus;${{ '{:,.0f}'.format(r.compress_usd) }}<span class="per">/{{ (f.calls // 1000) }}k</span></span>
-        {% elif c.verdict == 'NOT-SAFE' %}<span class="chip chip--bad">not safe</span><span class="f-amt none">&mdash;</span>
-        {% elif c.verdict == 'BORDERLINE' %}<span class="chip chip--warn">borderline</span><span class="f-amt none">&mdash;</span>
-        {% else %}<span class="chip chip--muted">{{ c.verdict | lower | replace('-',' ') }}</span><span class="f-amt none">&mdash;</span>{% endif %}
-      </summary>
-      <div class="finding-body">
-        {% if c.before_tok %}
-        <p class="strat-note">System prompt <b class="mono">{{ c.before_tok }} &rarr; {{ c.after_tok }}</b> tokens{% if c.mode %} &middot; <span class="subtle">{{ c.mode }}</span>{% endif %}{% if c.verdict == 'SAFE' %} &mdash; behavior held on every sampled input.{% elif c.verdict == 'NOT-SAFE' %} &mdash; the shorter prompt dropped or changed a rule; keep the original.{% elif c.verdict == 'BORDERLINE' %} &mdash; held on most inputs, some drifted &mdash; review per-input.{% endif %}</p>
-        {% else %}
-        <p class="strat-note">{{ c.reason or 'nothing to compress safely on this call-site.' }}</p>
-        {% endif %}
-        {% if c.after_tok %}
-        <div class="ba-grid">
-          <div class="ba-col"><div class="ba-tag ba-before">before</div><div class="ba-metric"><b class="mono">{{ c.before_tok }}</b> tok / call</div></div>
-          <div class="ba-arrow">&rarr;</div>
-          <div class="ba-col"><div class="ba-tag ba-after">after</div><div class="ba-metric"><b class="mono">{{ c.after_tok }}</b> tok / call</div></div>
-        </div>
-        {% endif %}
-        {% if c.original and c.compressed %}
-        {% if c.verdict == 'SAFE' %}<p class="strat-note"><b>What to do:</b> replace this call-site&rsquo;s system prompt with the proven-shorter version:</p>{% endif %}
-        {{ badiff(c.original, c.compressed, 'original system prompt', 'compressed system prompt') }}
-        {% endif %}
-        {% if c.inputs %}{{ evidence(c.inputs) }}{% endif %}
-      </div>
-    </details>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p class="ssec-empty">No safe prompt-compression opportunities among the audited call-sites.</p>
-  {% endif %}
-</div>
-{% endif %}
 
 {% if not export %}
 <div class="actions">

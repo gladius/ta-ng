@@ -54,8 +54,6 @@ def _load_catalog(path=_CATALOG_PATH):
 
 _, PRICE, _ORDER, _ALIASES, _CALLABLE, _CMODE = _load_catalog()
 
-DEFAULT_MODEL = "gemini-2.5-pro"       # pricing fallback for an un-catalogued model (identity is preserved)
-
 
 def canonical_model(raw):
     """Map a raw/provider model string onto a catalog model name, or None if unknown.
@@ -139,13 +137,6 @@ def retire_date(model):
 
 def _as_of_date(as_of=None):
     return datetime.date.fromisoformat(as_of) if as_of else datetime.date.today()
-
-
-def is_retired(model, as_of=None):
-    """True if the model's announced shutdown is on/before `as_of` (default today). Retired models stay PRICED
-    (old traces still cost-out) but are never offered as a downgrade target."""
-    d = retire_date(model)
-    return bool(d and datetime.date.fromisoformat(d) <= _as_of_date(as_of))
 
 
 def retiring_within(model, days=RETIRE_HORIZON_DAYS, as_of=None):
@@ -328,29 +319,3 @@ def approx_tokens(text):
 
 def usd(tokens, price_per_million):
     return tokens / 1_000_000 * price_per_million
-
-
-def normalize(t):
-    """Load-time trace normalization — EXPLICIT, never silent. An un-catalogued model is priced at
-    DEFAULT_MODEL so detection never crashes, but its real identity is preserved (`model_raw`) and the trace
-    is flagged `model_known=False` — a cost tool must never quietly relabel a call-site's model. Missing token
-    counts are flagged `usage_assumed` and left at ZERO rather than invented, so no $ figure ever rests on a
-    fabricated count. Downstream (model-tier-downgrade, the UI) honours these flags. Used by web/lsource as
-    traces stream in."""
-    raw = t.get("model")
-    canon = canonical_model(raw)
-    if canon is None:                                      # unknown model: price at a default, but say so
-        t.setdefault("model_raw", raw)
-        t["model_known"] = False
-        t["model_priced_as"] = DEFAULT_MODEL
-        t["model"] = DEFAULT_MODEL
-    else:
-        t.setdefault("model_raw", raw)
-        t.setdefault("model_known", True)
-        t["model"] = canon                                # canonicalize (dated -> catalog id) so pricing is right
-    u = t.get("usage")
-    if not isinstance(u, dict) or "input_tokens" not in u:  # unknown volume: claim nothing, don't invent it
-        t["usage"] = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0}
-        t["usage_assumed"] = True
-    t.setdefault("task_type", "unknown")
-    return t

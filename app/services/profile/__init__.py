@@ -5,6 +5,3 @@ Pipeline per node: `select` (deterministic $0 — sample + full-bucket facts + b
 
 Descriptive ONLY: the profile proposes and points at lever candidates; the levers prove downstream.
 """
-from app.services.profile.select import select
-
-__all__ = ["select"]

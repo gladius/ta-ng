@@ -6,6 +6,6 @@ with auditor's strategy registry). Add a platform = drop a folder; nothing centr
 """
 
 from connectors.base import Adapter, pull, pull_graph
-from connectors.registry import get_adapter, list_adapters
+from connectors.registry import get_adapter
 
-__all__ = ["Adapter", "pull", "pull_graph", "get_adapter", "list_adapters"]
+__all__ = ["Adapter", "pull", "pull_graph", "get_adapter"]

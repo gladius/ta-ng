@@ -29,17 +29,6 @@ def _env_ws():
             or os.environ.get("LANGSMITH_WORKSPACE_ID"))
 
 
-def ws_id(arg=None):
-    """The workspace / tenant id when NO project is in play: an explicit --ws wins, else LANGSMITH_WORKSPACE_ID from
-    .env. Exports it so the langsmith SDK sends it as X-Tenant-Id (org-scoped keys need it), like the connector.
-    For a project-scoped command prefer ws_for_project() — it doesn't blindly trust the .env default."""
-    w = arg or _env_ws()
-    if not w:
-        raise SystemExit("No workspace id — set LANGSMITH_WORKSPACE_ID in .env, or pass --ws <id>.")
-    os.environ["LANGSMITH_WORKSPACE_ID"] = w
-    return w
-
-
 def _source():
     from connectors.langsmith.source import SOURCE          # reuse the connector's auth (x-api-key + X-Tenant-Id)
     return SOURCE

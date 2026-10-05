@@ -96,9 +96,8 @@ def _opp_of(r):
     if not r:
         return None
     o = {"usd": round(r.get("opportunity") or 0, 2), "downgrade_to": r.get("downgrade_to"),
-         "downgrade_usd": round(r.get("downgrade_usd") or 0, 2), "cache_verdict": r.get("cache_verdict"),
-         "cache_usd": round(r.get("cache_usd") or 0, 2), "compress": bool(r.get("compress_candidate"))}
-    return o if (o["downgrade_to"] or o["cache_usd"] or o["compress"]) else None
+         "downgrade_usd": round(r.get("downgrade_usd") or 0, 2)}
+    return o if o["downgrade_to"] else None
 
 
 def build_profile(g, comp=None):
@@ -107,10 +106,9 @@ def build_profile(g, comp=None):
     the advisory op (one word) + summary per llm node once the LLM pass has run (else those fields are empty)."""
     comp = comp or {}
     fp = fact_pack(g)                                    # deterministic $0 facts per node (Phase 1)
-    try:                                                 # the $0 OPTIMIZATION MAP — reuse the funnel's lever detectors
+    try:                                                 # the $0 OPTIMIZATION MAP — reuse the funnel's detector
         from app.services import funnel
-        _opp = {r["key"]: r for r in funnel.build("", "", g.get("agent", "agent"),
-                                                   levers=["downgrade", "cache", "compress"], g=g)["rows"]}
+        _opp = {r["key"]: r for r in funnel.build("", "", g.get("agent", "agent"), g=g)["rows"]}
     except Exception:
         _opp = {}
     nodes = []
@@ -173,8 +171,7 @@ def build_profile(g, comp=None):
         # the OPTIMIZATION MAP totals ($0, deterministic) — the "where's the money" headline
         "opportunity_total": round(sum((r.get("opportunity") or 0) for r in _opp.values()), 2),
         "downgrade_total": round(sum((r.get("downgrade_usd") or 0) for r in _opp.values()), 2),
-        "cache_total": round(sum((r.get("cache_usd") or 0) for r in _opp.values()), 2),
-        "opp_wins": sum(1 for r in _opp.values() if (r.get("opportunity") or 0) > 0 or r.get("compress_candidate")),
+        "opp_wins": sum(1 for r in _opp.values() if (r.get("opportunity") or 0) > 0),
     }
 
     hotspots = None

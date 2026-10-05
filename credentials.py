@@ -114,14 +114,3 @@ def get_config(name, default=None, *, aliases=(), files=(".env",), search_dirs=_
     from one place — set them in `.env` (or the process env) and everything picks them up."""
     v = get_secret(name, aliases=aliases, files=files, search_dirs=search_dirs)
     return v if v is not None else default
-
-
-def require_secret(name, *, aliases=(), files=(), hint=""):
-    """Resolve or raise a message that names WHERE to set it — never the value itself."""
-    v = get_secret(name, aliases=aliases, files=files)
-    if v:
-        return v
-    where = "env var %s" % name
-    if files:
-        where += " (or a gitignored %s at repo root)" % " / ".join(files)
-    raise RuntimeError("%s not set — provide it via %s%s" % (name, where, (". " + hint) if hint else ""))

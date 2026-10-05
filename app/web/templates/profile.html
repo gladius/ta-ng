@@ -55,8 +55,6 @@
   .opp{font-size:11px;font-weight:600;padding:3px 9px;border-radius:6px;letter-spacing:.2px}
   .opp b{font-weight:800}
   .opp.dg{background:rgba(31,122,90,.12);color:#1f7a5a}
-  .opp.ca{background:rgba(200,70,60,.12);color:var(--accent)}
-  .opp.co{background:rgba(109,74,173,.12);color:#6d4aad}
   .note{font-size:12.5px;color:var(--muted);margin:0 0 var(--s4)}
   .note.warn{color:#9a6a00}
   .note.faint{color:var(--faint)}
@@ -155,8 +153,6 @@
     {% if n.opp %}
     <div class="opps">
       {% if n.opp.downgrade_to %}<span class="opp dg">↓ downgrade → {{ n.opp.downgrade_to }} <b>~${{ '{:,.2f}'.format(n.opp.downgrade_usd) }}</b></span>{% endif %}
-      {% if n.opp.cache_verdict == 'BREAKER' %}<span class="opp ca">⚡ cache reorg <b>~${{ '{:,.2f}'.format(n.opp.cache_usd) }}</b></span>{% endif %}
-      {% if n.opp.compress %}<span class="opp co">− compress candidate</span>{% endif %}
     </div>
     {% endif %}
     {% if n.facts or n.flow %}

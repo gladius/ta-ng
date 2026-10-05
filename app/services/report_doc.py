@@ -20,24 +20,15 @@ import zipfile
 # per-INPUT rollup verdict, shown with the system's own words — BORDERLINE is its own state, NOT "not safe".
 _IV = {"SAFE": "safe", "NOT-SAFE": "not safe", "BORDERLINE": "borderline", "LOW-EVIDENCE": "low evidence"}
 
-_LEVER_LABEL = {"downgrade": "Model downgrade", "cache": "Cache-prefix expansion", "compress": "Prompt compression"}
-# the SAME short label in report.md's cross-reference and evidence.md's heading, so a reader matches them by name.
-_EV_LABEL = {"downgrade": "model downgrade", "cache": "cache-prefix", "compress": "prompt compression"}
-
-
 def _fmt(n):
     return "{:,.0f}".format(n or 0)
 
 
 def _sys_first_line(detail):
     """A greppable fingerprint of the call-site's system prompt — its first non-blank line — so a human or coding
-    assistant can locate the exact prompt in their source. From the compress lever's `original`, else the first
-    input's captured system prompt (`system` on the refset engine, `system_before` on the legacy engine)."""
-    sysm = detail.get("original") or ""
-    if not sysm:
-        inps = detail.get("inputs") or []
-        first = inps[0] if inps else {}
-        sysm = first.get("system") or first.get("system_before") or ""
+    assistant can locate the exact prompt in their source. From the first input's captured system prompt."""
+    inps = detail.get("inputs") or []
+    sysm = (inps[0].get("system") if inps else "") or ""
     return next((ln.strip() for ln in sysm.splitlines() if ln.strip()), "")[:140]
 
 
@@ -50,20 +41,14 @@ def _drift(detail):
 
 
 def _rate(inp):
-    """The per-input rate line. Refset downgrade reads the cheaper's fit against the reference set alongside the
-    original's own self-consistency; the legacy cache/compress engine reads kept vs an optional baseline."""
-    if inp.get("self_rate"):                                   # refset downgrade: cheaper fit · original self-consistency
-        return "cheaper %d/%d · original %s" % (inp.get("kept", 0), inp.get("k", 0), inp["self_rate"])
-    r = "kept %d/%d" % (inp.get("kept", 0), inp.get("k", 0))
-    if inp.get("self_kept") is not None:                       # legacy engine baseline
-        r += " · baseline %d/%d" % (inp["self_kept"], inp.get("k", 0))
-    return r
+    """The per-input rate line: the cheaper's fit against the reference set · the original's own self-consistency."""
+    return "cheaper %d/%d · original %s" % (inp.get("kept", 0), inp.get("k", 0), inp.get("self_rate", "?"))
 
 
 # ─────────────────────────────────────────── report.md — the apply guide ───────────────────────────────────────────
 
 def _report_md(f, proof):
-    """The deliverable: an APPLY GUIDE across all three levers, built ONLY from the frozen proof. One block per
+    """The deliverable: an APPLY GUIDE, built ONLY from the frozen proof. One block per
     recommended fix (what / where / how / why / verify / caveat, artifacts INLINE and paste-ready), a machine-readable
     index for a coding assistant, and an honest list of what was tested and rejected. The raw runs live in
     evidence.md; nothing here is invented — every figure is measured."""
@@ -71,30 +56,16 @@ def _report_md(f, proof):
     unit = "%s calls" % _fmt(calls)
     results = proof["results"] if proof else []
     total = (proof.get("total", 0) if proof else 0)
-    dg_total = (proof.get("downgrade_usd", 0) if proof else 0)
-    ca_total = (proof.get("cache_usd", 0) if proof else 0)
-    co_total = (proof.get("compress_usd", 0) if proof else 0)
 
-    # ONE pass over the proof: split every lever result into a RECOMMENDED fix or an honest REJECTION.
-    fixes, rejects = [], []                     # fixes: (lever, x, detail, usd)   rejects: (call_site, lever, verdict, reason)
+    # ONE pass over the proof: split every result into a RECOMMENDED fix or an honest REJECTION.
+    fixes, rejects = [], []                     # fixes: (x, detail, usd)   rejects: (call_site, verdict, reason)
     for x in results:
         key = x.get("key") or x["node"]
         d = x.get("downgrade")
         if d and d.get("verdict") == "SAFE":
-            fixes.append(("downgrade", x, d, x.get("downgrade_usd", 0)))
+            fixes.append((x, d, x.get("downgrade_usd", 0)))
         elif d:
-            rejects.append((key, "model downgrade", d.get("verdict", "?"), _drift(d)))
-        c = x.get("cache")
-        if c and not c.get("informational"):
-            if c.get("recommend"):
-                fixes.append(("cache", x, c, x.get("cache_usd", 0)))
-            else:
-                rejects.append((key, "cache-prefix", c.get("verdict", "?"), _drift(c)))
-        cp = x.get("compress")
-        if cp and cp.get("verdict") == "SAFE":
-            fixes.append(("compress", x, cp, x.get("compress_usd", 0)))
-        elif cp:
-            rejects.append((key, "compression", cp.get("verdict", "?"), _drift(cp)))
+            rejects.append((key, d.get("verdict", "?"), _drift(d)))
 
     L = ["# Token Audit — %s · Apply Guide" % f["agent"], ""]
     L.append("> These are **verified, behaviour-preserving** changes to your agent, each proven on real recorded "
@@ -103,8 +74,7 @@ def _report_md(f, proof):
              "apply. The raw runs behind every verdict are in **`evidence.md`** — you need only this file to apply.")
     L.append("")
     if total > 0:
-        L.append("**$%s in verified savings per %s** — ↓ $%s model downgrade · ⚡ $%s cache-prefix · − $%s compression."
-                 % (_fmt(total), unit, _fmt(dg_total), _fmt(ca_total), _fmt(co_total)))
+        L.append("**$%s in verified savings per %s** from model downgrades." % (_fmt(total), unit))
     else:
         L.append("**No safe savings on the audited call-sites** — each re-ran live and needs its current setup. A "
                  "verified result, not an empty one; see *Tested and not recommended* below.")
@@ -115,25 +85,18 @@ def _report_md(f, proof):
 
     # ── machine-readable index — a coding assistant can parse THIS instead of the prose ──
     idx = []
-    for n, (lever, x, det, usd) in enumerate(fixes, 1):
-        e = {"fix": n, "lever": lever, "call_site": (x.get("key") or x["node"]), "node": x["node"],
-             "graph_path": x.get("graph_path", ""), "saving": round(usd, 2), "basis": unit}
-        if lever == "downgrade":
-            e["from_model"], e["to_model"] = det.get("model"), det.get("cheaper")
-        elif lever == "compress":
-            e["from_tokens"], e["to_tokens"] = det.get("before_tok"), det.get("after_tok")
-        elif lever == "cache":
-            e["cached_tokens_before"] = (det.get("before") or {}).get("read", 0)
-            e["cached_tokens_after"] = (det.get("after") or {}).get("read", 0)
-        idx.append(e)
+    for n, (x, det, usd) in enumerate(fixes, 1):
+        idx.append({"fix": n, "lever": "downgrade", "call_site": (x.get("key") or x["node"]), "node": x["node"],
+                    "graph_path": x.get("graph_path", ""), "saving": round(usd, 2), "basis": unit,
+                    "from_model": det.get("model"), "to_model": det.get("cheaper")})
     L += ["## Fixes — machine-readable index", "```json", json.dumps(idx, indent=2), "```", ""]
 
     # ── one APPLY BLOCK per recommended fix — what / where / how / why / verify / caveat, artifacts inline ──
     if fixes:
         L += ["## Fixes to apply", ""]
-    for n, (lever, x, det, usd) in enumerate(fixes, 1):
+    for n, (x, det, usd) in enumerate(fixes, 1):
         key = x.get("key") or x["node"]
-        L.append("### Fix %d · %s · `%s` — saves $%s per %s" % (n, _LEVER_LABEL[lever], key, _fmt(usd), unit))
+        L.append("### Fix %d · Model downgrade · `%s` — saves $%s per %s" % (n, key, _fmt(usd), unit))
         L.append("")
         L.append("**Where**")
         L.append("- Call-site: node `%s`%s, agent `%s`, currently on model `%s`." % (
@@ -141,64 +104,28 @@ def _report_md(f, proof):
         fp = _sys_first_line(det)
         if fp:
             L += ["- Find it by the node name, or by its system prompt which begins:", "  > %s" % fp]
-        L += ["", "**Change**"]
-        if lever == "downgrade":
-            L += ["- Switch this call-site's model:  `%s`  →  `%s`" % (det.get("model"), det.get("cheaper")),
-                  "- Nothing else changes — same prompt, same tools."]
-        elif lever == "compress":
-            L.append("- Replace this call-site's **system prompt** with the version below (paste verbatim). Tokens: "
-                     "**%s → %s** (%s). Keep every per-call value exactly as-is."
-                     % (det.get("before_tok"), det.get("after_tok"), det.get("mode", "-")))
-            L += ["", "```text", det.get("compressed", ""), "```"]
-        elif lever == "cache":
-            b = (det.get("before") or {}).get("read", 0)
-            a = (det.get("after") or {}).get("read", 0)
-            L += ["- Make this exact block a **contiguous cached system prefix**: hoist it to the front, set the "
-                  "provider's cache breakpoint at its end, and keep every per-call value **after** it, verbatim.",
-                  "- Cached tokens per call: **%s → %s** (recovered %s)." % (b, a, det.get("recovered_tok", 0)),
-                  "", "```text", det.get("prefix", ""), "```"]
+        L += ["", "**Change**",
+              "- Switch this call-site's model:  `%s`  →  `%s`" % (det.get("model"), det.get("cheaper")),
+              "- Nothing else changes — same prompt, same tools."]
         ni, si, k = det.get("n", 0), det.get("safe_inputs", 0), det.get("k", 0)
         L += ["", "**Why it's safe**"]
-        if lever == "downgrade":
-            L.append("- Re-ran %d distinct real input(s). On each, we ran your current model %d times to capture its "
+        L.append("- Re-ran %d distinct real input(s). On each, we ran your current model %d times to capture its "
                      "own outputs — the **reference set**, i.e. the behaviour and the natural variation it already "
                      "shows — then ran `%s` and judged each of its outputs against that set. It stayed within the set "
                      "on **%d/%d**. The cheaper model is only held to the latitude your current model itself takes, so "
-                     "it is never penalised for variation the original already shows." % (ni, k, det.get("cheaper"), si, ni))
-        elif lever == "compress":
-            L.append("- The compressor kept every rule, number, code and tool name verbatim; behaviour then held on "
-                     "**%d/%d** distinct real inputs × %d re-runs, judged against your recorded outputs." % (si, ni, k))
-        elif lever == "cache":
-            L.append("- Behaviour held on **%d/%d** distinct real inputs × %d re-runs (reordered prompt vs recorded "
-                     "output), **and** a live provider round-trip confirmed the new prefix actually cached." % (si, ni, k))
+                 "it is never penalised for variation the original already shows." % (ni, k, det.get("cheaper"), si, ni))
         L.append("- Saves **$%s per %s**." % (_fmt(usd), unit))
         L += ["", "**Verify & caveats**",
               "- After applying, re-audit this call-site (or re-run these inputs and diff behaviour). Full proof: "
-              "**`evidence.md`** → `%s` (%s)." % (key, _EV_LABEL[lever])]
-        if lever == "compress":
-            L.append("- Do **not** further shorten this text — it was proven exactly as written; more cuts void the proof.")
-        if lever == "cache":
-            L.append("- Savings assume calls arrive within the provider's cache window; a call-site called less often "
-                     "than that window won't benefit.")
-        L += ["", "---", ""]
-
-    # ── composition: a call-site with more than one fix ──
-    seen, multi = set(), []
-    for _, x, _, _ in fixes:
-        k = x.get("key") or x["node"]
-        (multi.append(k) if k in seen else seen.add(k))
-    if multi:
-        L += ["## Call-sites with more than one fix",
-              "Independent — apply both. (Downgrade changes the model; compression/cache change the prompt.) Order "
-              "doesn't matter."] + ["- `%s`" % k for k in dict.fromkeys(multi)] + [""]
+              "**`evidence.md`** → `%s` (model downgrade)." % key, "", "---", ""]
 
     # ── the honest 'no' — tested and rejected, so nothing is silently touched ──
     if rejects:
         L += ["## Tested and not recommended (keep current)",
               "We tried these and the proof said no — listed so you know what was tested and *not* to touch. The runs "
               "behind each are in `evidence.md`:"]
-        for key, lever, verdict, reason in rejects:
-            L.append("- `%s` · %s → **%s**%s" % (key, lever, verdict, (" — %s" % reason) if reason else ""))
+        for key, verdict, reason in rejects:
+            L.append("- `%s` · model downgrade → **%s**%s" % (key, verdict, (" — %s" % reason) if reason else ""))
         L.append("")
 
     L.append("---")
@@ -210,23 +137,14 @@ def _report_md(f, proof):
 # ────────────────────────────────────────── evidence.md — the proof appendix ───────────────────────────────────────
 
 def _first_system(inputs):
-    for inp in inputs:
-        s = inp.get("system") or inp.get("system_before")
-        if s:
-            return s
-    return ""
+    return next((inp["system"] for inp in inputs if inp.get("system")), "")
 
 
-def _ev_headline(lever, det, x):
-    """The one-line summary under a call-site×lever heading in evidence.md."""
-    if lever == "downgrade":
-        return "current `%s` → `%s` · verdict **%s** (%d/%d input(s) safe)" % (
-            det.get("model") or x.get("model"), det.get("cheaper"), det.get("verdict"),
-            det.get("safe_inputs", 0), det.get("n", 0))
-    if lever == "cache":
-        return "verdict **%s**" % ("recommended" if det.get("recommend") else "not recommended")
-    tok = (" · %s → %s tokens" % (det.get("before_tok"), det.get("after_tok"))) if det.get("after_tok") else ""
-    return "verdict **%s**%s" % (det.get("verdict", "?"), tok)
+def _ev_headline(det, x):
+    """The one-line summary under a call-site heading in evidence.md."""
+    return "current `%s` → `%s` · verdict **%s** (%d/%d input(s) safe)" % (
+        det.get("model") or x.get("model"), det.get("cheaper"), det.get("verdict"),
+        det.get("safe_inputs", 0), det.get("n", 0))
 
 
 def _runs_block(L, title, runs, tag_true, tag_false):
@@ -248,17 +166,13 @@ def _evidence_input(L, i, inp, cheaper):
           "", "- verdict: **%s** · %s" % (_IV.get(inp["verdict"], inp["verdict"]), _rate(inp))]
     if inp.get("note") or inp.get("reason"):
         L.append("- judge: %s" % (inp.get("note") or inp.get("reason")))
-    if inp.get("orig_runs"):                                   # refset downgrade: reference set vs cheaper
-        _runs_block(L, "Reference set — your current model's own outputs", inp["orig_runs"], "fits", "differs")
-        title = "Cheaper model's outputs" + ((" (`%s`)" % cheaper) if cheaper else "")
-        _runs_block(L, title, inp.get("samples", []), "fits", "differs")
-    else:                                                      # legacy cache/compress: recorded original vs re-runs
-        L += ["", "**Recorded original**", "```text", (inp.get("recorded") or "(empty)"), "```"]
-        _runs_block(L, "Re-runs", inp.get("samples", []), "kept", "drift")
+    _runs_block(L, "Reference set — your current model's own outputs", inp.get("orig_runs", []), "fits", "differs")
+    title = "Cheaper model's outputs" + ((" (`%s`)" % cheaper) if cheaper else "")
+    _runs_block(L, title, inp.get("samples", []), "fits", "differs")
 
 
 def _evidence_md(f, proof):
-    """The raw runs behind every verdict — for verification, not application. Every audited call-site×lever with
+    """The raw runs behind every verdict — for verification, not application. Every audited call-site with
     per-input data is shown (fixes AND rejections), so a skeptic can reproduce any verdict."""
     results = proof["results"] if proof else []
     L = ["# Token Audit — %s · Evidence" % f["agent"], "",
@@ -268,21 +182,18 @@ def _evidence_md(f, proof):
     any_ev = False
     for x in results:
         key = x.get("key") or x["node"]
-        for lever in ("downgrade", "cache", "compress"):
-            det = x.get(lever)
-            if not det or (lever == "cache" and det.get("informational")):
-                continue
-            inputs = det.get("inputs") or []
-            if not inputs:
-                continue
-            any_ev = True
-            L += ["## `%s` — %s" % (key, _EV_LABEL[lever]), "", _ev_headline(lever, det, x)]
-            sysm = _first_system(inputs)
-            if sysm:
-                L += ["", "System prompt (constant for this call-site):", "```text", sysm, "```"]
-            for i, inp in enumerate(inputs, 1):
-                _evidence_input(L, i, inp, det.get("cheaper"))
-            L.append("")
+        det = x.get("downgrade") or {}
+        inputs = det.get("inputs") or []
+        if not inputs:
+            continue
+        any_ev = True
+        L += ["## `%s` — model downgrade" % key, "", _ev_headline(det, x)]
+        sysm = _first_system(inputs)
+        if sysm:
+            L += ["", "System prompt (constant for this call-site):", "```text", sysm, "```"]
+        for i, inp in enumerate(inputs, 1):
+            _evidence_input(L, i, inp, det.get("cheaper"))
+        L.append("")
     if not any_ev:
         L.append("_No per-input evidence was captured — nothing was audited live._")
     return "\n".join(L) + "\n"
@@ -297,10 +208,7 @@ def build_zip(f, proof, html=None):
         if html:
             z.writestr("report.html", html)
         z.writestr("report.md", _report_md(f, proof))
-        has_ev = any((x.get(lv) or {}).get("inputs")
-                     for x in (proof["results"] if proof else [])
-                     for lv in ("downgrade", "cache", "compress")
-                     if not (lv == "cache" and (x.get(lv) or {}).get("informational")))
+        has_ev = any((x.get("downgrade") or {}).get("inputs") for x in (proof["results"] if proof else []))
         if has_ev:
             z.writestr("evidence.md", _evidence_md(f, proof))
     return buf.getvalue()

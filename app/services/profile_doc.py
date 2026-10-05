@@ -77,10 +77,6 @@ def _profile_md(prof):
             opp, opps = n.get("opp") or {}, []
             if opp.get("downgrade_to"):
                 opps.append("↓ downgrade → %s ~%s" % (opp["downgrade_to"], _usd(opp.get("downgrade_usd"))))
-            if opp.get("cache_verdict") == "BREAKER":
-                opps.append("⚡ cache reorg ~%s" % _usd(opp.get("cache_usd")))
-            if opp.get("compress"):
-                opps.append("− compress candidate")
             if opps:
                 L += ["", "Opportunities (before proof): %s" % "; ".join(opps)]
             L.append("")
