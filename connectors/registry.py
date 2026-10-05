@@ -1,8 +1,8 @@
-"""Connector registry — auto-discovers adapters, symmetric with auditor.strategy_registry.
+"""Connector registry — auto-discovers adapters.
 
 Every connector is a SUBPACKAGE of connectors/ that exports `ADAPTER = <Adapter subclass>()` from its
 __init__.py (e.g. connectors/langsmith/). Dropping a folder here registers a platform; no dispatch to
-edit. Plain modules (base, schema, __main__, inspect_runs) are skipped — only packages are adapters.
+edit. Plain modules (base, schema) are skipped — only packages are adapters.
 """
 
 import importlib

@@ -20,12 +20,12 @@ def _dep(model_name, underlying):
     return {"model_name": model_name, "underlying": underlying, "model_info": {"mode": "chat"}}
 
 
-# ── resolve_deployed: peel host prefix + version, match exactly or by anchored suffix, never reverse-guess ──
+# ── resolve_deployed: longest catalog id delimited by separators, never reverse-guess ──
 @pytest.mark.parametrize("underlying, expected", [
     ("bedrock/anthropic.claude-sonnet-5-v1:0", "claude-sonnet-5"),   # slash + dot namespace + version
-    ("bedrock-claude-sonnet-5",                "claude-sonnet-5"),   # HYPHEN host prefix (used to break)
+    ("bedrock-claude-sonnet-5",                "claude-sonnet-5"),   # HYPHEN host prefix
     ("bedrock-claude-sonnet-5-123",            "claude-sonnet-5"),   # host prefix + suffix flavour
-    ("claude-sonnet-5-123",                    "claude-sonnet-5"),   # suffix flavour only (already worked)
+    ("claude-sonnet-5-123",                    "claude-sonnet-5"),   # suffix flavour only
     ("bedrock-gpt-oss-120b",                   "gpt-oss-120b"),      # open-weight, host prefix
     ("bedrock/openai.gpt-oss-120b-v1:0",       "gpt-oss-120b"),
     ("bedrock-gemma-3-27b",                    "gemma-3-27b"),
@@ -40,7 +40,7 @@ def test_canonical_exact_never_reverse_maps():
     # the reverse direction (a catalog id that starts with the input) is the unsafe one — it must stay None
     assert canonical_exact("gemma-3-1b") is None
     assert canonical_exact("claude-sonnet-5") == "claude-sonnet-5"
-    assert canonical_exact("claude-sonnet-5-1234") == "claude-sonnet-5"     # anchored suffix is fine
+    assert canonical_exact("claude-sonnet-5-1234") == "claude-sonnet-5"     # suffix is fine
 
 
 # ── serving_name: the one outbound seam ──

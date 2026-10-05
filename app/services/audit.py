@@ -158,8 +158,7 @@ def _distinct(traces, n):
     one-word input under a big rubric) has no 3-grams, so a 3-gram key falls back to the whole prompt and COLLAPSES it
     to 1 — a false SAFE on the very simplest agents. A word set works from one word up. It cannot tell a genuine short
     variable from short NOISE (a session id), so it COUNTS both — the SAFE default for a prove-it tool: over-sampling a
-    redundant real input is harmless; MISSING a real variation manufactures a false SAFE. This is the SAME
-    shared-static / per-call split the levers optimize on: optimize the static, sample from the variable. A
+    redundant real input is harmless; MISSING a real variation manufactures a false SAFE. A
     fully-identical bucket has no variable, so it correctly collapses to 1."""
     fulls = [_input_text(t) for t in traces]
     common = set.intersection(*[set(f.split("\n")) for f in fulls]) if fulls else set()  # the shared skeleton lines

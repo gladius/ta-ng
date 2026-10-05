@@ -1,6 +1,5 @@
 """Token Auditor — minimal FastAPI + Jinja backend.
 
-Slice 1 (only): datasource -> workspaces -> agents. Three read-only navigation pages, nothing else.
 Run:  python -m app.web.server        (http://127.0.0.1:8100, live-reload on)
       uvicorn app.web.server:app --port 8100
 """
@@ -86,7 +85,7 @@ def report_view(request: Request, source: str, ws_id: str, project: str, snap: s
     from app.services import funnel, prove, store, snapshot
     g = snapshot.get(snap, source, ws_id, project) if snap else None
     if g is None:                        # no/unknown/evicted snap -> mint an id, show a PROGRESS page, build via SSE.
-        sid = snapshot.new_id()          # (the multi-second fetch used to block here as a frozen page — now it streams)
+        sid = snapshot.new_id()          # (the multi-second fetch streams on a progress page)
         return _page(request, "building.html", source=source, ws_id=ws_id, project=project,
                      snap=sid, agent=project)
     proof = store.peek(prove.proof_key(source, ws_id, project, snap))             # audited result, tied to THIS snapshot

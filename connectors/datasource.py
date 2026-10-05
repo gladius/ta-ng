@@ -13,7 +13,7 @@ shapes (dicts / contract traces) — no platform types leak out:
     pull(ws_id, project, limit=,   -> (buckets, skipped)   RAW contract traces (delegates to the Adapter);
          since_hours=)                 pricing-normalization + caching are the web layer's job, not the source's.
 
-Depends only on stdlib + `connectors` — NOT on `auditor` — so the connector layer stays self-contained.
+Depends only on stdlib + `connectors` — NOT on `app` — so the connector layer stays self-contained.
 """
 
 import importlib

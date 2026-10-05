@@ -2,9 +2,9 @@
 
 Both sides depend on this and nothing else for the trace shape:
   - connectors/*  (ingest adapters)  build traces that conform to it (build_trace + validate_trace);
-  - auditor/*     (the core engine)  consumes traces that conform to it (callsite_key + the field spec).
+  - app/*         (the core engine)  consumes traces that conform to it (callsite_key + the field spec).
 
-Keeping the contract here — not inside auditor or inside a connector — is what makes platform support
+Keeping the contract here — not inside the app or inside a connector — is what makes platform support
 first-class: a new connector is "correct" iff its traces pass validate_trace / carry TRACE_FIELDS.
 """
 

@@ -16,7 +16,7 @@ def candidates(nodes, per_calls=1000, mode="commercial"):
       'commercial' (default): PREFER the vendor migration path (config/migrations/) when one matches the node's
         model — the recommended move regardless of provider (e.g. Claude/GPT/older-Gemini -> a Gemini GA target);
         the same-provider cost-downgrade (next_cheaper, node-aware) is the FALLBACK. reason = 'migration' |
-        'cost-downgrade'. This is the historical behaviour, UNCHANGED.
+        'cost-downgrade'.
       'open-weight': target the strongest net-SAVING open-weight model (catalog.open_weight_target) — a governance
         choice, isolated from the commercial ladder, gated on price confidence + availability. reason = 'open-weight'.
         STRICT: no fallback to a commercial target — a node with no saving open-weight option is simply dropped.

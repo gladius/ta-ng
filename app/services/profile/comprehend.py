@@ -1,7 +1,7 @@
 """Per-node COMPREHENSION for the report — the advisory "what this node does", from ONE small PROFILE_MODEL
 call per llm call-site. Descriptive + honest ONLY: it reconciles a coherent-vs-mixed verdict against the
 deterministic `distinct_system` count, grounds its claim in a trace_id + quote, and NEVER asserts a saving
-(the levers prove those). Reuses select.py's $0 sampling / digests / facts.
+(the downgrade proof does). Reuses select.py's $0 sampling / digests / facts.
 
 Runs through app.services.llm_client, whose base_url is litellm-gateway-swappable -> provider-agnostic. Each
 node is independent: one node's failure degrades to 'unavailable' for that node, it never breaks the report.

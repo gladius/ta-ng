@@ -54,7 +54,7 @@ def test_same_name_node_split_by_subgraph():
 
 
 def test_graph_path_top_level_not_self_nested():
-    # the fixed bug: a top-level tagged node must NOT be nested under its own name ('supervisor/supervisor').
+    # a top-level tagged node must NOT be nested under its own name ('supervisor/supervisor').
     n = _nodes()
     for top in ("supervisor", "research", "summarize", "responder"):
         assert top in n and n[top]["graph_path"] == "", "%s should be top-level, got %r" % (top, n[top]["graph_path"])

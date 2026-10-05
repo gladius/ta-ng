@@ -2,7 +2,7 @@
 
 Pure selection logic — open_weight_target is called with avail=None (no gating, no network). The one test that goes
 through downgrade.candidates (which consults registry.is_available) pins the gateway to None so availability is
-UNKNOWN -> True and nothing hits the network. Commercial mode is asserted UNCHANGED alongside, so the lane is
+UNKNOWN -> True and nothing hits the network. Commercial mode is asserted alongside to never yield an open-weight target, so the lane is
 provably additive."""
 from app.catalog import open_weight_target, meta
 from app.services import downgrade
@@ -56,7 +56,7 @@ def test_candidates_open_weight_mode_and_commercial_unchanged(monkeypatch):
         assert ow and ow[0]["reason"] == "open-weight"
         assert meta(ow[0]["cheaper"])["open_weight"] is True
 
-        com = downgrade.candidates(nodes, per_calls=1000)               # default = commercial, UNCHANGED
+        com = downgrade.candidates(nodes, per_calls=1000)               # default = commercial
         assert com and com[0]["reason"] in ("migration", "cost-downgrade")
         assert not meta(com[0]["cheaper"]).get("open_weight")           # never an open-weight target in commercial mode
     finally:

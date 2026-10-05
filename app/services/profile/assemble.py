@@ -1,7 +1,7 @@
 """Assemble a DEPLOYMENT PROFILE from the pinned graph — deterministic, $0, measured facts only.
 
 Cost is computed from measured tokens x the ONE catalog price map (app.catalog / config/models.json),
-the SAME source the downgrade lever uses — so profile and levers reconcile by construction. LangSmith's
+the SAME source the downgrade lever uses — so profile and downgrade reconcile by construction. LangSmith's
 own `cost_ls` is used only as a fallback for a model the catalog doesn't price (self-hosted / custom);
 if neither has a price we say so ("price unknown — add it to models.json") rather than invent a number.
 

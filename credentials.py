@@ -4,11 +4,10 @@ Every secret the auditor needs (LLM keys, connector tokens) resolves through her
 one auditable place that touches credentials. Precedence:
 
     1. process environment  (the production path — inject from a secrets manager, never a file)
-    2. a gitignored file at repo root  (DEV CONVENIENCE ONLY — see SECURITY.md)
+    2. a gitignored file at repo root  (DEV CONVENIENCE ONLY)
 
 A value is returned to the caller for the API call and is NEVER logged, printed, or written back to
-disk. `redact()` masks token-shaped strings for any defensive logging. See docs/SECURITY.md for the
-production model (least-privilege, read-only, per-workspace-scoped tokens, rotation).
+disk. `redact()` masks token-shaped strings for any defensive logging.
 """
 
 import os

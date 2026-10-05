@@ -1,10 +1,10 @@
 """Computed-view + proof store — a durable key->value store, backed by SQLAlchemy (SQLite in dev, Postgres in prod;
 chosen by DATABASE_URL — see app.services.db).
 
-Same put/peek/clear interface as the old in-memory dict, so every caller (snapshot, prove, comprehend, the routes)
-is UNCHANGED — but the state now lives in a SHARED database, so the app scales HORIZONTALLY: any Cloud Run instance
+Same put/peek/clear interface as an in-memory dict, so every caller (snapshot, prove, comprehend, the routes)
+is backend-agnostic — the state lives in a SHARED database, so the app scales HORIZONTALLY: any Cloud Run instance
 serves any step of a user's flow (page-load -> prove -> the after-prove re-fetch) instead of the whole flow being
-pinned to one process. That is the one change that removes the `--max-instances=1` constraint.
+pinned to one process.
 
   key   -> a tuple like ("snapshot", id) or prove.proof_key(...). Encoded to a stable JSON string, then SHA-256'd to
            a bounded 64-char primary key (the readable form is kept in `keytext` for debugging).

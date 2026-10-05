@@ -1,5 +1,5 @@
 """The durable KV store (app.services.store) on SQLite — proves the in-memory dict swap is a faithful drop-in AND
-now persists: arbitrary Python objects round-trip, overwrite/clear work, and a value SURVIVES an engine reset (i.e.
+persists: arbitrary Python objects round-trip, overwrite/clear work, and a value SURVIVES an engine reset (i.e.
 it's on disk / shareable across instances, not in a per-process dict). conftest points DATABASE_URL at a temp SQLite
 file, so this runs with zero install and never touches the dev or prod store."""
 from app.services import store, db

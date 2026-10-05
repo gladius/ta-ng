@@ -2,7 +2,7 @@
 (litellm_catalog, cache_probe, and future ones) stays single-purpose, the way _common.py serves the
 LangSmith diag tools.
 
-ONE config path: base_url + key resolve via `credentials` (.env) using the SAME keys llm_client reads, so the
+ONE config path: base_url + key resolve via `credentials` (.env) using the SAME keys app.registry reads, so the
 probes and the app never disagree on where/what the gateway is."""
 import os
 import re
@@ -30,7 +30,7 @@ def md_write(lines, out, append=False):
 
 # A Bedrock/Vertex underlying id nests route + vendor namespace + inference-profile version, e.g.
 #   bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0   vertex_ai/google/gemma-4-26b-a4b-it-maas
-# so the naive one-prefix strip missed nearly every Bedrock-Claude. Peel ALL route segments, the region.vendor
+# Peel ALL route segments, the region.vendor
 # namespace, and the trailing bedrock version, then let canonical_model finish (dated/alias/prefix matching).
 _VENDOR_RX = re.compile(r"^(?:(?:us|eu|apac|global)\.)?"
                         r"(?:anthropic|google|openai|meta|amazon|mistral|cohere|ai21|deepseek)\.")

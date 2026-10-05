@@ -64,9 +64,9 @@ def inspect(source, ws, project, n):
     print("RAW FETCH   source=%s  project=%s  (target=%d traces)" % (source, project, n))
     print("=" * 82)
     try:
-        runs = list(ad.fetch(project=project, traces=n))      # trace-complete (new connector)
+        runs = list(ad.fetch(project=project, traces=n))      # trace-complete
     except TypeError:
-        runs = list(ad.fetch(project=project, limit=n))       # old connector (no `traces` kw) -> run-window
+        runs = list(ad.fetch(project=project, limit=n))       # adapter without a `traces` kw -> run-window
     if not runs:
         print("  0 runs fetched — project empty, or wrong workspace/name.")
         return

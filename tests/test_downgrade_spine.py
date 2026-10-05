@@ -165,7 +165,7 @@ def test_thinking_detection():
 
 def test_same_label_distinct_keys():
     # Two call-sites share the display label 'supervisor' but are DISTINCT call-sites (distinct keys). They must
-    # stay two rows and both survive prove's key-indexed dict — the old label-keyed dict silently dropped one.
+    # stay two rows and both survive prove's key-indexed dict — a label-keyed dict would silently drop one.
     nodes = [
         {"key": "agent/supervisor~plan", "node": "supervisor", "model": "claude-sonnet-5",
          "avg_in": 2000, "avg_out": 300, "calls": 10, "graph_path": "researcher"},

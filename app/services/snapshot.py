@@ -7,7 +7,7 @@ graph ONCE, pin it under a snapshot id that the report URL carries, and every st
 — reads THAT snapshot by id. Nothing re-derives from the platform mid-flow, so identity can't move under the user.
 A NEW snapshot (fresh data) is minted only on an explicit re-audit.
 
-Held in the in-memory `store` (see its deployment note: run ONE Cloud Run instance). No TTL — an immutable snapshot
+Held in the durable `store`. No TTL — an immutable snapshot
 can't go stale.
 """
 import secrets

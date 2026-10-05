@@ -5,7 +5,7 @@ from app.services.profile.facts import fact_pack, _fs_distinct
 
 
 def test_frame_stripped_distinct():
-    # the review fix: a TEMPLATED output (varying id) must collapse to ONE structural form, not read as free-form.
+    # a TEMPLATED output (varying id) must collapse to ONE structural form, not read as free-form.
     assert _fs_distinct(["Refund for order 123", "Refund for order 456", "Refund for order 789"]) == 1
     assert _fs_distinct(["billing", "refund", "billing", "security"]) == 3, "distinct labels stay distinct"
     assert _fs_distinct(["The weather is nice", "Quantum physics is hard", "I like pizza"]) == 3, "free-form stays high"
@@ -20,7 +20,7 @@ def test_meridian_llm_pack():
         assert f["output_type"] in ("json", "short", "free-form")
         assert f["flow"] == {"upstream": [], "downstream": []}, "flat source -> no edges -> empty flow"
     assert fp["meridian-support/route"]["output_type"] == "short", "route is the short-output classifier"
-    # a node whose system VARIES per call is surfaced — exactly the compress gap the profiler's fact fixes.
+    # a node whose system VARIES per call is surfaced.
     assert fp["meridian-support/triage"]["distinct_system"] > 1, "triage has a dynamic system -> flagged"
     print("[ok] meridian: 6 llm packs; output_type + distinct_system surfaced (dynamic-system node flagged)")
 

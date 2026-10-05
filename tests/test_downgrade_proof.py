@@ -1,6 +1,6 @@
-"""Shared audit machinery — the provider-neutral pieces the profiled downgrade flow relies on ($0, no network).
+"""Shared audit machinery — the provider-neutral pieces the downgrade flow relies on ($0, no network).
 
-The downgrade VERDICT math lives in tests/test_downgrade_profiled.py (it tests app/services/profile_downgrade.py).
+The downgrade VERDICT math lives in app/services/downgrade_refset.py.
 This file covers what `replay` depends on and reuses: tool-schema binding (both Anthropic and OpenAI shapes),
 tool_choice translation, replay wiring, and the behaviour renderer.
 

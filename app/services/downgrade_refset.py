@@ -1,4 +1,4 @@
-"""Reference-set downgrade validation — the stable per-input verdict (DOWNGRADE-DESIGN.md).
+"""Reference-set downgrade validation — the stable per-input verdict.
 
 No prose contract, no confidence field. The original model's 5 own outputs ARE the acceptable-behaviour range, and
 "acceptable" is SELF-CALIBRATED: the cheaper may differ from the set ONLY in ways the set itself shows — so format /

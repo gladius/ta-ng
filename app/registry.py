@@ -1,5 +1,5 @@
 """The CONSOLIDATED model registry: config/models.json (reference) × the gateway's DEPLOYED set (availability —
-the source of truth for what can actually be called). Every lever gates its target on is_available(): recommending
+the source of truth for what can actually be called). The downgrade gates its target on is_available(): recommending
 a model the gateway does not serve is useless.
 
 Availability comes ONLY from the live gateway, never fabricated:
@@ -7,8 +7,8 @@ Availability comes ONLY from the live gateway, never fabricated:
   • no gateway (dev / Anthropic-direct) -> availability is UNKNOWN: is_available() returns True for everything, so
     the downgrade lever behaves exactly as it does offline and the models page shows 'availability: unknown'.
 No hardcoded deployment. NO public-catalog fallback — the public LiteLLM catalog is 'all models', NOT this
-gateway's deployed set, so it must never decide availability. The gateway switch is the SAME LLM_GATEWAY_URL that
-llm_client uses for transport, so 'are we on a gateway' has one answer for the whole app.
+gateway's deployed set, so it must never decide availability. The gateway switch is LLM_GATEWAY_URL, falling back to the
+ANTHROPIC_BASE_URL / LITELLM_BASE_URL / LLM_BASE_URL that llm_client uses for transport.
 """
 import json
 import urllib.request
@@ -83,7 +83,7 @@ def _load(force=False):
         for m in deployment:
             mi = m.get("model_info") or {}
             if mi.get("mode", "chat") != "chat":
-                continue                                   # embeddings/others aren't downgrade/cache targets
+                continue                                   # embeddings/others aren't downgrade targets
             c = resolve_deployed(m["underlying"])
             if c:
                 served.add(c)
@@ -133,7 +133,7 @@ def serving_name(model):
 
     Resolution order:
       1. already a known gateway wire name -> pass through unchanged (idempotent; lets a specific flavour be forced).
-      2. resolves EXACTLY / by anchored suffix to a served catalog id -> the gateway's own deployment name for it.
+      2. resolves (longest boundary-delimited catalog id) to a served catalog id -> the gateway's own deployment name for it.
       3. a gateway is configured but it's neither of the above -> raise ModelNotServable (LOUD, not a silent wrong send).
       4. no gateway (dev / Anthropic-direct) -> the name unchanged (canonical already IS the real callable id).
     canonical_exact never reverse-guesses, so a lookalike can't be silently mapped to the wrong model."""

@@ -1,7 +1,7 @@
 """Shared plumbing for the read-only diag tools, so they authenticate EXACTLY like the app's connector: API key,
 endpoint/host, and the workspace/tenant id all come from .env.
 
-The subtlety that used to 403 in prod: the app never audits the .env workspace blindly — the user PICKS a workspace
+The subtlety: the app never audits the .env workspace blindly — the user PICKS a workspace
 from the key's authorized list (source.workspaces()), so the tenant is always one the key can access AND one that
 holds the agent. A diag tool that just trusts .env's LANGSMITH_WORKSPACE_ID sends the wrong X-Tenant-Id -> 403 (or a
 NotFound if the key can reach that ws but the agent lives elsewhere). So for a project-scoped command we RESOLVE the

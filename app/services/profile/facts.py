@@ -6,7 +6,7 @@ Two variants (a node's type decides which):
 
 Modularity: this CONSUMES the shared graph (`app/services/graph.build`: nodes, structural_nodes, buckets, edges)
 + the profile sampler's `bucket_facts`. It OWNS only the profile-specific facts (frame-stripped distinct-output,
-role-shape, rag-present, flow-context). Nothing here calls an LLM, touches a lever, or lives outside `profile/`.
+role-shape, rag-present, flow-context). Nothing here calls an LLM or lives outside `profile/`.
 """
 import re
 
@@ -106,7 +106,7 @@ def llm_facts(node, bucket, edges):
 
 
 def nonllm_facts(snode, edges):
-    """The non-LLM structural pack. The NAME is the op — deterministic, no analyst, no lever."""
+    """The non-LLM structural pack. The NAME is the op — deterministic, no analyst."""
     return {
         "kind": snode["type"], "node": snode["node"], "key": snode["key"],
         "graph_path": snode.get("graph_path", ""),

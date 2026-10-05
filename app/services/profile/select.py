@@ -1,9 +1,8 @@
 """Profile-layer selection + full-bucket facts + structure-aware digests. Deterministic, $0.
 
-Three jobs, none of which is a judgment (that's the LLM's job in analyze.py):
+Three jobs, none of which is a judgment (that's the LLM's job in comprehend.py):
   1. SAMPLE — `_distinct(bucket, n)`, the SAME deterministic sampler the downgrade proof uses (app.services.audit),
-     so the profile describes the EXACT instances the proof re-runs, and the raw traces flow on to the levers
-     (compression is per-instance, so the sample must survive past profiling).
+     so the profile describes the EXACT instances the proof re-runs.
   2. FACTS  — counts over ALL N (not the sample). `distinct_system == 1` is the ground truth that the system prompt
      is identical on every call — a static verdict at 100% coverage, which the analyst reconciles against.
   3. DIGEST — a big instance (50k–200k tokens at enterprise scale) is reduced to a bounded head+tail skeleton so we
@@ -60,7 +59,7 @@ def _digest(trace, sample_systems):
 
 
 def select(bucket, n=5):
-    """-> {sample, digests, facts, coverage}. `sample` = the raw traces (the levers reuse them per-instance)."""
+    """-> {sample, digests, facts, coverage}. `sample` = the raw traces."""
     sample = _distinct(bucket, n)
     facts = bucket_facts(bucket)
     sample_systems = [_system_text(t) for t in sample]

@@ -185,7 +185,7 @@ class LangSmithAdapter(Adapter):
     def fetch(self, *, project=None, run_type=None, since_hours=None, limit=None,
               traces=None, revision=None, runs=None, api_key=None, api_url=None, **_):
         # run_type=None -> fetch the WHOLE tree (chain + llm + tool), which the graph layer needs to
-        # resolve node identity + topology. (Was llm-only; that flat view lost the tree — see connectors/graph.)
+        # resolve node identity + topology.
         if runs is not None:                                   # -- offline --
             if isinstance(runs, str):
                 runs = json.load(open(runs, encoding="utf-8"))
@@ -283,13 +283,11 @@ class LangSmithAdapter(Adapter):
         model = inv.get("model") or inv.get("model_name") or meta.get("ls_model_name")
         pt, ct = rec.get("prompt_tokens"), rec.get("completion_tokens")
         um = ((rec.get("outputs") or {}).get("llm_output") or {}).get("token_usage") or {}
-        # already-cached prompt tokens, if the platform reports them (Anthropic cache_read via LangChain) —
-        # lets caching detection avoid claiming a saving that is already realized. 0 when unreported.
+        # already-cached prompt tokens, if the platform reports them (Anthropic cache_read via LangChain). 0 when unreported.
         cached = (um.get("cache_read_input_tokens") or um.get("cache_read")
                   or (um.get("input_token_details") or {}).get("cache_read")
                   or (rec.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-        # cache WRITES (Anthropic cache_creation): distinguish 'caching OFF' (no reads AND no writes) from
-        # 'ON but cold / not reused' (writes>0, reads~0). Reads alone can't tell those apart. 0 when unreported.
+        # cache WRITES (Anthropic cache_creation). 0 when unreported.
         written = (um.get("cache_creation_input_tokens") or um.get("cache_creation")
                    or (um.get("input_token_details") or {}).get("cache_creation") or 0)
         usage = {"input_tokens": pt if pt is not None else um.get("prompt_tokens", 0),

@@ -10,7 +10,7 @@ downgrade lever actionable:
 and the AVAILABILITY GATE: a catalog model this gateway does NOT serve is not a valid downgrade target here.
 
 `--mock` runs the same join against a built-in representative deployment so the report can be shaped with no proxy
-in reach. Creds/base_url come from tools.diag._llm (the same .env keys llm_client reads). No writes to models.json.
+in reach. Creds/base_url come from tools.diag._llm (the same .env keys app.registry reads). No writes to models.json.
 
     python -m tools.diag.litellm_catalog --mock                 # segregate-and-use shape, $0, no proxy
     python -m tools.diag.litellm_catalog --out lp.md            # live: probe all endpoints + dump raw JSON

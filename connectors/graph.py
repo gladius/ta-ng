@@ -1,8 +1,8 @@
-"""The execution-graph layer — the spine the auditor now reasons over.
+"""The execution-graph layer — the spine the auditor reasons over.
 
 A recorded trace is a TREE of runs (chain -> chain -> llm/tool). This module folds N such trees (the
 recent runs of ONE agent) into a single agent execution graph, and derives the CALL-SITES the profiler
-audits from that structure — instead of the old flat "group llm runs by a metadata label" heuristic.
+audits from that structure — rather than a flat "group llm runs by a metadata label" heuristic.
 
 Why structural, not label-based (both proven to matter on real LangGraph traces):
   - A ReAct node emits >1 llm call under the SAME node (reason-call vs post-tool-call). They are
@@ -265,7 +265,7 @@ def build_graph(records, agent_default="agent"):
         s["ms"] += tr.get("runtime_ms", 0)
         s["n"] += 1
         s["cost_ls"] += tr.get("cost_ls") or 0                # LangSmith's own $ (authoritative when present)
-        s["tools"] += len(tr.get("tools_called") or [])       # tool-calling behaviour (captured, now surfaced)
+        s["tools"] += len(tr.get("tools_called") or [])       # tool-calling behaviour (captured)
         if tr.get("feedback_score") is not None:
             s["fb"].append(tr["feedback_score"])              # quality (only when evals are attached)
         if tr.get("ttft_ms") is not None:

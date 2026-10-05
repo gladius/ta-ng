@@ -96,8 +96,8 @@ def _has_cache_ctl(obj):
 #   dev  = Anthropic API direct   -> usage.cache_read_input_tokens / cache_creation_input_tokens
 #   prod = LiteLLM (OpenAI-shaped) -> usage.prompt_tokens_details.cached_tokens   (proven: gemini-3.7-flash = 4074)
 # The two shapes just name the cache read differently (LiteLLM issue #27763); usage() reads whichever the response
-# carries, so the cache prefix module never branches on provider. The only shape that HIDES the count is LiteLLM's
-# Anthropic-format /v1/messages passthrough — which neither environment uses, so it isn't a concern here.
+# carries, so no caller branches on provider. The only shape that HIDES the count is LiteLLM's
+# Anthropic-format /v1/messages passthrough — which is what client() speaks through a gateway, so a zero there is a transport limit.
 def _u_get(u, *names):
     """First present numeric field across attribute-style (Anthropic SDK) or dict-style (LiteLLM/OpenAI JSON) usage."""
     for n in names:
@@ -124,8 +124,8 @@ def _u_cached_details(u):
 
 def usage(resp):
     """Transport-agnostic token usage -> {input, output, cache_read, cache_write}. Accepts a full response, a bare
-    usage object, or a dict; Anthropic- or OpenAI/LiteLLM-shaped. THE reader for cache read/write, so every lever
-    is provider/transport-agnostic."""
+    usage object, or a dict; Anthropic- or OpenAI/LiteLLM-shaped. THE reader for cache read/write, so callers
+    are provider/transport-agnostic."""
     u = getattr(resp, "usage", None)
     if u is None:
         u = resp.get("usage", resp) if isinstance(resp, dict) else resp   # dict may be the response OR bare usage

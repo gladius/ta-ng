@@ -1,11 +1,11 @@
 """Regenerate the shipped demo fixture:  python -m connectors.recorded.build_fixture
 
 One agent, `meridian-support`, whose call-sites deliberately cover every verdict the auditor can reach, so the
-end-to-end demo shows real, PROVABLE wins on both levers:
+end-to-end demo shows real, PROVABLE downgrade win:
 
-  handler   (haiku-4-5)  ~6k-token stable policy prefix, caching off      -> CACHEABLE  (enable, proven live)
-  triage    (haiku-4-5)  same policy, but a per-call session line on top  -> BREAKER    (cache expansion: move it)
-  classify  (sonnet-4-5) trivial one-word sentiment on an overpowered tier -> DOWNGRADE  (-> haiku, judged)
+  handler   (haiku-4-5)  ~6k-token stable policy prefix
+  triage    (haiku-4-5)  same policy, but a per-call session line on top
+  route     (sonnet-4-5) long ticket routed to one category on an overpowered tier -> DOWNGRADE  (-> haiku, judged)
   summarize (haiku-4-5)  tiny prompt, already on the cheapest tier         -> nothing    (honest non-win)
 
 Every number the report shows is then proven by a real provider call — nothing here is asserted, only measured.
@@ -16,7 +16,7 @@ import json
 
 from contract.trace import build_trace
 
-# ── the enterprise policy every handler/triage call re-sends verbatim (the cacheable prefix) ──────────────────
+# ── the enterprise policy every handler/triage call re-sends verbatim ──────────────────
 _SECTIONS = [
     ("ROLE", "You are Meridian Support, the front-line assistant for Meridian Cloud's enterprise customers. You "
              "resolve billing, account, provisioning, and incident questions for paying organizations. You are "
@@ -166,7 +166,7 @@ _TOOLS = [
         "priority": {"type": "string"}, "reason": {"type": "string"}}, "required": ["priority", "reason"]}})],
 ]
 
-# diverse, realistic customer turns — enough distinct inputs for the judge + cache diversity checks
+# diverse, realistic customer turns — enough distinct inputs for the judge
 _HANDLER_MSGS = [
     "Our invoice INV-90233 shows two identical USD 240 charges on the 3rd. Can you refund the duplicate?",
     "We're on Enterprise Plus and provisioning in eu-west is failing with a quota error. What's the fix?",
@@ -189,7 +189,7 @@ _TRIAGE_MSGS = [
 ]
 # route — a HEAVY downgrade node: a real (long) ticket routed to one category. Big input on a premium tier for a
 # task the cheaper tier does identically → this is where downgrade actually pays off. Output is a single token so
-# the preservation judge is unambiguous and stable.
+# the judge is unambiguous and stable.
 _ROUTE_SYS = (
     "You are the Meridian ticket router. Read the customer ticket and account context, then reply with EXACTLY "
     "ONE category token from this list and nothing else:\n"
@@ -295,8 +295,7 @@ _SUMM_MSGS = [
 ]
 
 # ── kb_resolve — a RAG node. Per question the retriever returns ~6 KB articles (ONE relevant, the rest off-topic),
-# buried among each other, and the answer uses only the relevant one. The retrieved bulk is mostly IRRELEVANT — the
-# real EXTRACTIVE-COMPRESSION target (2026 research: RAG context is where 60-80% savings live). Varies per call.
+# buried among each other, and the answer uses only the relevant one. The retrieved bulk is mostly IRRELEVANT. Varies per call.
 _KB = {
  "refunds": "KB-REFUND — Refund policy. Refunds up to USD 500 may be issued directly once the account owner is verified "
             "and the charge confirmed via lookup_order. Between USD 500 and USD 5,000 require a documented reason and a "
@@ -346,7 +345,7 @@ def _kb_ctx(question, relevant, distractors):
 
 # ── supervisor — DYNAMIC system prompt: the operating POLICY (behavior-critical INSTRUCTIONS) is RAG-injected into
 # the SYSTEM prompt per ticket, so the system prompt VARIES per call. Unlike retrieved DOCUMENTS, injected
-# instructions can't be pruned without changing behaviour — so compression recovers little (the director's hard case).
+# instructions can't be pruned without changing behaviour.
 _SUP_BASE = ("You are the Meridian supervisor coordinating resolution across the support fleet. Apply the OPERATING "
              "POLICY retrieved for this ticket EXACTLY and without deviation — it is authoritative for this decision. "
              "Decide the next action, name the owning team, and cite the policy code (KB-*) you applied.\n\n"
@@ -379,11 +378,11 @@ def _trace(tid, node, model, system, user, output, tools=()):
 
 def build():
     traces = []
-    # handler — CACHEABLE: identical ~6k policy prefix on every call
+    # handler — identical ~6k policy prefix on every call
     for i, msg in enumerate(_HANDLER_MSGS):
         traces.append(_trace("h%02d" % i, "handler", "claude-haiku-4-5", HANDBOOK, msg,
                              "Acknowledged — reviewing your account now.", _TOOLS))
-    # triage — BREAKER: same policy, but a per-call session line breaks the byte-prefix
+    # triage — same policy, but a per-call session line on top
     for i, msg in enumerate(_TRIAGE_MSGS):
         sess = "[Session sx-%04d-%s at 2026-08-03T%02d:%02d:11Z priority=auto]\n" % (i * 7 + 13, "abcd"[i % 4], i, i * 3)
         traces.append(_trace("t%02d" % i, "triage", "claude-haiku-4-5", sess + HANDBOOK, msg,
@@ -396,11 +395,11 @@ def build():
         traces.append(_trace("s%02d" % i, "summarize", "claude-haiku-4-5",
                              "Summarize the support interaction in one sentence.", msg,
                              "A support issue was handled and resolved."))
-    # kb_resolve — RAG DOCUMENTS: mostly-irrelevant retrieved bulk in the USER turn -> the extractive-compression WIN
+    # kb_resolve — RAG DOCUMENTS: mostly-irrelevant retrieved bulk in the USER turn
     for i, (q, rel, dis) in enumerate(_KB_Q):
         traces.append(_trace("k%02d" % i, "kb_resolve", "claude-haiku-4-5", _KB_SYS, _kb_ctx(q, rel, dis),
                              "See the relevant KB article."))
-    # supervisor — RAG-INJECTED INSTRUCTIONS in a DYNAMIC system prompt -> behavior-critical, compression recovers little
+    # supervisor — RAG-INJECTED INSTRUCTIONS in a DYNAMIC system prompt -> behavior-critical
     for i, (ticket, pol) in enumerate(_SUP_Q):
         traces.append(_trace("v%02d" % i, "supervisor", "claude-sonnet-5", _sup_sys(pol), ticket,
                              "Supervisor decision recorded."))

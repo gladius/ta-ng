@@ -3,7 +3,7 @@
 There is a single graph builder: the connector's tree-folder (`source.pull_graph`), which resolves node
 identity from the run tree, splits a node by prompt shape (ReAct pre/post-tool are different call-sites),
 and computes real node->node edges. This module does NOT re-group; it just reshapes that builder's output
-into the neutral dict the app services (funnel, downgrade, audit, cli) render — so no connector type leaks
+into the neutral dict the app services (funnel, downgrade, audit) render — so no connector type leaks
 upward and every consumer keeps one stable shape.
 
   nodes = LLM call-sites with core stats (model, calls, avg tokens, graph_path, out_type)
@@ -43,7 +43,7 @@ def build(source_id, ws_id, project, limit=150):
                           "models": n.get("models_list") or [{"name": n["model"], "calls": s}],
                           "mixed": n.get("mixed_model", False), "graph_path": n.get("graph_path", ""),
                           "out_type": n.get("out_type"), "untagged": n.get("untagged", False),
-                          # MEASURED facts (were computed in connectors/graph but dropped here) — surfaced for
+                          # MEASURED facts — surfaced for
                           # the profile. Summed/weighted across content-variants below; the profile computes $
                           # from tokens x price (app.catalog), not from cost_ls (kept only as a cross-check).
                           "cost_ls": n.get("cost_ls", 0) or 0, "errors_excluded": n.get("errors_excluded", 0) or 0,

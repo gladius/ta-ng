@@ -86,7 +86,7 @@ def canonical_exact(raw):
     'bedrock/us.anthropic.claude-sonnet-5-v1:0' all give 'claude-sonnet-5' — while 'gpt-oss-120bx' gives None (no
     boundary) and 'gemma-3-1b' gives None (not a catalog id, and never mis-collapsed onto 'gemma-3-12b'). Longest-wins
     is the override lever: add a specific 'bedrock-claude-sonnet-5' entry and it takes precedence for that name.
-    Explicit aliases win first. This one substring match replaces the old peel-regexes + anchored matcher."""
+    Explicit aliases win first."""
     if not raw:
         return None
     r = str(raw).strip()
@@ -158,7 +158,7 @@ def next_cheaper(model, avg_in=None, avg_out=None, as_of=None, avail=None):
     Pareto rule, and 'newest' is our capability proxy within a tier. The pick is only a candidate — the paid audit
     re-runs it and books $ only on SAFE, so a mis-ranked pick fails as NOT-SAFE, never a false save.
 
-    No-mix pick (CLI / tests): the legacy Pareto target — most-capable callable model in the nearest lower tier
+    No-mix pick (tests): the legacy Pareto target — most-capable callable model in the nearest lower tier
     whose price is <= this model's on BOTH axes. Falls back to legacy file order for an untier'd model.
 
     Lifecycle guard: a candidate retiring within RETIRE_HORIZON_DAYS of `as_of` (retire_date in config/models.json)
@@ -238,7 +238,7 @@ def open_weight_target(model, avg_in=None, avg_out=None, as_of=None, avail=None)
     def _saves(si, so):
         if avg_in is not None and avg_out is not None:
             return avg_in * (in0 - si) + avg_out * (out0 - so) > 0
-        return si <= in0 and so <= out0 and (si < in0 or so < out0)   # no-mix: both-axes cheaper (CLI/tests)
+        return si <= in0 and so <= out0 and (si < in0 or so < out0)   # no-mix: both-axes cheaper (tests)
 
     def _cap_rank(s):                                                  # position in the capability-ordered block
         sibs = _ORDER[s].get("siblings", [])
