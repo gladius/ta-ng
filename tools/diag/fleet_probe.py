@@ -6,8 +6,6 @@ grouping collapses to 0 call-sites. This tool proves the identity IS recoverable
 is the chain run directly under the nearest `task` tool ancestor (mirrored in `langgraph_checkpoint_ns` nesting).
 Reuses the app's connector + .env creds, exactly like the other diag tools. No writes, no model calls, no cost.
 
-Full findings + the connector-resume kit: FLEET-DEEPAGENT-TRACES.md at the repo root.
-
     python -m tools.diag.fleet_probe                                  # project 'fleet' (the shared Fleet project)
     python -m tools.diag.fleet_probe --project fleet --n 5
     python -m tools.diag.fleet_probe --ws <WS_ID> --project <P> --n 5
