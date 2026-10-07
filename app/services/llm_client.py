@@ -180,7 +180,7 @@ def _anthropic_tool_choice(tc):
 def run(*, model, messages, max_tokens, system=None, tools=None, tool_choice=None, reasoning=False):
     """Provider-NEUTRAL model call — THE ONE boundary to swap for a litellm gateway in production. Callers pass
     INTENT (neutral tools/tool_choice/reasoning); this translates to the provider's request shape and returns a
-    NEUTRAL result {text, tool_calls:[{name, args}]}. Everything above this (detection, audit, verdict) stays
+    NEUTRAL result {text, tool_calls:[{name, args}], usage, latency_ms, model (as served), stop_reason, degraded}. Everything above this (detection, audit, verdict) stays
     provider-agnostic — to run through litellm, reimplement only this function.
 
     Neutral shapes:  tools=[{name, description, schema}]  ·  tool_choice=None|'any'|{'tool': name}  ·  reasoning=bool
@@ -198,18 +198,21 @@ def run(*, model, messages, max_tokens, system=None, tools=None, tool_choice=Non
         kw["thinking"] = {"type": "adaptive"}
         kw["output_config"] = {"effort": "low"}
         kw["max_tokens"] = max(max_tokens, 1536)
+    t0, degraded = time.time(), False
     try:
         r = _complete_raw(**kw)                              # NOT complete(): replay must keep the model-default
-    except Exception:                                        # temperature to sample natural run-to-run variance
-        if "thinking" in kw or "tool_choice" in kw:          # target can't reason / force -> best-effort, retry once
-            kw.pop("thinking", None); kw.pop("output_config", None); kw.pop("tool_choice", None)
-            r = _complete_raw(**kw)
-        else:
-            raise
+    except anthropic.BadRequestError:                        # temperature to sample natural run-to-run variance
+        if not ("thinking" in kw or "tool_choice" in kw):    # the target rejects reasoning / a forced tool ->
+            raise                                            # best effort once, and the result says it was degraded
+        kw.pop("thinking", None); kw.pop("output_config", None); kw.pop("tool_choice", None)
+        r = _complete_raw(**kw)
+        degraded = True
     text, tool_calls = [], []
     for b in r.content:
         if getattr(b, "type", None) == "text":
             text.append(b.text)
         elif getattr(b, "type", None) == "tool_use":
             tool_calls.append({"name": b.name, "args": b.input})
-    return {"text": "\n".join(text), "tool_calls": tool_calls}
+    return {"text": "\n".join(text), "tool_calls": tool_calls, "usage": usage(r),
+            "latency_ms": round((time.time() - t0) * 1000), "model": getattr(r, "model", None) or model,
+            "stop_reason": getattr(r, "stop_reason", None), "degraded": degraded}

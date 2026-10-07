@@ -54,16 +54,16 @@ AUDIT_JUDGE_MAX_TOKENS = int(os.environ.get("AUDIT_JUDGE_MAX_TOKENS", "5000"))  
 AUDIT_JUDGE_REF_CHARS = int(os.environ.get("AUDIT_JUDGE_REF_CHARS", "16000"))
 
 # ── Reference-set downgrade engine — verdict math ──────────────────────────────────────────────────────────────────
-# No prose contract. The original's 5 own outputs ARE the acceptable range; ONE fit-judge decides "does this candidate
-# belong to that set?", and every judgement is a MAJORITY VOTE (the probe proved a single judge flips on borderline
-# outputs). Per input we get two rates by the IDENTICAL mechanism: original self-consistency (each original vs the
-# other 4, leave-one-out) and cheaper fit (each cheaper vs all 5 originals). The verdict is arithmetic on the two.
-#   JUDGE_VOTES     = judge each candidate this many times, majority wins (kills per-output judge flip).
-#   COHERENCE_FLOOR = original must reproduce itself at least this often (of 5) or we can't certify -> NOT-SAFE.
-#   DOWNGRADE_MARGIN= cheaper is SAFE if `cheaper_rate >= original_rate - MARGIN` (proportional to the original).
+# The engine is validation/engine.py. The original's own outputs ARE the acceptable range; ONE coherence call rates
+# how consistent that range is, and each cheaper output is judged by MAJORITY VOTE on whether it belongs to it (a
+# single judge flips on borderline outputs). Both rates are FRACTIONS, so the run counts above can change freely.
+#   JUDGE_VOTES     = judge each cheaper output this many times, majority wins.
+#   COHERENCE_FLOOR = the original must agree with itself at least this fraction of the time, else the input is
+#                     unverified (no stable behaviour to certify against) -> NOT-SAFE.
+#   DOWNGRADE_MARGIN= cheaper is SAFE if `cheaper_fit_rate >= original_consistency - MARGIN` (fractions).
 #   NODE_SAFE_RATIO = node is SAFE if at least this FRACTION of inputs are SAFE (softer than all-must-pass, which
 #                     amplifies per-input noise). 0.8 = allow one input of five to fail.
 AUDIT_JUDGE_VOTES = int(os.environ.get("AUDIT_JUDGE_VOTES", "3"))
-AUDIT_COHERENCE_FLOOR = int(os.environ.get("AUDIT_COHERENCE_FLOOR", "3"))
-AUDIT_DOWNGRADE_MARGIN = int(os.environ.get("AUDIT_DOWNGRADE_MARGIN", "1"))
+AUDIT_COHERENCE_FLOOR = float(os.environ.get("AUDIT_COHERENCE_FLOOR", "0.6"))
+AUDIT_DOWNGRADE_MARGIN = float(os.environ.get("AUDIT_DOWNGRADE_MARGIN", "0.2"))
 AUDIT_NODE_SAFE_RATIO = float(os.environ.get("AUDIT_NODE_SAFE_RATIO", "0.8"))

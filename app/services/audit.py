@@ -5,7 +5,8 @@ model's own 5 outputs (recorded + re-runs) ARE the acceptable-behaviour referenc
 majority-voted to belong to it. `audit_node` samples N distinct inputs and delegates to it.
 
 This module provides the pieces that path shares:
-  replay(trace, model)   -> re-run the recorded request on `model`, behaviour as ONE string (text + tool calls).
+  replay(trace, model)   -> re-run the recorded request on `model`: {output (text + tool calls as ONE string),
+                            usage, latency_ms, model as served, stop_reason, degraded}.
   _recorded(trace)       -> the ORIGINAL's recorded output — the reference we must preserve (never re-run).
   _distinct / _tools / _tool_choice / _render / _messages -> input sampling + provider-neutral request shaping.
 """
@@ -108,7 +109,7 @@ def _tool_choice(raw):
 
 
 def replay(trace, model, max_tokens=None):
-    """Re-run the recorded request on `model` (the cheaper tier) and return its behavior as one rendered string.
+    """Re-run the recorded request on `model` and return the run record (behaviour rendered as one string + usage).
     This expresses NEUTRAL INTENT only — bind these tools, force this tool_choice, use reasoning if the node did —
     and hands it to llm_client.run, which owns the provider request shape (swap that one boundary for litellm in
     prod). Tools BOUND (read-only), never executed. Output budget SCALES to the recorded output (+headroom), capped
@@ -134,7 +135,8 @@ def replay(trace, model, max_tokens=None):
                          system=(system.strip() or None), tools=tools,
                          tool_choice=(_tool_choice(trace.get("tool_choice")) if tools else None),
                          reasoning=bool(trace.get("thinking_enabled")))
-    return _render(res["text"], res["tool_calls"])
+    return {"output": _render(res["text"], res["tool_calls"]), "usage": res["usage"], "latency_ms": res["latency_ms"],
+            "model": res["model"], "stop_reason": res["stop_reason"], "degraded": res["degraded"]}
 
 
 def _recorded(trace):
