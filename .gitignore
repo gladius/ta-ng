@@ -24,3 +24,6 @@ venv/
 # local dev store + generated local state (SQLite .db + WAL/SHM sidecars live here) — prod uses Postgres via DATABASE_URL
 .data/
 
+
+# browser-test snapshots and screenshots (contain page text)
+.playwright-mcp/
