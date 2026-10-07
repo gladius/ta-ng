@@ -8,6 +8,9 @@ import json
 
 from urllib.parse import quote
 
+import contextlib
+import threading
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,9 +19,26 @@ from fastapi.templating import Jinja2Templates
 from app.services import nav
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-app = FastAPI(title="Token Auditor")
+@contextlib.asynccontextmanager
+async def _lifespan(app):
+    """Run VALIDATION_INPROCESS_WORKERS validation workers inside the web process (default 2: one command locally).
+    In production set it to 0 and run `python -m validation.worker` separately, as many as needed."""
+    import credentials
+    from validation import worker
+    stop = threading.Event()
+    worker.start(int(credentials.get_config("VALIDATION_INPROCESS_WORKERS", "2")), stop)
+    yield
+    stop.set()
+    worker.release_all()
+
+
+app = FastAPI(title="Token Auditor", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=os.path.join(_HERE, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(_HERE, "templates"))
+
+from app.web import validations                                     # noqa: E402  the validation API + its pages
+app.include_router(validations.api)
+app.include_router(validations.pages)
 
 
 @app.get("/healthz/db")

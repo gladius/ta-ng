@@ -1,17 +1,23 @@
-"""The durable KV store (app.services.store) on SQLite — proves the in-memory dict swap is a faithful drop-in AND
-persists: arbitrary Python objects round-trip, overwrite/clear work, and a value SURVIVES an engine reset (i.e.
+"""The durable KV store (app.services.store) on SQLite — values round-trip as JSON (never pickle), overwrite/clear
+work, and a value SURVIVES an engine reset (i.e.
 it's on disk / shareable across instances, not in a per-process dict). conftest points DATABASE_URL at a temp SQLite
 file, so this runs with zero install and never touches the dev or prod store."""
 from app.services import store, db
 
 
-def test_roundtrip_preserves_arbitrary_objects():
+def test_roundtrip_is_plain_json():
     key = ("snapshot", "abc123")
-    val = {"nodes": [{"k": "n1", "avg_in": 4000}], "t": (1, 2, 3), "s": {"x", "y"}}
-    store.put(key, val)
-    got = store.peek(key)
-    assert got == val
-    assert isinstance(got["t"], tuple) and isinstance(got["s"], set)   # pickle keeps types; NOT JSON-coerced to lists
+    store.put(key, {"nodes": [{"k": "n1", "avg_in": 4000}], "t": (1, 2, 3), "s": {"y", "x"}})
+    assert store.peek(key) == {"nodes": [{"k": "n1", "avg_in": 4000}], "t": [1, 2, 3], "s": ["x", "y"]}
+
+
+def test_pickled_row_reads_as_missing_and_never_runs():
+    import gzip, pickle
+    from app.services.store import _kv, _keyid, _keytext, _upsert, _now, _ensure
+    eng, key = _ensure(), ("snapshot", "pickled")
+    with eng.begin() as conn:                                          # a row as the pickle-era store wrote it
+        conn.execute(_upsert(eng, _keyid(key), _keytext(key), gzip.compress(pickle.dumps({"a": 1})), _now()))
+    assert store.peek(key) is None
 
 
 def test_overwrite_then_clear_one():

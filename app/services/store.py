@@ -8,8 +8,9 @@ pinned to one process.
 
   key   -> a tuple like ("snapshot", id) or prove.proof_key(...). Encoded to a stable JSON string, then SHA-256'd to
            a bounded 64-char primary key (the readable form is kept in `keytext` for debugging).
-  value -> ANY Python object the caller stored (a graph, a proof dict). pickled + gzipped into a BLOB, so it round-
-           trips IDENTICALLY — a true drop-in for the in-memory dict (no JSON coercion of tuples/sets/etc.).
+  value -> plain data (a graph, a proof dict, a job) stored as gzipped JSON: tuples come back as lists, sets as sorted
+           lists. Not pickle — a pickled row runs code when loaded, so anyone able to write the table could run code
+           in every instance. A row that is not JSON (an old pickled one) reads as missing.
 
 No TTL: a snapshot is pinned per report and a proof is FROZEN — a re-audit mints a NEW key. Retention/pruning of
 un-audited scratch snapshots is a separate concern (a cleanup job), so paid proofs are never silently evicted. The
@@ -18,7 +19,6 @@ ONE backend-specific line is the upsert (ON CONFLICT), isolated in _upsert().
 import gzip
 import hashlib
 import json
-import pickle
 import datetime
 
 from sqlalchemy import Table, Column, String, Text, LargeBinary, DateTime, select, delete
@@ -31,7 +31,7 @@ _kv = Table(
     "kv", db.metadata,
     Column("k", String(64), primary_key=True),          # sha256 hex of the encoded key — bounded, index-safe
     Column("keytext", Text, nullable=False),            # the readable key, for debugging / inspection
-    Column("v", LargeBinary, nullable=False),           # pickled + gzipped value
+    Column("v", LargeBinary, nullable=False),           # gzipped JSON value
     Column("created_at", DateTime, nullable=False),
 )
 
@@ -58,6 +58,12 @@ def _keytext(key):
 def _keyid(key):
     return hashlib.sha256(_keytext(key).encode("utf-8")).hexdigest()
 
+def _jsonable(v):
+    if isinstance(v, (set, frozenset)):
+        return sorted(v, key=str)
+    raise TypeError("store values must be plain data, got %s" % type(v).__name__)
+
+
 def _now():
     return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)   # naive UTC — portable across backends
 
@@ -76,7 +82,7 @@ def _upsert(eng, k, keytext, blob, now):
 def put(key, value):
     """Store `value` under `key` (overwrites). Durable — survives process restart and is visible to every instance."""
     eng = _ensure()
-    blob = gzip.compress(pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
+    blob = gzip.compress(json.dumps(value, default=_jsonable).encode("utf-8"))
     with eng.begin() as conn:
         conn.execute(_upsert(eng, _keyid(key), _keytext(key), blob, _now()))
     return value
@@ -87,7 +93,12 @@ def peek(key):
     eng = _ensure()
     with eng.connect() as conn:
         row = conn.execute(select(_kv.c.v).where(_kv.c.k == _keyid(key))).first()
-    return pickle.loads(gzip.decompress(row[0])) if row else None
+    if not row:
+        return None
+    try:
+        return json.loads(gzip.decompress(row[0]))
+    except ValueError:                                  # not JSON (a row written by the pickle-era store): rebuild it
+        return None
 
 
 def clear(key=None):
