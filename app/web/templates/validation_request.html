@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% from "_evidence.html" import evidence, evidence_style, evidence_script_body %}
+{% from "_vparts.html" import vstyle, money, ms, pct, verdict %}
+{% block title %}{{ r.id }} · {{ job.id }}{% endblock %}
+{% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/validations">validations</a> <span class="sep">›</span> <a href="/validations/{{ job.id }}">{{ job.id }}</a> <span class="sep">›</span> <b>{{ r.id }}</b>{% endblock %}
+{% block content %}
+{{ evidence_style() }}
+{{ vstyle() }}
+<h1>{{ r.id }}</h1>
+<p class="v-meta">Original <span class="mono">{{ r.model }}</span> · its own answers agree {{ r.reference.agree if r.reference.agree is not none else '?' }}/{{ r.reference.of }} · {{ ms(orig_latency_ms) }}, {{ money(orig_cost_usd) }} per call</p>
+
+<table class="grid">
+  <thead><tr><th>Candidate</th><th>Model</th><th>Verdict</th><th class="num">Fit</th><th class="num">Latency</th><th class="num">Cost / call</th><th>Judge's reason</th></tr></thead>
+  <tbody>
+  {% for x in cands %}{% set c = x.c %}
+    <tr>
+      <td class="name nowrap"><a href="?cand={{ c.label | urlencode }}#evidence">{{ c.label }}</a></td>
+      <td class="mono nowrap">{{ c.model }}{% if x.served and x.served != [c.model] %} <span class="v-small">answered by {{ x.served | join(', ') }}</span>{% endif %}</td>
+      <td>{{ verdict(c) }}</td>
+      <td class="num">{{ pct(c.kept / c.of if c.of else none) }}</td>
+      <td class="num nowrap">{{ ms(c.latency_ms) }}</td>
+      <td class="num nowrap">{{ money(c.cost_usd) }}</td>
+      <td>{{ c.judge_reason or c.reason }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% for x in cands %}{% if x.c.label == cand %}{% set c = x.c %}
+<section class="v-panel" id="evidence">
+  <h2>{{ c.label }} <span class="mono v-small">{{ c.model }}</span></h2>
+  <p>{{ verdict(c) }} {{ c.judge_reason or c.reason }}{% if c.judge_reason %} <span class="v-small">({{ c.reason }})</span>{% endif %}</p>
+  {{ evidence([x.row], ok_word='within', bad_word='outside', who=c.label ~ ' (' ~ c.model ~ ')', run_meta=c.label ~ ' run', open=True) }}
+</section>
+{% endif %}{% endfor %}
+<script>
+  {{ evidence_script_body() }}
+</script>
+{% endblock %}

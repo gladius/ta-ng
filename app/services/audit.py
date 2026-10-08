@@ -108,11 +108,16 @@ def _tool_choice(raw):
     return None                                           # auto / none / unknown -> don't force
 
 
+# The Anthropic SDK refuses a non-streaming call that may run past 10 minutes ("Streaming is required ..."),
+# i.e. max_tokens above ~21.3k. Logged requests often ask for 32k+ while answering far less, so re-runs are capped
+# here, the original's and the candidates' alike. ponytail: an original longer than this re-runs truncated.
+NONSTREAMING_MAX_TOKENS = 21_000
+
+
 def replay(trace, model, max_tokens=None):
     """Re-run the recorded request on `model` and return the run record (behaviour rendered as one string + usage).
     This expresses NEUTRAL INTENT only — bind these tools, force this tool_choice, use reasoning if the node did —
-    and hands it to llm_client.run, which owns the provider request shape (swap that one boundary for litellm in
-    prod). Tools BOUND (read-only), never executed. Output budget SCALES to the recorded output (+headroom), capped
+    and hands it to llm_client.run, which owns the provider request shape. Tools BOUND (read-only), never executed. Output budget SCALES to the recorded output (+headroom), capped
     at the model's real max_output. temperature left at the model DEFAULT on purpose — re-runs must SAMPLE the model's
     natural run-to-run variance (that's exactly what coherence/self-consistency measures), and the thinking path
     rejects a custom temperature anyway. The deterministic side (judges, optimizer, profiler) goes through complete()."""
@@ -129,6 +134,7 @@ def replay(trace, model, max_tokens=None):
             if rec_out <= 0:
                 rec_out = len(trace.get("output") or "") // 4
             max_tokens = min(registry.max_output(model), max(512, rec_out * 3))
+    max_tokens = min(max_tokens, NONSTREAMING_MAX_TOKENS)
     system = "\n".join(m["content"] for m in trace.get("input_messages", []) if m.get("role") == "system")
     tools = _tools(trace)
     res = llm_client.run(model=model, messages=_messages(trace), max_tokens=max_tokens,

@@ -2,6 +2,7 @@
 import types
 
 import anthropic
+import pytest
 
 from validation import judges, engine, Spec, Item, Candidate, validate, validate_many
 from app.services import downgrade_refset, llm_client
@@ -57,8 +58,8 @@ def test_within_with_measured_runs(monkeypatch):
     _judges(monkeypatch)
     r = validate(_item(), Spec(), _run)
     c = r["candidates"][0]
-    assert (c["verdict"], c["kept"], c["of"]) == ("within", 5, 5)
-    assert r["reference"]["of"] == 5 and r["reference"]["runs"][0]["recorded"] is True
+    assert (c["verdict"], c["kept"], c["of"], c["fit_rate"]) == ("within", 5, 5, 1.0)
+    assert r["reference"]["of"] == 5 and r["reference"]["consistency"] == 1.0 and r["reference"]["runs"][0]["recorded"] is True
     assert c["runs"][0]["latency_ms"] == 10 and c["runs"][0]["cost_usd"] > 0 and c["runs"][0]["votes"] == "3/3"
     assert c["latency_ms"] == 10 and r["spend_usd"] > 0 and c["judge_reason"] == "why"
 
@@ -155,3 +156,105 @@ def test_run_records_usage_and_degrades_only_on_400(monkeypatch):
         raise AssertionError("a non-400 failure must propagate, not silently change the request")
     except RuntimeError:
         pass
+
+
+def test_gateway_is_one_setting_and_skips_its_cache_and_log(monkeypatch):
+    from app import registry
+    monkeypatch.setattr(llm_client, "_client", None)
+    monkeypatch.setattr(llm_client, "_gateway", False)
+    monkeypatch.setattr(registry, "_gateway", lambda: ("http://gw.test:4000", "sk-gw"))
+    c = llm_client.client()                                   # the registry's (url, key) is what we send through
+    assert str(c.base_url).startswith("http://gw.test:4000") and c.api_key == "sk-gw" and llm_client._gateway
+
+    sent = []
+    fake = types.SimpleNamespace(messages=types.SimpleNamespace(create=lambda **kw: (sent.append(kw), _resp())[1]))
+    monkeypatch.setattr(llm_client, "client", lambda: fake)
+    monkeypatch.setattr(registry, "serving_name", lambda m: m)
+    llm_client._complete_raw(model="gpt-5.4-mini", messages=[], max_tokens=5)
+    monkeypatch.setattr(llm_client, "_gateway", False)
+    llm_client._complete_raw(model="claude-haiku-4-5", messages=[], max_tokens=5)
+    assert sent[0]["extra_body"] == {"cache": {"no-cache": True}, "no-log": True}   # fresh answer, not logged as traffic
+    assert "extra_body" not in sent[1]                        # the direct Anthropic API gets the plain request
+
+
+def test_unreachable_endpoint_is_raised_not_recorded(monkeypatch):
+    import httpx
+    monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
+    def refused(**kw):
+        raise anthropic.APIConnectionError(request=httpx.Request("POST", "http://gw.test"))
+    monkeypatch.setattr(llm_client, "client", lambda: types.SimpleNamespace(messages=types.SimpleNamespace(create=refused)))
+    for call in (lambda: llm_client._complete_raw(model="m", messages=[], max_tokens=5),            # after its retries
+                 lambda: validate(_item(), Spec(), lambda trace, model: llm_client._complete_raw(model=model))):
+        try:
+            call()
+            raise AssertionError("an unreachable endpoint must not become a failed run")
+        except llm_client.Unreachable:
+            pass
+
+
+def test_replays_stay_under_the_sdks_non_streaming_limit(monkeypatch):
+    from app.services import audit, llm_client
+    seen = {}
+
+    def run(**kw):
+        seen.update(kw)
+        return {"text": "ok", "tool_calls": [], "usage": {}, "latency_ms": 1, "model": kw["model"],
+                "stop_reason": "end_turn", "degraded": False}
+    monkeypatch.setattr(llm_client, "run", run)
+    audit.replay({"input_messages": [{"role": "user", "content": "hi"}], "max_output_tokens": 32768}, "gpt-5.4-mini")
+    assert seen["max_tokens"] == audit.NONSTREAMING_MAX_TOKENS        # logged 32k would be refused by the SDK
+
+
+def test_out_of_credit_is_raised_at_once_not_recorded(monkeypatch):
+    import httpx
+    calls = []
+    monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
+    for status, body in ((429, "Budget has been exceeded! Key=token-auditor Current cost: 25.0"),     # LiteLLM budget
+                         (429, "{'error': {'message': 'You exceeded your current quota, please check your plan', "
+                               "'type': 'insufficient_quota', 'code': 'insufficient_quota'}}"),       # OpenAI
+                         (400, "Your credit balance is too low to access the Anthropic API"),         # Anthropic
+                         (401, "invalid x-api-key")):
+        def refused(**kw):
+            calls.append(1)
+            raise anthropic.APIStatusError(body, response=httpx.Response(status, request=httpx.Request("POST", "http://gw")),
+                                           body=None)
+        monkeypatch.setattr(llm_client, "client", lambda: types.SimpleNamespace(messages=types.SimpleNamespace(create=refused)))
+        calls.clear()
+        with pytest.raises(llm_client.Refused):
+            llm_client._complete_raw(model="m", messages=[], max_tokens=5)
+        assert len(calls) == 1                                     # not retried
+        with pytest.raises(llm_client.Refused):                    # a model call raises it, not an unverified run
+            validate(_item(), Spec(), lambda trace, model: llm_client._complete_raw(model=model))
+    for status, body in ((401, "key not allowed to access model. This key can only access models=['gpt-5.4']"),
+                         (403, "Request blocked by content policy"),
+                         (429, "Quota exceeded for metric: generate_content requests per minute. "
+                               "You exceeded your current quota")):                  # one model / request / a rate limit
+        e = anthropic.APIStatusError(body, response=httpx.Response(status, request=httpx.Request("POST", "http://gw")),
+                                     body=None)
+        assert not llm_client._refused(e), body
+
+
+def test_a_timeout_is_one_slow_call_not_an_unreachable_endpoint(monkeypatch):
+    import httpx
+    monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
+    def slow(**kw):
+        raise anthropic.APITimeoutError(request=httpx.Request("POST", "http://gw.test"))
+    monkeypatch.setattr(llm_client, "client", lambda: types.SimpleNamespace(messages=types.SimpleNamespace(create=slow)))
+    with pytest.raises(anthropic.APITimeoutError):
+        llm_client._complete_raw(model="m", messages=[], max_tokens=5)
+    _judges(monkeypatch)
+    c = validate(_item(), Spec(), lambda trace, model: llm_client._complete_raw(model=model))["candidates"][0]
+    assert c["verdict"] == "unverified"                          # that request, not the whole job
+
+
+def test_a_failed_judge_call_leaves_the_request_unverified(monkeypatch):
+    _judges(monkeypatch)
+    def blocked(*a):
+        raise RuntimeError("400 output blocked by content filter")
+    monkeypatch.setattr(engine.judges, "fit", blocked)
+    c = validate(_item(), Spec(), _run)["candidates"][0]
+    assert (c["verdict"], c["reason"]) == ("unverified", "a judge call failed: 400 output blocked by content filter")
+    _judges(monkeypatch)
+    monkeypatch.setattr(engine.judges, "coherence", blocked)
+    c = validate(_item(), Spec(), _run)["candidates"][0]
+    assert c["verdict"] == "unverified" and c["reason"].startswith("a judge call failed")

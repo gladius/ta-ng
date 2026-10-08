@@ -8,25 +8,38 @@ production set it to 0 and scale workers separately. On shutdown, groups still i
 import argparse
 import signal
 import threading
+import traceback
 
+from app.services.llm_client import Unreachable
 from validation import jobs
 
 POLL_S = 2.0
+UNREACHABLE_WAIT_S = 30     # the model endpoint is down: its group went back to the queue; try again after this
+ERROR_WAIT_S = 10           # anything else unexpected (e.g. the database dropped): logged, then the thread carries on
 _held = {}                  # thread's worker id -> token of the group it is running
 
 
 def loop(worker, stop):
     while not stop.is_set():
-        got = jobs.claim(worker)
-        if not got:
-            stop.wait(POLL_S)
-            continue
-        job_id, token, group = got
-        _held[worker] = token
         try:
-            jobs.run_group(job_id, token, group)
-        finally:
-            _held.pop(worker, None)
+            got = jobs.claim(worker)
+            if not got:
+                stop.wait(POLL_S)
+                continue
+            job_id, token, group = got
+            _held[worker] = token
+            try:
+                jobs.run_group(job_id, token, group)
+            finally:
+                _held.pop(worker, None)
+        except Unreachable as e:
+            print("validation worker %s: model endpoint unreachable (%s); retrying in %ds" % (worker, e, UNREACHABLE_WAIT_S),
+                  flush=True)
+            stop.wait(UNREACHABLE_WAIT_S)
+        except Exception:                          # a group it held goes stale and is taken over; the thread lives on
+            print("validation worker %s: unexpected error; retrying in %ds" % (worker, ERROR_WAIT_S), flush=True)
+            traceback.print_exc()
+            stop.wait(ERROR_WAIT_S)
 
 
 def start(n, stop):

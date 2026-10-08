@@ -15,6 +15,17 @@ import tempfile
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_gateway(monkeypatch):
+    """Never reach a real LLM gateway from a test, even when .env points at one. A test that needs one patches its own."""
+    from app import registry
+    from app.services import llm_client
+    monkeypatch.setattr(registry, "_gateway", lambda: (None, None))
+    monkeypatch.setattr(llm_client, "_client", None)
+    monkeypatch.setattr(llm_client, "_gateway", False)
+    registry.refresh()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_store():
     from app.services import db

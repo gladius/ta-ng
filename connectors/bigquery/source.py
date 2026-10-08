@@ -5,6 +5,11 @@ logs (trust_router's `litellm.v_requests`). Three .env settings; everything else
     BQ_REQUEST_COLUMN   the request: an OpenAI messages array, or a request body holding "messages" (+ "tools",
                         "tool_choice", "max_tokens")
     BQ_RESPONSE_COLUMN  the response: an OpenAI chat completion (id, model, choices, usage) — LiteLLM's logged shape
+    BQ_ID_COLUMN        (optional, default request_id) the call's id, for validations submitted by request_id
+    BQ_PARAMS_COLUMN    (optional) a JSON column with max_tokens / tools / tool_choice, when the request column holds
+                        only the messages (as trust_router's view does: model_parameters)
+    BQ_MODEL_COLUMN     (optional) the model that answered; set it when a router is in front, whose responses name
+                        the router (e.g. jev-router) instead (trust_router's view: model). Else the response's model
 
 A request log names no agent and no graph node, so the table is ONE agent and a call-site is its system prompt
 (numbers masked, so a date in the prompt doesn't split it). Auth is Google Application Default Credentials.
@@ -81,6 +86,38 @@ def to_trace(request, response, agent):
         tools_defined=schema.norm_tools(body.get("tools")), tool_choice=body.get("tool_choice"), source="bigquery")
     t["max_output_tokens"] = body.get("max_tokens") or body.get("max_completion_tokens")
     return t
+
+
+def lookup(request_ids):
+    """{request_id: (request body, response or None)} for the logged calls among `request_ids`, in one query. The body
+    is OpenAI-format: messages, max_tokens / tools / tool_choice when logged, and as `model` the model that answered
+    (BQ_MODEL_COLUMN, else the response's). BQ_ID_COLUMN (default request_id) holds the id; BQ_PARAMS_COLUMN, when
+    set, a JSON column holding max_tokens and tools (the request column then being only the messages). Unknown ids
+    are simply absent.
+    ponytail: scans the whole table per call; filter on its partition column once it gets large."""
+    from google.cloud import bigquery
+    table, req_col, resp_col = _cfg()
+    id_col = credentials.get_config("BQ_ID_COLUMN", "request_id")
+    params_col, model_col = credentials.get_config("BQ_PARAMS_COLUMN"), credentials.get_config("BQ_MODEL_COLUMN")
+    extra = "".join(", `%s` AS %s" % (c, a) for c, a in ((params_col, "params"), (model_col, "served")) if c)
+    sql = "SELECT `{i}` AS id, `{q}` AS request, `{r}` AS response{x} FROM `{t}` WHERE `{i}` IN UNNEST(@ids)".format(
+        i=id_col, q=req_col, r=resp_col, t=table, x=extra)
+    rows = _client(table.split(".")[0]).query(sql, job_config=bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ArrayQueryParameter("ids", "STRING", list(request_ids))])).result(timeout=120)
+    out = {}
+    for row in rows:
+        req, resp = _json(row["request"]), _json(row["response"])
+        body = dict(req) if isinstance(req, dict) else {"messages": req}
+        params = _json(row["params"]) if params_col else None
+        if isinstance(params, dict):
+            body = {**{k: params[k] for k in ("max_tokens", "max_completion_tokens", "tools", "tool_choice")
+                       if params.get(k) is not None}, **body}
+        resp = resp if isinstance(resp, dict) else None
+        served = (row["served"] if model_col else None) or (resp or {}).get("model")
+        if served:
+            body["model"] = served
+        out[row["id"]] = (body, resp)
+    return out
 
 
 class BigQuerySource(DataSource):

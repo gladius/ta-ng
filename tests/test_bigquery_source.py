@@ -89,3 +89,33 @@ def test_no_adc_falls_back_to_gcloud_login(monkeypatch):
     monkeypatch.setattr(bq.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "tok-123\n"})())
     assert bq.SOURCE.pull("bq", "v_requests") == ({}, [])
     assert used["token"] == "tok-123"
+
+
+def test_lookup_by_request_id(monkeypatch):
+    monkeypatch.setenv("BQ_TABLE", "proj.ds.v_requests")
+    monkeypatch.setenv("BQ_REQUEST_COLUMN", "messages")
+    monkeypatch.setenv("BQ_RESPONSE_COLUMN", "response")
+    monkeypatch.setenv("BQ_PARAMS_COLUMN", "model_parameters")
+    monkeypatch.setenv("BQ_MODEL_COLUMN", "model")
+    routed = dict(_RESP, model="jev-router")                    # a router in front names itself in the response
+    rows = [{"id": "chatcmpl-1", "request": json.dumps(_msgs("Billing agent.")), "response": json.dumps(routed),
+             "params": json.dumps({"max_tokens": 32768, "tools": [{"type": "function", "function": {"name": "refund"}}],
+                                   "temperature": 0.2}), "served": "openai/gpt-5.4-mini"}]
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, project):
+            pass
+
+        def query(self, sql, job_config=None):
+            seen["sql"], seen["ids"] = sql, job_config.query_parameters[0].values
+            return type("Job", (), {"result": lambda self, timeout=None: rows})()
+
+    from google.cloud import bigquery
+    monkeypatch.setattr(bigquery, "Client", FakeClient)
+    got = bq.lookup(["chatcmpl-1", "chatcmpl-2"])
+    assert "WHERE `request_id` IN UNNEST(@ids)" in seen["sql"] and sorted(seen["ids"]) == ["chatcmpl-1", "chatcmpl-2"]
+    body, resp = got["chatcmpl-1"]
+    assert body["model"] == "openai/gpt-5.4-mini" and body["max_tokens"] == 32768 and "temperature" not in body
+    assert [t["function"]["name"] for t in body["tools"]] == ["refund"] and resp["id"] == "chatcmpl-1"
+    assert list(got) == ["chatcmpl-1"]                         # an unknown id is just absent

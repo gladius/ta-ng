@@ -25,8 +25,7 @@ from sqlalchemy import Table, Column, String, Text, LargeBinary, DateTime, selec
 
 from app.services import db
 
-# Registered on the shared db.metadata; the store create_all's it on first use (see _ensure). Phase B's entity
-# tables (snapshot / call_site / proof) will register here too and be created the same way.
+# Registered on the shared db.metadata; db.ready() creates it on first use (see _ensure).
 _kv = Table(
     "kv", db.metadata,
     Column("k", String(64), primary_key=True),          # sha256 hex of the encoded key — bounded, index-safe
@@ -36,20 +35,12 @@ _kv = Table(
 )
 
 
-_ready_engine = None                                    # the engine we've create_all'd against (re-runs after db.reset)
-
-
 def _ensure():
     """Return the engine, creating the store's tables on first use if they're missing — create_all is CREATE TABLE IF
     NOT EXISTS for everything on db.metadata: idempotent, and a no-op once the tables exist. Seamless: the first store
     call in a process initializes the schema, so there's no migration step and no init endpoint. Re-runs when the
     engine changes (a test called db.reset())."""
-    global _ready_engine
-    eng = db.engine()
-    if _ready_engine is not eng:
-        db.metadata.create_all(eng)
-        _ready_engine = eng
-    return eng
+    return db.ready()
 
 
 def _keytext(key):

@@ -1,7 +1,7 @@
 """The ONE place the LLM provider is configured. A single shared Anthropic client + a thin `complete()` wrapper
-with bounded retry on transient errors (429 / 5xx / connection). Every paid caller (audit, downgrade_refset, profile) goes
-through here, so the key, the client, and the retry policy live in exactly one file — and swapping providers or
-tuning retry is a one-file change.
+with bounded retry on transient errors (429 / 5xx / connection). Every paid caller (audit, downgrade_refset, profile,
+the validation engine and judges) goes through here, so the key, the client, and the retry policy live in exactly one
+file. With LLM_GATEWAY_URL set, the same client talks to a LiteLLM gateway, which serves every provider.
 
 The Anthropic client is thread-safe, so `complete()` is safe to call from the parallel proof workers.
 """
@@ -12,23 +12,46 @@ import threading
 import credentials
 import anthropic
 
+class Unreachable(Exception):
+    """The model endpoint (Anthropic or the gateway) could not be reached, even after retries. It says nothing about
+    the model, so a caller retries later instead of recording a failed call."""
+
+
+class Refused(Exception):
+    """The provider or the gateway refuses the ACCOUNT, not this request: out of credit or quota, over a budget, or not
+    allowed (401/403). Every call gets the same answer until someone fixes it, so it is raised at once, unretried."""
+
+
+_REFUSED = ("insufficient_quota", "credit balance is too low", "budget_exceeded", "budget has been exceeded")
+# about ONE model or ONE request, not the account: recorded as that call's failure, the job goes on
+_NOT_ACCOUNT = ("access model", "model_access_denied", "not allowed to access", "content policy", "content_policy",
+                "guardrail", "safety")
+
+
+def _refused(e):
+    text = str(e).lower()
+    if any(w in text for w in _NOT_ACCOUNT):
+        return False
+    return e.status_code in (401, 403) or any(w in text for w in _REFUSED)
+
+
 _client = None
+_gateway = False            # True when calls go through a LiteLLM gateway
 _lock = threading.Lock()
 
 
 def client():
-    global _client
+    global _client, _gateway
     if _client is None:
         with _lock:
             if _client is None:
-                # base_url points at the real Anthropic API by default, OR at a litellm gateway when set — litellm's
+                # The real Anthropic API by default, OR a LiteLLM gateway when LLM_GATEWAY_URL is set — litellm's
                 # /v1/messages is Anthropic-format and translates the SAME request to OpenAI/Gemini/etc., so replay
-                # can PROVE non-Anthropic call-sites through the gateway (no code change per provider). None => default.
-                _client = anthropic.Anthropic(
-                    api_key=credentials.get_secret("ANTHROPIC_API_KEY",
-                                                   aliases=("ANTHROPIC_KEY", "CLAUDE_API_KEY", "LITELLM_API_KEY")),
-                    base_url=credentials.get_config("ANTHROPIC_BASE_URL", None,
-                                                    aliases=("LITELLM_BASE_URL", "LLM_BASE_URL")))
+                # can PROVE non-Anthropic call-sites through the gateway (no code change per provider). The registry
+                # resolves the same (url, key), so availability and transport can never point at different places.
+                from app import registry                 # lazy: registry -> catalog only, no cycle back into llm_client
+                base, key = registry._gateway()
+                _client, _gateway = anthropic.Anthropic(api_key=key, base_url=base), bool(base)
     return _client
 
 
@@ -44,18 +67,25 @@ def _complete_raw(**kw):
     from app.registry import serving_name                 # lazy: registry -> catalog only, no cycle back into llm_client
     if kw.get("model"):
         kw = {**kw, "model": serving_name(kw["model"])}
+    c = client()
+    if _gateway:                 # LiteLLM: its response cache would hand repeated runs one copy, and its request log
+        kw = {**kw, "extra_body": {"cache": {"no-cache": True}, "no-log": True}}   # (-> BigQuery) is production traffic
     last = None
     for attempt in range(4):
         try:
-            return client().messages.create(**kw)
+            return c.messages.create(**kw)
         except anthropic.APIStatusError as e:
             last = e
+            if _refused(e):                                  # out of credit / quota / budget, or no access
+                raise Refused(str(e)[:300]) from e
             if e.status_code < 500 and e.status_code != 429:
                 raise                                        # client error — don't retry
         except (anthropic.APIConnectionError, anthropic.APITimeoutError) as e:
             last = e
         time.sleep(min(8.0, 1.5 * (2 ** attempt)))
-    raise last
+    if isinstance(last, anthropic.APIConnectionError) and not isinstance(last, anthropic.APITimeoutError):
+        raise Unreachable(str(last)) from last              # can't connect: the endpoint itself is down. A timeout is
+    raise last                                               # one slow call: that run fails, the request is unverified
 
 
 def cache_block(text):
@@ -178,10 +208,9 @@ def _anthropic_tool_choice(tc):
 
 
 def run(*, model, messages, max_tokens, system=None, tools=None, tool_choice=None, reasoning=False):
-    """Provider-NEUTRAL model call — THE ONE boundary to swap for a litellm gateway in production. Callers pass
-    INTENT (neutral tools/tool_choice/reasoning); this translates to the provider's request shape and returns a
-    NEUTRAL result {text, tool_calls:[{name, args}], usage, latency_ms, model (as served), stop_reason, degraded}. Everything above this (detection, audit, verdict) stays
-    provider-agnostic — to run through litellm, reimplement only this function.
+    """Provider-NEUTRAL model call. Callers pass INTENT (neutral tools/tool_choice/reasoning); this translates to the
+    request shape and returns a NEUTRAL result {text, tool_calls:[{name, args}], usage, latency_ms, model (as served),
+    stop_reason, degraded}, so everything above it (detection, audit, verdict) stays provider-agnostic.
 
     Neutral shapes:  tools=[{name, description, schema}]  ·  tool_choice=None|'any'|{'tool': name}  ·  reasoning=bool
     Anthropic implementation below."""

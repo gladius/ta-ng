@@ -43,10 +43,15 @@ def _default_run(trace, model):
 
 
 def _call(run, trace, model):
-    """One model call -> run record. A failure is a record too (the item becomes unverified), never an exception."""
+    """One model call -> run record. A failure is a record too (the item becomes unverified), never an exception —
+    except an unreachable endpoint or a refused account (out of credit, over budget), which say nothing about the
+    model: raised for the caller to wait or stop instead of recording unverified results."""
     try:
         r = dict(run(trace, model))
     except Exception as e:
+        from app.services.llm_client import Refused, Unreachable
+        if isinstance(e, (Unreachable, Refused)):
+            raise
         return {"output": "", "error": str(e)[:200], "model": model, "usage": None, "latency_ms": None, "cost_usd": None}
     r.setdefault("model", model)
     r["cost_usd"] = cost_of(r.get("model"), r.get("usage"))
@@ -100,11 +105,21 @@ def validate_many(items, spec, run=None):
              for j in range(spec.candidate_runs) if not runs[(i, c)][j].get("error") for _ in range(spec.votes)]
 
     def judge(job):
+        from app.services.llm_client import Refused, Unreachable
         kind, i, c, j = job
         ref_out = [r["output"] for r in reference[i]]
-        if kind == "coh":
-            return judges.coherence(reqs[i], ref_out, spec)
-        return judges.fit(ref_out, runs[(i, c)][j]["output"], reqs[i], spec)
+        try:
+            if kind == "coh":
+                return judges.coherence(reqs[i], ref_out, spec)
+            return judges.fit(ref_out, runs[(i, c)][j]["output"], reqs[i], spec)
+        except (Unreachable, Refused):
+            raise
+        except Exception as e:                                  # e.g. a content filter on this one request
+            why = "a judge call failed: %s" % str(e)[:200]
+            if kind == "coh":
+                return {"agree": None, "of": len(ref_out), "divergent": set(), "reasons": {}, "cost_usd": 0.0,
+                        "error": why}
+            return None, why, 0.0                               # no vote: the run counts as not judged
     verdicts = defaultdict(list)
     for job, v in zip(jobs, _pmap(judge, jobs, spec.max_parallel)):
         verdicts[job[:3]].append(v)
@@ -119,10 +134,12 @@ def validate_many(items, spec, run=None):
         cands = []
         for c, cand in enumerate(it.candidates):
             cruns, rows, kept = runs[(i, c)], [], 0
+            unjudged = None
             for j, r in enumerate(cruns):
                 votes = verdicts[("fit", i, c)][j * spec.votes:(j + 1) * spec.votes] if not r.get("error") else []
+                unjudged = unjudged or next((w for k, w, _ in votes if k is None), None)
                 yes = sum(1 for k, _, _ in votes if k)
-                ok = bool(votes) and yes * 2 > len(votes)
+                ok = bool(votes) and yes * 2 > len(votes) and all(k is not None for k, _, _ in votes)
                 kept += ok
                 spend += (r["cost_usd"] or 0) + sum(cost for _, _, cost in votes)
                 rows.append({**{k: r.get(k) for k in ("output", "model", "usage", "latency_ms", "cost_usd", "error",
@@ -134,18 +151,23 @@ def validate_many(items, spec, run=None):
             failed = sum(1 for r in cruns if r.get("error")) + (0 if ref_ok[i] else len(cruns))
             over = ref_over or any(len(r["output"] or "") > spec.cap_chars for r in cruns)
             verdict, reason = _verdict(kept, len(cruns), failed, over, coh, spec)
+            if ref_ok[i] and (coh.get("error") or unjudged):           # a judge call failed: nothing to certify
+                verdict, reason = "unverified", coh.get("error") or unjudged
             if not ref_ok[i]:
                 reason = "a reference re-run of the original failed: " + next(r["error"] for r in ref if r.get("error"))
             decisive = [x["reason"] for x in rows if x["reason"] and x["kept"] == (verdict == "within")]
             timed = [r["latency_ms"] for r in cruns if r.get("latency_ms")]
             priced = [r["cost_usd"] for r in cruns if r.get("cost_usd") is not None]
             cands.append({"label": cand.label, "model": cand.model, "kept": kept, "of": len(cruns),
+                          "fit_rate": round(kept / len(cruns), 3) if cruns else None,
                           "verdict": verdict, "reason": reason, "runs": rows,
                           "judge_reason": Counter(decisive).most_common(1)[0][0] if decisive else "",
                           "latency_ms": round(sum(timed) / len(timed)) if timed else None,
                           "cost_usd": round(sum(priced) / len(priced), 6) if priced else None})
         out.append({"id": it.id, "model": it.model,
                     "reference": {"agree": coh["agree"], "of": len(ref),
+                                  "consistency": round(coh["agree"] / len(ref), 3) if coh["agree"] is not None and ref
+                                  else None,
                                   "runs": [{**{k: r.get(k) for k in ("output", "model", "usage", "latency_ms",
                                                                       "cost_usd", "error", "recorded", "stop_reason")},
                                             "agrees": (n + 1) not in coh["divergent"],

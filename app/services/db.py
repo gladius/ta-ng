@@ -11,8 +11,9 @@ temp DB, reset, run). Nothing backend-specific lives here except the SQLite prag
 isolated in store.py.
 """
 import os
+import threading
 
-from sqlalchemy import create_engine, event, MetaData
+from sqlalchemy import create_engine, event, exc, MetaData
 
 import credentials
 
@@ -22,16 +23,21 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 _DATA_DIR = os.path.join(_REPO_ROOT, ".data")
 _DEFAULT_SQLITE = "sqlite:///" + os.path.join(_DATA_DIR, "audit_store.db")
 
-# The ONE metadata every table registers on (store's kv today; Phase B's snapshot/proof tables next). The store
-# create_all's it on first use (CREATE TABLE IF NOT EXISTS, idempotent) — see app/services/store.py.
+# The ONE metadata every table registers on (the store's kv, the validation_* tables). ready() creates them on first
+# use (CREATE TABLE IF NOT EXISTS, idempotent).
 metadata = MetaData()
 
 _engine = None
+_tables_for = None          # (engine, tables registered) last created: a module imported later adds tables
+_tables_lock = threading.Lock()
 
 
 def url():
     """The active DATABASE_URL (or the dev SQLite default). Never logged with credentials intact by callers."""
-    return credentials.get_config("DATABASE_URL", _DEFAULT_SQLITE)
+    u = credentials.get_config("DATABASE_URL")
+    if not u and os.environ.get("K_SERVICE"):                    # on Cloud Run a local SQLite file is lost per instance
+        raise RuntimeError("DATABASE_URL is not set: Cloud Run needs a shared Postgres")
+    return u or _DEFAULT_SQLITE
 
 
 def engine():
@@ -40,6 +46,24 @@ def engine():
     if _engine is None:
         _engine = _build(url())
     return _engine
+
+
+def ready():
+    """The engine, with every table on `metadata` created if missing (CREATE TABLE IF NOT EXISTS: no migration step
+    for a new table). One thread per process does it. When another instance creates the same tables at that moment,
+    Postgres rejects the second CREATE; the retry then finds them made."""
+    global _tables_for
+    eng = engine()
+    key = (eng, len(metadata.tables))
+    if _tables_for != key:
+        with _tables_lock:
+            if _tables_for != key:
+                try:
+                    metadata.create_all(eng)
+                except exc.DBAPIError:
+                    metadata.create_all(eng)
+                _tables_for = key
+    return eng
 
 
 def _ensure_sqlite_dir(u):
@@ -53,7 +77,7 @@ def _ensure_sqlite_dir(u):
 
 def _build(u):
     sqlite = u.startswith("sqlite")
-    kw = {"pool_pre_ping": True, "future": True}
+    kw = {"pool_pre_ping": True, "future": True, "hide_parameters": True}   # no prompt text in error logs
     if sqlite:
         _ensure_sqlite_dir(u)                                    # create .data/ (or any custom dir) before opening
         kw["connect_args"] = {"check_same_thread": False}        # one file, shared across the prove thread-pool
