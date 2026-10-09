@@ -1,36 +1,46 @@
 {% extends "base.html" %}
 {% from "_evidence.html" import evidence, evidence_style, evidence_script_body %}
-{% from "_vparts.html" import vstyle, money, ms, pct, verdict %}
+{% from "_vparts.html" import vstyle, money, ms, verdict, vword, squares, legend, vsbar %}
 {% block title %}{{ r.id }} · {{ job.id }}{% endblock %}
 {% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/validations">validations</a> <span class="sep">›</span> <a href="/validations/{{ job.id }}">{{ job.id }}</a> <span class="sep">›</span> <b>{{ r.id }}</b>{% endblock %}
 {% block content %}
 {{ evidence_style() }}
 {{ vstyle() }}
+<style>.why{font-size:13px;line-height:1.45;min-width:240px}</style>
 <h1>{{ r.id }}</h1>
-<p class="v-meta">Original <span class="mono">{{ r.model }}</span> · its own answers agree {{ r.reference.agree if r.reference.agree is not none else '?' }}/{{ r.reference.of }} · {{ ms(orig_latency_ms) }}, {{ money(orig_cost_usd) }} per call</p>
+<p class="v-meta">Original <span class="mono">{{ r.model }}</span> · in <a href="/validations/{{ job.id }}">{{ job.id }}</a></p>
 
+<h2>Models on this request</h2>
 <table class="grid">
-  <thead><tr><th>Candidate</th><th>Model</th><th>Verdict</th><th class="num">Fit</th><th class="num">Latency</th><th class="num">Cost / call</th><th>Judge's reason</th></tr></thead>
+  <thead><tr><th>Label</th><th>Model</th><th>Answers</th><th>Latency</th><th>Cost / call</th><th>Judge's reason</th></tr></thead>
   <tbody>
+    <tr class="baseline">
+      <td class="name nowrap">original</td>
+      <td class="mono nowrap">{{ r.model }}</td>
+      <td class="nowrap"><span class="sq">{% for x in r.reference.runs %}<i class="{{ 'a-base' if x.agrees else 'a-unclear' }}" title="{{ 'recorded answer' if x.recorded else 'own re-run' }}{% if not x.agrees and x.reason %}: {{ x.reason }}{% endif %}"></i>{% endfor %}</span> <span class="v-small">baseline · agree {{ r.reference.agree if r.reference.agree is not none else '?' }}/{{ r.reference.of }}</span></td>
+      <td>{{ vsbar(orig_latency_ms, orig_latency_ms, ms(orig_latency_ms), is_base=True) }}</td>
+      <td>{{ vsbar(orig_cost_usd, orig_cost_usd, money(orig_cost_usd), is_base=True) }}</td>
+      <td class="v-small">{% for x in r.reference.runs if not x.agrees and x.reason %}{{ x.reason }}{% if not loop.last %}; {% endif %}{% endfor %}</td>
+    </tr>
   {% for x in cands %}{% set c = x.c %}
     <tr>
       <td class="name nowrap"><a href="?cand={{ c.label | urlencode }}#evidence">{{ c.label }}</a></td>
       <td class="mono nowrap">{{ c.model }}{% if x.served and x.served != [c.model] %} <span class="v-small">answered by {{ x.served | join(', ') }}</span>{% endif %}</td>
-      <td>{{ verdict(c) }}</td>
-      <td class="num">{{ pct(c.kept / c.of if c.of else none) }}</td>
-      <td class="num nowrap">{{ ms(c.latency_ms) }}</td>
-      <td class="num nowrap">{{ money(c.cost_usd) }}</td>
-      <td>{{ c.judge_reason or c.reason }}</td>
+      <td class="nowrap"><span class="v-cell verdict-{{ c.verdict }}">{{ vword(c.verdict) }} {{ squares(c.runs) }}</span></td>
+      <td>{{ vsbar(c.latency_ms, orig_latency_ms, ms(c.latency_ms)) }}</td>
+      <td>{{ vsbar(c.cost_usd, orig_cost_usd, money(c.cost_usd)) }}</td>
+      <td class="why">{{ c.judge_reason or c.reason }}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+{{ legend() }}
 
 {% for x in cands %}{% if x.c.label == cand %}{% set c = x.c %}
 <section class="v-panel" id="evidence">
   <h2>{{ c.label }} <span class="mono v-small">{{ c.model }}</span></h2>
   <p>{{ verdict(c) }} {{ c.judge_reason or c.reason }}{% if c.judge_reason %} <span class="v-small">({{ c.reason }})</span>{% endif %}</p>
-  {{ evidence([x.row], ok_word='within', bad_word='outside', who=c.label ~ ' (' ~ c.model ~ ')', run_meta=c.label ~ ' run', open=True) }}
+  {{ evidence([x.row], ok_word='passes', bad_word='drifts', who=c.label ~ ' (' ~ c.model ~ ')', run_meta=c.label ~ ' run', open=True) }}
 </section>
 {% endif %}{% endfor %}
 <script>

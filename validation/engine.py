@@ -58,6 +58,9 @@ def _call(run, trace, model):
     return r
 
 
+ANSWERS = ("match", "acceptable", "drift", "unclear")       # what each candidate answer was judged
+
+
 def _recorded_run(item):
     u = item.request.get("usage") or {}
     usage = {"input": u.get("input_tokens", 0), "output": u.get("output_tokens", 0),
@@ -142,11 +145,15 @@ def validate_many(items, spec, run=None):
                     unjudged = unjudged or next(w for k, w, _ in votes if k is None)
                 yes = sum(1 for k in decided if k)
                 ok = len(decided) * 2 > len(votes) and yes * 2 > len(decided)
+                loose = sum(1 for k, w, _ in votes if k and w.startswith("acceptable:"))
+                category = ("unclear" if r.get("error") or not votes or len(decided) * 2 <= len(votes) else
+                            ("acceptable" if loose * 2 > yes else "match") if ok else "drift")
                 kept += ok
                 spend += (r["cost_usd"] or 0) + sum(cost for _, _, cost in votes)
                 rows.append({**{k: r.get(k) for k in ("output", "model", "usage", "latency_ms", "cost_usd", "error",
                                                        "degraded", "stop_reason")},
-                             "kept": ok, "votes": "%d/%d" % (yes if ok else len(decided) - yes, len(decided)) if votes else "",
+                             "kept": ok, "category": category,
+                             "votes": "%d/%d" % (yes if ok else len(decided) - yes, len(decided)) if votes else "",
                              "reason": next((w for k, w, _ in votes if k == ok), votes[0][1] if votes else
                                             (r.get("error") or "")),
                              "judges": [{"kept": k, "reason": w} for k, w, _ in votes]})
@@ -160,7 +167,9 @@ def validate_many(items, spec, run=None):
             decisive = [x["reason"] for x in rows if x["reason"] and x["kept"] == (verdict == "within")]
             timed = [r["latency_ms"] for r in cruns if r.get("latency_ms")]
             priced = [r["cost_usd"] for r in cruns if r.get("cost_usd") is not None]
+            answers = Counter(x["category"] for x in rows)
             cands.append({"label": cand.label, "model": cand.model, "kept": kept, "of": len(cruns),
+                          "answers": {k: answers.get(k, 0) for k in ANSWERS},
                           "fit_rate": round(kept / len(cruns), 3) if cruns else None,
                           "verdict": verdict, "reason": reason, "runs": rows,
                           "judge_reason": Counter(decisive).most_common(1)[0][0] if decisive else "",

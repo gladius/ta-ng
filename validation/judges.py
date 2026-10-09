@@ -70,7 +70,7 @@ _CATEGORY = {"EQUIVALENT": True, "VARIATION": True, "KEPT": True, "DRIFT": False
 def parse_fit(raw):
     """-> (kept, reason). kept: True (equivalent, or a variation the original allows), False (drift), or None when the
     judge is unsure or its reply has no verdict: an abstaining vote, never read as a pass or a fail. A variation's or
-    an unsure vote's reason says so ("variation: ...")."""
+    an unsure vote's reason says so in the words users see ("acceptable: ...", "unclear: ...")."""
     m = re.search(r"^\W*(?:[Vv]erdict\W*)?(EQUIVALENT|VARIATION|DRIFT|UNSURE|KEPT|BROKE)\b", raw or "", flags=re.M)
     if not m:
         return None, "no verdict in the judge's reply"
@@ -78,7 +78,8 @@ def parse_fit(raw):
     kept = _CATEGORY[word]
     tail = raw[m.end():].split("\n", 1)[0].strip(" \t:.-–—*_`|")
     reason = tail[:240] or {True: "matches the set", False: "differs from the set", None: "the judge is unsure"}[kept]
-    return kept, ("%s: %s" % (word.lower(), reason) if word in ("VARIATION", "UNSURE") else reason)
+    shown = {"VARIATION": "acceptable", "UNSURE": "unclear"}.get(word)
+    return kept, ("%s: %s" % (shown, reason) if shown else reason)
 
 
 def parse_coherence(raw, total):

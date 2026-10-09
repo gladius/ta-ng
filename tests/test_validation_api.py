@@ -504,4 +504,34 @@ def test_job_list_shows_each_candidates_result(client):
     assert [(s["label"], s.get("within_rate"), s.get("cost_vs_original_pct")) for s in got["summary"]] == [
         ("original", None, None), ("router-a", 1.0, -80), ("router-b", 0.0, -90)]
     page = client.get("/validations").text
-    assert "<b>router-a</b> 100% within, -80% cost" in page and "<b>router-b</b> 0% within, -90% cost" in page
+    assert "100% pass · -80% cost" in page and "0% pass · -90% cost" in page
+
+
+def test_a_batch_counts_each_labels_answers(client, monkeypatch):
+    def counted(items, spec, run=None):
+        out = _fake_engine(items, spec)
+        for r in out:
+            r["candidates"][0]["answers"] = {"match": 3, "acceptable": 1, "drift": 1, "unclear": 0}
+        return out
+    monkeypatch.setattr(jobs, "validate_many", counted)
+    job_id = _post(client, {"items": [_item(i) for i in range(3)]})
+    _work()
+    by = {s["label"]: s.get("answers") for s in jobs.summary(job_id)}
+    assert by == {"original": None, "router-a": {"match": 9, "acceptable": 3, "drift": 3, "unclear": 0},
+                  "router-b": None}                              # router-b's results carry no counts (older results)
+    assert "60% match" in client.get("/validations/" + job_id).text
+
+
+def test_a_new_optional_column_is_added_to_an_existing_table():
+    from sqlalchemy import Column, Integer, Table, inspect, text
+    from app.services import db
+    eng = db.ready()
+    with eng.begin() as c:
+        c.execute(text("CREATE TABLE late_column_probe (id INTEGER PRIMARY KEY)"))
+    t = Table("late_column_probe", db.metadata, Column("id", Integer, primary_key=True), Column("extra", Integer))
+    try:
+        db.ready()
+        assert "extra" in {c["name"] for c in inspect(db.engine()).get_columns("late_column_probe")}
+    finally:
+        t.drop(db.engine(), checkfirst=True)
+        db.metadata.remove(t)

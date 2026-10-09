@@ -1,11 +1,14 @@
-{# Shared by the validation pages: styles and small formatters. #}
+{# Shared by the validation pages: styles, small formatters, and the comparison visuals.
+   Words users see: a request PASSES / DRIFTS / is NOT VERIFIED (the API keeps within / outside / unverified);
+   each candidate answer is a MATCH, ACCEPTABLE (differs only where the original itself varies), DRIFT or UNCLEAR. #}
 {% macro vstyle() %}<style>
   .v-meta{color:var(--muted);margin:4px 0 6px;font-variant-numeric:tabular-nums}
   .v-warn{color:var(--bad-ink,#b3231d)}
   .v-links{margin:0 0 var(--s5);font-size:13px}
   .v-small{font-size:12px;color:var(--muted)}
-  .v-delta{font-size:11.5px;color:var(--muted);margin-left:4px}
+  .v-delta{font-size:11.5px;color:var(--muted);margin-left:4px;white-space:nowrap}
   .v-delta.good{color:var(--ok-ink)}
+  .v-delta.bad{color:var(--bad)}
   .v-filters{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px;font-size:13px}
   .v-filters a{padding:4px 11px;border:1px solid var(--line);border-radius:999px;text-decoration:none;color:var(--muted)}
   .v-filters a.on{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -14,17 +17,61 @@
   .v-search button{padding:5px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font:inherit;cursor:pointer}
   .v-pager{display:flex;gap:14px;align-items:center;font-size:13px;margin:10px 0}
   .v-grid td{vertical-align:middle}
-  .v-cell{display:inline-block;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap}
-  .v-cell .fit{font-weight:500;margin-left:4px;opacity:.8}
+  .v-cell{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap}
+  .v-cell .fit{font-weight:500;opacity:.8}
   .verdict-within{background:var(--ok-bg);color:var(--ok-ink)}
   .verdict-outside{background:#fbe9e7;color:#b3231d}
-  .verdict-unverified{background:#fdf3e0;color:#8a5a00}
+  .verdict-unverified{background:#f1efec;color:#6b6b72}
   .v-panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 20px;margin-top:var(--s5)}
   .v-panel h2{margin:0 0 4px}
   .nowrap{white-space:nowrap}
+  /* answer categories: one colour each, used by the bar, the squares and the legend */
+  .a-match{background:#1f7a46} .a-acceptable{background:#8fc7a3} .a-drift{background:#c0392b} .a-unclear{background:#cfcac3}
+  .a-base{background:#6b6b72}
+  .abar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:#eeece9;min-width:120px}
+  .abar span{display:block;height:100%}
+  .abar.wide{height:14px;border-radius:7px}
+  .abar-cap{font-size:11.5px;color:var(--muted);margin-top:4px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .sq{display:inline-flex;gap:3px;vertical-align:middle}
+  .sq i{display:inline-block;width:11px;height:11px;border-radius:2px}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--muted);margin:8px 0 0}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+  /* a value against the original: the tick is the original (100%), the fill this row's value, green if lower */
+  .vsb{display:inline-grid;grid-template-columns:auto auto;column-gap:8px;row-gap:2px;align-items:center;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .vsb-track{position:relative;display:inline-block;width:84px;height:8px;border-radius:4px;background:#eeece9}
+  .vsb-track b{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:#2f8a5a}
+  .vsb-track b.up{background:#c0392b}
+  .vsb-track b.base{background:#6b6b72}
+  .vsb-track i{position:absolute;left:56px;top:-4px;bottom:-4px;width:2px;border-radius:1px;background:#18181b;opacity:.55}
+  .vsb .pc{font-weight:700;font-size:13px}
+  .vsb .pc.good{color:var(--ok-ink)} .vsb .pc.bad{color:var(--bad)}
+  .vsb .val{grid-column:1/3;font-size:12px;color:var(--muted)}
+  .legend .tick{width:2px;height:12px;border-radius:1px;background:#18181b;opacity:.55;vertical-align:-2px}
+  .kpis{display:flex;flex-wrap:wrap;gap:12px;margin:var(--s4,14px) 0 var(--s5,20px)}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 16px;min-width:150px}
+  .kpi .k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .kpi .v{font-size:20px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
+  .kpi .s{font-size:12px;color:var(--muted)}
+  .baseline td{background:#faf9f7}
 </style>{% endmacro %}
 {% macro money(v) %}{{ '$%.5f' % v if v is not none else '—' }}{% endmacro %}
 {% macro ms(v) %}{{ '{:,} ms'.format(v | round | int) if v is not none else '—' }}{% endmacro %}
 {% macro pct(v) %}{{ '%.0f%%' % (v * 100) if v is not none else '—' }}{% endmacro %}
-{% macro delta(p) %}{% if p is not none %}<span class="v-delta{{ ' good' if p < 0 }}">{{ '%+d%%' % p }} vs original</span>{% endif %}{% endmacro %}
-{% macro verdict(c) %}<span class="v-cell verdict-{{ c.verdict }}">{{ c.verdict }}<span class="fit">{{ c.kept }}/{{ c.of }}</span></span>{% endmacro %}
+{% macro delta(p) %}{% if p is not none %}<span class="v-delta{{ ' good' if p < 0 else ' bad' if p > 0 }}">{{ '%+d%%' % p }} vs original</span>{% endif %}{% endmacro %}
+{% macro vword(v) %}{{ {'within': 'passes', 'outside': 'drifts', 'unverified': 'not verified'}.get(v, v) }}{% endmacro %}
+{% macro verdict(c) %}<span class="v-cell verdict-{{ c.verdict }}">{{ vword(c.verdict) }}<span class="fit">{{ c.kept }}/{{ c.of }}</span></span>{% endmacro %}
+
+{# a candidate's answers split by category; `a` = {match, acceptable, drift, unclear} or none (older results) #}
+{% macro answers_bar(a, wide=False, caption=True) %}{% if a %}{% set n = a.match + a.acceptable + a.drift + a.unclear %}{% if n %}
+<div class="abar{{ ' wide' if wide }}" title="{{ a.match }} match · {{ a.acceptable }} acceptable · {{ a.drift }} drift · {{ a.unclear }} unclear">{% for k in ('match', 'acceptable', 'drift', 'unclear') if a[k] %}<span class="a-{{ k }}" style="width:{{ '%.2f' % (100 * a[k] / n) }}%"></span>{% endfor %}</div>
+{% if caption %}<div class="abar-cap">{% for k in ('match', 'acceptable', 'drift', 'unclear') if a[k] %}{{ '%.0f' % (100 * a[k] / n) }}% {{ k }}{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
+{% endif %}{% else %}<span class="v-small">—</span>{% endif %}{% endmacro %}
+
+{# one square per candidate answer, coloured by its category (older results: kept / not kept) #}
+{% macro squares(runs) %}<span class="sq">{% for r in runs %}{% set k = r.category or ('unclear' if r.error else 'match' if r.kept else 'drift') %}<i class="a-{{ k }}" title="answer {{ loop.index }}: {{ k }}{% if r.reason %} — {{ r.reason }}{% endif %}"></i>{% endfor %}</span>{% endmacro %}
+
+{% macro legend() %}<div class="legend"><span><i class="a-match"></i>match: same behaviour</span><span><i class="a-acceptable"></i>acceptable: differs only where the original itself varies</span><span><i class="a-drift"></i>drift: changed a decision, value or action, or made something up</span><span><i class="a-unclear"></i>unclear</span><span><i class="tick"></i>cost and latency: the original (green ends before it, red goes past it)</span></div>{% endmacro %}
+
+{# `v` against the original's `base`: the track's tick is the original, the fill is v on the same scale (up to 1.5x),
+   green when lower (cheaper, faster), red when higher; then the change in % and the value. is_base: the original's row #}
+{% macro vsbar(v, base, value, is_base=False) %}{% set r = (v / base) if (v is not none and base) else none %}<div class="vsb"><span class="vsb-track"><b class="{{ 'base' if is_base else 'up' if r and r > 1 }}" style="width:{{ '%.0f' % ([r, 1.5] | min * 56) if r is not none else 0 }}px"></b><i></i></span>{% if is_base %}<span class="pc">{{ value }}</span><span class="val">baseline</span>{% elif r is none %}<span class="val">{{ value }}</span>{% else %}{% set p = ((r - 1) * 100) | round | int %}<span class="pc {{ 'good' if p < 0 else 'bad' if p > 0 }}">{{ '%+d%%' % p if p else 'same' }}</span><span class="val">{{ value }}</span>{% endif %}</div>{% endmacro %}

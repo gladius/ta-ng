@@ -36,6 +36,7 @@ from sqlalchemy import (Table, Column, String, Text, Integer, Float, DateTime, s
 from app.services import db
 from app.services.llm_client import Refused, Unreachable
 from validation import Item, Candidate, Spec, validate_many
+from validation.engine import ANSWERS
 
 CHUNK = 5                   # requests per group: the engine pools their calls; also the redo cost of a crash
 HEARTBEAT_S = 20
@@ -87,6 +88,10 @@ _cells = Table(
     Column("cost_usd", Float),
     Column("reason", Text),
     Column("judge_reason", Text),
+    Column("match", Integer),                        # the candidate's answers by category (None before they existed)
+    Column("acceptable", Integer),
+    Column("drift", Integer),
+    Column("unclear", Integer),
 )
 _callbacks = Table(
     "validation_callbacks", db.metadata,
@@ -372,13 +377,14 @@ def _cell_rows(job_id, seq, r):
     ref = r["reference"]
     rows = [{"job_id": job_id, "seq": seq, "label": "original", "pos": 0, "model": r["model"], "served_model": None,
              "verdict": None, "kept": ref["agree"], "runs": ref["of"], "latency_ms": lat, "cost_usd": cost,
-             "reason": None, "judge_reason": None}]
+             "reason": None, "judge_reason": None, **{k: None for k in ANSWERS}}]
     for n, c in enumerate(r["candidates"], 1):
         served = Counter(x["model"] for x in c["runs"] if x.get("model") and not x.get("error")).most_common(1)
         rows.append({"job_id": job_id, "seq": seq, "label": c["label"], "pos": n, "model": c["model"],
                      "served_model": served[0][0] if served else None, "verdict": c["verdict"], "kept": c["kept"],
                      "runs": c["of"], "latency_ms": c["latency_ms"], "cost_usd": c["cost_usd"], "reason": c["reason"],
-                     "judge_reason": c.get("judge_reason") or None})
+                     "judge_reason": c.get("judge_reason") or None,
+                     **{k: (c.get("answers") or {}).get(k) for k in ANSWERS}})
     return rows
 
 
@@ -486,7 +492,8 @@ def summaries(job_ids):
     with _engine().connect() as c:
         agg = c.execute(select(ce.job_id, ce.label, func.count(), *_verdicts(ce),
                                func.avg(case((ce.runs > 0, ce.kept * 1.0 / ce.runs))),
-                               func.avg(ce.latency_ms), func.avg(ce.cost_usd))
+                               func.avg(ce.latency_ms), func.avg(ce.cost_usd),
+                               *[func.sum(getattr(ce, k)) for k in ANSWERS])
                         .where(ce.job_id.in_(job_ids)).group_by(ce.job_id, ce.label)
                         .order_by(ce.job_id, func.min(ce.pos), ce.label)).all()
         models = defaultdict(list)
@@ -494,8 +501,10 @@ def summaries(job_ids):
                                               .distinct().order_by(ce.job_id, ce.label, ce.model)):
             models[(job_id, label)].append(model)
     out = defaultdict(list)
-    for job_id, label, n, within, outside, unverified, fit, lat, cost in agg:
+    for job_id, label, n, within, outside, unverified, fit, lat, cost, *answers in agg:
         out[job_id].append({"label": label, "models": models[(job_id, label)], "requests": n,
+                            "answers": None if label == "original" or all(a is None for a in answers) else
+                            dict(zip(ANSWERS, (int(a or 0) for a in answers))),
                             "within": int(within or 0), "outside": int(outside or 0), "unverified": int(unverified or 0),
                             "avg_consistency" if label == "original" else "avg_fit_rate": _num(fit, 3),
                             "avg_latency_ms": None if lat is None else round(float(lat)), "avg_cost_usd": _num(cost, 6)})

@@ -13,7 +13,7 @@ isolated in store.py.
 import os
 import threading
 
-from sqlalchemy import create_engine, event, exc, MetaData
+from sqlalchemy import create_engine, event, exc, inspect, MetaData, text
 
 import credentials
 
@@ -59,11 +59,26 @@ def ready():
         with _tables_lock:
             if _tables_for != key:
                 try:
-                    metadata.create_all(eng)
+                    _create(eng)
                 except exc.DBAPIError:
-                    metadata.create_all(eng)
+                    _create(eng)
                 _tables_for = key
     return eng
+
+
+def _create(eng):
+    """Missing tables, then missing columns: a nullable column added in code is added to the existing table too
+    (ALTER TABLE ... ADD COLUMN, on SQLite and Postgres), so an upgrade needs no manual step for it. Never alters or
+    drops anything; a changed column still needs tools/migrate_validation_schema.py."""
+    metadata.create_all(eng)
+    insp = inspect(eng)
+    with eng.begin() as c:
+        for t in metadata.sorted_tables:
+            have = {col["name"] for col in insp.get_columns(t.name)}
+            for col in t.columns:
+                if col.name not in have and col.nullable and not col.primary_key:
+                    c.execute(text("ALTER TABLE %s ADD COLUMN %s %s" % (t.name, col.name,
+                                                                       col.type.compile(eng.dialect))))
 
 
 def _ensure_sqlite_dir(u):

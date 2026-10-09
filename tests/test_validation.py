@@ -19,9 +19,9 @@ def test_fit_reply_parsing():
     assert judges.parse_fit("It broke nothing material.")[0] is None           # no verdict: the vote abstains
     assert judges.parse_fit("") == (None, "no verdict in the judge's reply")
     assert judges.parse_fit("EQUIVALENT - same decision and identifier") == (True, "same decision and identifier")
-    assert judges.parse_fit("VARIATION - another valid option") == (True, "variation: another valid option")
+    assert judges.parse_fit("VARIATION - another valid option") == (True, "acceptable: another valid option")
     assert judges.parse_fit("**DRIFT** - claims an unstated policy") == (False, "claims an unstated policy")
-    assert judges.parse_fit("UNSURE - output is truncated") == (None, "unsure: output is truncated")
+    assert judges.parse_fit("UNSURE - output is truncated") == (None, "unclear: output is truncated")
 
 
 def test_coherence_reply_parsing():
@@ -275,3 +275,16 @@ def test_unsure_votes_abstain(monkeypatch):
     votes = iter([(None, "unsure: truncated", 0.0), (None, "unsure: truncated", 0.0), (True, "same", 0.0)] * 5)
     c = validate(_item(), one_at_a_time, _run)["candidates"][0]
     assert (c["verdict"], c["reason"]) == ("unverified", "unsure: truncated")   # most abstained: not judged
+
+
+def test_each_answer_is_judged_match_acceptable_drift_or_unclear(monkeypatch):
+    _judges(monkeypatch)
+    votes = iter([(True, "same", 0.0)] * 3 +                                                     # match
+                 [(True, "acceptable: another valid option", 0.0)] * 2 + [(True, "same", 0.0)] +  # acceptable
+                 [(False, "changed the amount", 0.0)] * 3 +                                       # drift
+                 [(None, "unclear: truncated", 0.0)] * 2 + [(True, "same", 0.0)] +                # unclear
+                 [(True, "same", 0.0)] * 3)                                                      # match
+    monkeypatch.setattr(engine.judges, "fit", lambda *a: next(votes))
+    c = validate(_item(), Spec(max_parallel=1), _run)["candidates"][0]
+    assert [r["category"] for r in c["runs"]] == ["match", "acceptable", "drift", "unclear", "match"]
+    assert c["answers"] == {"match": 2, "acceptable": 1, "drift": 1, "unclear": 1}

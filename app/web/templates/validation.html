@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_vparts.html" import vstyle, money, ms, pct, delta %}
+{% from "_vparts.html" import vstyle, money, ms, pct, verdict, vword, answers_bar, squares, legend, vsbar %}
 {% block title %}{{ job.id }} · validation{% endblock %}
 {% block head %}{% if live %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
 {% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <a href="/validations">validations</a> <span class="sep">›</span> <b>{{ job.id }}</b>{% endblock %}
@@ -10,7 +10,7 @@
 <h1>{{ job.id }} <span class="pill {{ 'ok' if job.status == 'done' else 'off' }}">{{ job.status }}</span></h1>
 <p class="v-meta">
   {{ job.items_done }} of {{ job.items_total }} requests · spent ${{ '%.4f' % job.spend_usd }}{% if job.max_budget_usd is not none %} of the ${{ '%.2f' % job.max_budget_usd }} budget{% else %}, no budget limit{% endif %} · judge <span class="mono">{{ job.judge_model }}</span>
-  · {{ job.spec.reference_runs }} original re-runs, {{ job.spec.candidate_runs }} runs per candidate, {{ job.spec.votes }} judge votes each
+  · {{ job.spec.reference_runs }} original re-runs, {{ job.spec.candidate_runs }} answers per candidate, {{ job.spec.votes }} judge votes each
   {% if live %}· refreshing every 5 s{% endif %}
   {% if job.workers %}· {{ job.workers }} worker{{ 's' if job.workers != 1 }} on it now{% elif live %}<br>Waiting for a free worker.{% endif %}
   {% if job.stop_reason %}<br><span class="v-warn">{{ job.stop_reason }}</span>{% endif %}
@@ -22,34 +22,42 @@
 <p class="v-links">Download results: <a href="/validations/{{ job.id }}/results.csv">CSV</a> · <a href="/validations/{{ job.id }}/results.json">JSON</a></p>
 
 {% if summary %}
-<h2>By candidate</h2>
+{% set base = (summary | selectattr('label', 'equalto', 'original') | first) or {} %}
+<h2>By label</h2>
 <table class="grid">
-  <thead><tr><th>Label</th><th>Models</th><th class="num">Within</th><th class="num">Outside</th><th class="num">Unverified</th><th class="num">Avg fit</th><th class="num">Avg latency</th><th class="num">Avg cost / call</th></tr></thead>
+  <thead><tr><th>Label</th><th>Model</th><th style="width:28%">Answers</th><th>Requests</th><th>Cost / call</th><th>Latency</th></tr></thead>
   <tbody>
   {% for s in summary %}
+    {% if s.label == 'original' %}
+    <tr class="baseline">
+      <td class="name nowrap">original</td>
+      <td class="mono nowrap">{{ s.models | join(', ') }}</td>
+      <td class="v-small nowrap">baseline · own answers agree {{ pct(s.avg_consistency) }}</td>
+      <td class="v-small">{{ s.requests }}</td>
+      <td>{{ vsbar(s.avg_cost_usd, s.avg_cost_usd, money(s.avg_cost_usd), is_base=True) }}</td>
+      <td>{{ vsbar(s.avg_latency_ms, s.avg_latency_ms, ms(s.avg_latency_ms), is_base=True) }}</td>
+    </tr>
+    {% else %}
     <tr>
       <td class="name nowrap">{{ s.label }}</td>
       <td class="mono nowrap">{{ s.models | join(', ') }}</td>
-      {% if s.label == 'original' %}
-      <td colspan="3" class="v-small" style="text-align:center">baseline for the candidates below</td>
-      <td class="num nowrap">{{ pct(s.avg_consistency) }} <span class="v-small">self-agreement</span></td>
-      {% else %}
-      <td class="num">{{ s.within }} <span class="v-small">of {{ s.requests }}</span></td><td class="num">{{ s.outside }}</td><td class="num">{{ s.unverified }}</td>
-      <td class="num">{{ pct(s.avg_fit_rate) }}</td>
-      {% endif %}
-      <td class="num nowrap">{{ ms(s.avg_latency_ms) }}{{ delta(s.get('latency_vs_original_pct')) }}</td>
-      <td class="num nowrap">{{ money(s.avg_cost_usd) }}{{ delta(s.get('cost_vs_original_pct')) }}</td>
+      <td>{% if s.answers %}{{ answers_bar(s.answers, wide=True) }}{% else %}<span class="v-small">average fit {{ pct(s.avg_fit_rate) }}</span>{% endif %}</td>
+      <td class="nowrap"><b>{{ s.within }}</b> passes <span class="v-small">of {{ s.requests }}</span>{% if s.outside %}<br><span class="v-small">{{ s.outside }} drift{{ 's' if s.outside != 1 }}</span>{% endif %}{% if s.unverified %}<br><span class="v-small">{{ s.unverified }} not verified</span>{% endif %}</td>
+      <td>{{ vsbar(s.avg_cost_usd, base.avg_cost_usd, money(s.avg_cost_usd)) }}</td>
+      <td>{{ vsbar(s.avg_latency_ms, base.avg_latency_ms, ms(s.avg_latency_ms)) }}</td>
     </tr>
+    {% endif %}
   {% endfor %}
   </tbody>
 </table>
-<p class="v-small">Fit: the share of a candidate's runs the judge placed among the original's own answers, averaged over requests; read it against the original's self-agreement. Within: the candidate stayed inside the range of answers the original gives itself. Outside: it changed a decision, fact, value or tool call. Unverified: not certified (the request's page says why). No winner is picked.</p>
+{{ legend() }}
+<p class="v-small">A request <b>passes</b> when the candidate's answers stay within the original's own consistency (with 5 answers, normally 4 match or acceptable); it <b>drifts</b> when they don't; <b>not verified</b> means it could not be judged (the request's page says why). No winner is picked.</p>
 {% endif %}
 
 {% if routing %}
 <h2>Where routers sent requests</h2>
 <table class="grid">
-  <thead><tr><th>Label</th><th>Answered by</th><th class="num">Requests</th><th class="num">Within</th><th class="num">Outside</th><th class="num">Unverified</th></tr></thead>
+  <thead><tr><th>Label</th><th>Answered by</th><th class="num">Requests</th><th class="num">Passes</th><th class="num">Drifts</th><th class="num">Not verified</th></tr></thead>
   <tbody>
   {% for x in routing %}
     <tr><td class="name nowrap">{{ x.label }}</td><td class="mono">{{ x.served_model or '—' }}</td><td class="num">{{ x.requests }}</td>
@@ -78,9 +86,9 @@
   {% for row in rows %}{% set r = row.r %}{% set url = '/validations/' ~ job.id ~ '/requests/' ~ (r.id | urlencode) %}
     <tr>
       <td class="name"><a href="{{ url }}">{{ r.id }}</a></td>
-      <td><span class="mono">{{ r.model }}</span> <span class="v-small">consistent {{ r.reference.agree if r.reference.agree is not none else '?' }}/{{ r.reference.of }}</span></td>
+      <td><span class="mono">{{ r.model }}</span> <span class="v-small">agrees {{ r.reference.agree if r.reference.agree is not none else '?' }}/{{ r.reference.of }}</span></td>
       {% for l in labels %}{% set c = row.cells.get(l) %}
-      <td>{% if c %}<a class="v-cell verdict-{{ c.verdict }}" href="{{ url }}?cand={{ l | urlencode }}" title="{{ c.judge_reason or c.reason }}">{{ c.verdict }}<span class="fit">{{ c.kept }}/{{ c.of }}</span></a>{% else %}<span class="v-small">—</span>{% endif %}</td>
+      <td>{% if c %}<a class="v-cell verdict-{{ c.verdict }}" href="{{ url }}?cand={{ l | urlencode }}" title="{{ c.judge_reason or c.reason }}">{{ vword(c.verdict) }} {{ squares(c.runs) }}</a>{% else %}<span class="v-small">—</span>{% endif %}</td>
       {% endfor %}
     </tr>
   {% endfor %}
@@ -91,7 +99,7 @@
   <span>Page {{ page }} of {{ pages }} · {{ total }} request{{ 's' if total != 1 }}</span>
   {% if page < pages %}<a href="{{ qs(page + 1, show) }}">Next ›</a>{% endif %}
 </p>
-<p class="v-small">Click a request or a cell for its evidence: the request, the original's own answers, and the candidate's runs with the judge's reasons.</p>
+<p class="v-small">Each square is one of the candidate's answers. Click a request or a cell for its evidence: what was sent, the original's own answers, and every answer with the judge's reasons.</p>
 {% else %}
 <p class="empty">{% if live and job.items_done == 0 %}No requests finished yet.{% else %}No requests match.{% endif %}</p>
 {% endif %}
