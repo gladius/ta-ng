@@ -22,7 +22,6 @@ def _no_gateway(monkeypatch):
     from app.services import llm_client
     monkeypatch.setattr(registry, "_gateway", lambda: (None, None))
     monkeypatch.setattr(llm_client, "_client", None)
-    monkeypatch.setattr(llm_client, "_gateway", False)
     registry.refresh()
 
 

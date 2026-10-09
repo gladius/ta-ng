@@ -63,8 +63,9 @@ ANSWERS = ("match", "acceptable", "drift", "unclear")       # what each candidat
 
 def _recorded_run(item):
     u = item.request.get("usage") or {}
-    usage = {"input": u.get("input_tokens", 0), "output": u.get("output_tokens", 0),
-             "cache_read": u.get("cached_tokens", 0), "cache_write": 0} if u else None
+    cached = u.get("cached_tokens", 0) or 0                    # the trace's input_tokens include the cached ones
+    usage = {"input": max(0, (u.get("input_tokens", 0) or 0) - cached), "output": u.get("output_tokens", 0),
+             "cache_read": cached, "cache_write": 0} if u else None
     return {"output": item.recorded, "recorded": True, "model": item.model, "usage": usage,
             "latency_ms": item.request.get("runtime_ms") or None, "cost_usd": cost_of(item.model, usage)}
 

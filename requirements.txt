@@ -2,7 +2,7 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 jinja2>=3.1
 langsmith>=0.1          # live LangSmith trace pull (offline/recorded mode needs no key)
-anthropic>=0.40         # provider SDK for the paid re-run + judge calls (llm_client)
+openai>=1.40            # OpenAI-format SDK to the LiteLLM gateway: paid re-runs + judge calls (llm_client)
 google-cloud-bigquery>=3.0  # BigQuery source (connectors/bigquery); auth = Google Application Default Credentials
 sqlalchemy>=2.0         # durable shared store (SQLite dev / Postgres prod) — app/services/db.py, store.py
 psycopg[binary]>=3.1    # Postgres driver — PROD ONLY; dev uses stdlib sqlite (no install), so skip it in a restricted env

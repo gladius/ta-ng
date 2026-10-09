@@ -25,13 +25,12 @@
 {% set base = (summary | selectattr('label', 'equalto', 'original') | first) or {} %}
 <h2>By label</h2>
 <table class="grid">
-  <thead><tr><th>Label</th><th>Model</th><th style="width:28%">Answers</th><th>Requests</th><th>Cost / call</th><th>Latency</th></tr></thead>
+  <thead><tr><th>Label</th><th style="width:32%">Answers</th><th>Requests</th><th>Cost / call</th><th>Latency</th></tr></thead>
   <tbody>
   {% for s in summary %}
     {% if s.label == 'original' %}
     <tr class="baseline">
       <td class="name nowrap">original</td>
-      <td class="mono nowrap">{{ s.models | join(', ') }}</td>
       <td class="v-small nowrap">baseline · own answers agree {{ pct(s.avg_consistency) }}</td>
       <td class="v-small">{{ s.requests }}</td>
       <td>{{ vsbar(s.avg_cost_usd, s.avg_cost_usd, money(s.avg_cost_usd), is_base=True) }}</td>
@@ -40,7 +39,6 @@
     {% else %}
     <tr>
       <td class="name nowrap">{{ s.label }}</td>
-      <td class="mono nowrap">{{ s.models | join(', ') }}</td>
       <td>{% if s.answers %}{{ answers_bar(s.answers, wide=True) }}{% else %}<span class="v-small">average fit {{ pct(s.avg_fit_rate) }}</span>{% endif %}</td>
       <td class="nowrap"><b>{{ s.within }}</b> passes <span class="v-small">of {{ s.requests }}</span>{% if s.outside %}<br><span class="v-small">{{ s.outside }} drift{{ 's' if s.outside != 1 }}</span>{% endif %}{% if s.unverified %}<br><span class="v-small">{{ s.unverified }} not verified</span>{% endif %}</td>
       <td>{{ vsbar(s.avg_cost_usd, base.avg_cost_usd, money(s.avg_cost_usd)) }}</td>

@@ -24,7 +24,10 @@ def test_row_to_trace():
     assert [m["role"] for m in t["input_messages"]] == ["system", "user"]
     anthropic_shaped = dict(_RESP, usage={"input_tokens": 100, "output_tokens": 10, "cache_read_input_tokens": 40})
     t = bq.to_trace(json.dumps(_msgs("You are a billing assistant.")), json.dumps(anthropic_shaped), "agent")
-    assert t["usage"] == {"input_tokens": 100, "output_tokens": 10, "cached_tokens": 40}
+    assert t["usage"] == {"input_tokens": 140, "output_tokens": 10, "cached_tokens": 40}   # Anthropic's excludes the cache
+    from validation.engine import _recorded_run                 # and the original's cost charges the cache once
+    item = type("Item", (), {"request": t, "recorded": "x", "model": "gpt-4o"})()
+    assert _recorded_run(item)["usage"] == {"input": 100, "output": 10, "cache_read": 40, "cache_write": 0}
 
 
 def test_request_body_form():
@@ -119,7 +122,7 @@ def test_lookup_by_request_id(monkeypatch):
     got = bq.lookup(["chatcmpl-1", "chatcmpl-2"])
     assert "WHERE `request_id` IN UNNEST(@ids)" in seen["sql"] and sorted(seen["ids"]) == ["chatcmpl-1", "chatcmpl-2"]
     body, resp = got["chatcmpl-1"]
-    assert body["model"] == "openai/gpt-5.4-mini" and body["max_tokens"] == 32768 and "temperature" not in body
+    assert body["model"] == "openai/gpt-5.4-mini" and body["max_tokens"] == 32768 and body["temperature"] == 0.2
     assert [t["function"]["name"] for t in body["tools"]] == ["refund"] and resp["id"] == "chatcmpl-1"
     assert list(got) == ["chatcmpl-1"]                         # an unknown id is just absent
 

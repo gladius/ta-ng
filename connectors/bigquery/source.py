@@ -98,6 +98,22 @@ def _client(project):
         return bigquery.Client(project=project, credentials=Credentials(token))
 
 
+# the fields of a logged OpenAI request a re-run sends as they were (model and max_tokens are set per run; stream,
+# n, metadata, user etc. are not part of the behaviour)
+SENT = ("messages", "tools", "tool_choice", "parallel_tool_calls", "response_format", "temperature", "top_p", "seed",
+        "stop", "reasoning_effort", "frequency_penalty", "presence_penalty")
+_ROLES = {"system", "developer", "user", "assistant", "tool", "function"}
+
+
+def _as_sent(body):
+    """The request's SENT fields, or None when its messages aren't OpenAI chat messages (the re-run then rebuilds the
+    request from the trace)."""
+    msgs = body.get("messages")
+    if not (isinstance(msgs, list) and msgs and all(isinstance(m, dict) and m.get("role") in _ROLES for m in msgs)):
+        return None
+    return {k: body[k] for k in SENT if body.get(k) is not None}
+
+
 def to_trace(request, response, agent):
     """One logged (request, response) pair -> a contract trace."""
     req, resp = _json(request), _json(response) or {}
@@ -111,17 +127,20 @@ def to_trace(request, response, agent):
         trace_id=resp.get("id"), agent_id=agent, node_id=_callsite(msgs),
         model=resp.get("model") or body.get("model"), input_messages=msgs,
         output=schema.render_behavior(out), tools_called=schema.tool_calls_from_output(out),
-        usage={"input_tokens": u["input"], "output_tokens": u["output"], "cached_tokens": u["cache_read"]},
+        usage={"input_tokens": u["input"] + u["cache_read"] + u["cache_write"], "output_tokens": u["output"],
+               "cached_tokens": u["cache_read"]},                  # the trace's input_tokens: the whole prompt
         tools_defined=schema.norm_tools(body.get("tools")), tool_choice=body.get("tool_choice"), source="bigquery")
     t["max_output_tokens"] = body.get("max_tokens") or body.get("max_completion_tokens")
+    t["logged_request"] = _as_sent(body)
     return t
 
 
 def lookup(request_ids):
     """{request_id: (request body, response or None)} for the logged calls among `request_ids`, in one query. The body
-    is OpenAI-format: messages, max_tokens / tools / tool_choice when logged, and as `model` the model that answered
-    (BQ_MODEL_COLUMN, else the response's). BQ_ID_COLUMN (default request_id) holds the id; BQ_PARAMS_COLUMN, when
-    set, a JSON column holding max_tokens and tools (the request column then being only the messages). Unknown ids
+    is OpenAI-format: messages, max_tokens and the other SENT fields when logged, and as `model` the model that
+    answered (BQ_MODEL_COLUMN, else the response's). BQ_ID_COLUMN (default request_id) holds the id; BQ_PARAMS_COLUMN,
+    when set, a JSON column holding max_tokens, tools, temperature etc. (the request column then being only the
+    messages). Unknown ids
     are simply absent.
     ponytail: scans the whole table per call; filter on its partition column once it gets large."""
     from google.cloud import bigquery
@@ -139,7 +158,7 @@ def lookup(request_ids):
         body = dict(req) if isinstance(req, dict) else {"messages": req}
         params = _json(row["params"]) if params_col else None
         if isinstance(params, dict):
-            body = {**{k: params[k] for k in ("max_tokens", "max_completion_tokens", "tools", "tool_choice")
+            body = {**{k: params[k] for k in ("max_tokens", "max_completion_tokens", *SENT[1:])
                        if params.get(k) is not None}, **body}
         resp = resp if isinstance(resp, dict) else None
         served = (row["served"] if model_col else None) or (resp or {}).get("model")

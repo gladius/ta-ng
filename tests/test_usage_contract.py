@@ -1,6 +1,7 @@
 """The transport-agnostic usage contract (llm_client.usage): the same cache read must be recovered whether the
-response is Anthropic-shaped (dev, /v1/messages) or OpenAI/LiteLLM-shaped (prod, /chat/completions). $0 — pure
-shape mapping, no API. Guards against LiteLLM #27763 (cache read under different keys per shape)."""
+usage is Anthropic-shaped (older recorded traces) or OpenAI/LiteLLM-shaped (our calls, logged responses), and `input`
+is always the UNCACHED input, so cost_of never charges the cache twice. $0 — pure shape mapping, no API. Guards
+against LiteLLM #27763 (cache read under different keys per shape)."""
 import types
 from app.services.llm_client import usage
 
@@ -27,14 +28,21 @@ def test_openai_litellm_gemini_cached_tokens():
                       "prompt_tokens_details": {"cached_tokens": 4074, "text_tokens": 3072},
                       "cache_read_input_tokens": 4074}}
     u = usage(resp)
-    assert u == {"input": 7146, "output": 0, "cache_read": 4074, "cache_write": 0}
+    assert u == {"input": 3072, "output": 0, "cache_read": 4074, "cache_write": 0}      # prompt_tokens includes the read
+
+
+def test_litellm_claude_cache_write_is_inside_prompt_tokens():
+    # measured on the gateway (claude-haiku-4-5, OpenAI format): 8422 prompt tokens = 10 new + 8412 written to cache
+    resp = {"usage": {"prompt_tokens": 8422, "completion_tokens": 5, "cache_creation_input_tokens": 8412,
+                      "cache_read_input_tokens": 0, "prompt_tokens_details": {"cached_tokens": 0}}}
+    assert usage(resp) == {"input": 10, "output": 5, "cache_read": 0, "cache_write": 8412}
 
 
 def test_openai_only_details_no_toplevel():
     # the #27763 case inverted: only the nested field is present — must still be read.
     resp = {"usage": {"prompt_tokens": 5000, "completion_tokens": 2,
                       "prompt_tokens_details": {"cached_tokens": 1234}}}
-    assert usage(resp)["cache_read"] == 1234
+    assert usage(resp)["cache_read"] == 1234 and usage(resp)["input"] == 3766
 
 
 def test_bare_usage_dict_and_anthropic_passthrough_zero():

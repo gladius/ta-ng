@@ -537,3 +537,40 @@ def test_a_new_optional_column_is_added_to_an_existing_table():
     finally:
         t.drop(db.engine(), checkfirst=True)
         db.metadata.remove(t)
+
+
+def test_the_api_reference_matches_what_the_api_returns(client, monkeypatch):
+    """/openapi.json documents the /api calls only, with the key as their auth, and every documented response model
+    takes a real response (the real engine, fake model calls) with no field missing or undocumented."""
+    from app.web import validations as v
+    from validation import engine
+
+    def run(trace, model):                                       # router-a answers req-2 with another model
+        served = "gpt-5.4-nano" if model == "gpt-5.4-mini" and "2" in trace["input_messages"][-1]["content"] else model
+        return {"output": "%s ok" % served, "usage": {"input": 10, "output": 2, "cache_read": 0, "cache_write": 0},
+                "latency_ms": 5, "model": served, "stop_reason": "stop", "degraded": False}
+    monkeypatch.setattr(engine.judges, "fit", lambda ref, cand, req, spec: (True, "same", 0.001))
+    monkeypatch.setattr(engine.judges, "coherence", lambda req, outs, spec: {
+        "agree": len(outs), "of": len(outs), "divergent": set(), "reasons": {}, "cost_usd": 0.001})
+    monkeypatch.setattr(jobs, "validate_many", lambda items, spec: engine.validate_many(items, spec, run))
+    monkeypatch.setattr(jobs, "_deliver", lambda url, body: None)
+    r = client.post("/api/validations", headers=KEY, json={"items": [_item(1), _item(2)], "callback_url": "http://cb/x"})
+    v.Submitted.model_validate(r.json())
+    job_id = r.json()["id"]
+    _work()
+    got = v.Status.model_validate(client.get("/api/validations/" + job_id, headers=KEY).json())
+    assert got.status == "done" and got.routing and got.callback.sent_at and got.summary[1].answers.match == 10
+    page = v.ResultsPage.model_validate(client.get("/api/validations/%s/results" % job_id, headers=KEY).json())
+    assert page.total == 2 and page.results[0].candidates[0].runs[0].judges[0].kept is True
+    v.Result.model_validate(client.get("/api/validations/%s/results/req-1" % job_id, headers=KEY).json())
+    for q in ("", "?with_summary=1"):
+        [v.Listed.model_validate(x) for x in client.get("/api/validations" + q, headers=KEY).json()]
+
+    spec = client.get("/openapi.json").json()
+    assert set(spec["paths"]) == {"/api/validations", "/api/validations/{job_id}", "/api/validations/{job_id}/resume",
+                                  "/api/validations/{job_id}/results", "/api/validations/{job_id}/results/{request_id}"}
+    assert spec["components"]["securitySchemes"]["APIKeyHeader"] == {
+        "type": "apiKey", "in": "header", "name": "X-API-Key", "description": "The server's VALIDATION_API_KEY"}
+    assert spec["paths"]["/api/validations/{job_id}"]["get"]["responses"]["200"]["content"]["application/json"][
+        "schema"] == {"$ref": "#/components/schemas/Status"}
+    assert client.get("/docs").status_code == 200

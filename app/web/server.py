@@ -41,6 +41,19 @@ app.include_router(validations.api)
 app.include_router(validations.pages)
 
 
+def _openapi():
+    """/openapi.json and /docs describe the /api calls only: the pages are for people, not for client code."""
+    if app.openapi_schema is None:
+        from fastapi.openapi.utils import get_openapi
+        app.openapi_schema = get_openapi(title="Token Auditor validation API", version="1",
+                                         description=validations.API_DOC,
+                                         routes=validations.api.routes)
+    return app.openapi_schema
+
+
+app.openapi = _openapi
+
+
 @app.get("/healthz/db")
 def healthz_db():
     """Liveness + which store backend is actually in use — 'postgresql' or 'sqlite', plus target host/db (no creds),

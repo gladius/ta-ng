@@ -36,9 +36,9 @@ def test_tool_choice_conversion():
     assert tc({"type": "function", "function": {"name": "issue_refund"}}) == {"tool": "issue_refund"}
     assert tc({"type": "tool", "name": "x"}) == {"tool": "x"}
     assert tc("issue_refund") == {"tool": "issue_refund"}                           # bare tool-name form
-    assert audit.llm_client._anthropic_tool_choice("any") == {"type": "any"}
-    assert audit.llm_client._anthropic_tool_choice({"tool": "x"}) == {"type": "tool", "name": "x"}
-    print("[ok] tool_choice -> neutral (auto/none -> don't force); llm_client maps neutral -> Anthropic")
+    assert audit.llm_client._tool_choice("any") == "required"
+    assert audit.llm_client._tool_choice({"tool": "x"}) == {"type": "function", "function": {"name": "x"}}
+    print("[ok] tool_choice -> neutral (auto/none -> don't force); llm_client maps neutral -> OpenAI")
 
 
 def test_replay_forwards_tools_and_choice():
@@ -46,7 +46,7 @@ def test_replay_forwards_tools_and_choice():
     # node that forced a tool reproduces the call instead of drifting. Stub the client to capture the kwargs.
     captured = {}
     class _R:
-        content = []
+        choices = []
     orig = audit.llm_client._complete_raw          # replay -> run() -> _complete_raw (NOT complete: replay stays
     audit.llm_client._complete_raw = lambda **kw: (captured.update(kw), _R())[1]   # at the model-default temperature)
     try:
@@ -57,8 +57,9 @@ def test_replay_forwards_tools_and_choice():
         audit.replay(tr, "claude-haiku-4-5")
     finally:
         audit.llm_client._complete_raw = orig
-    assert captured.get("tool_choice") == {"type": "any"}, captured.get("tool_choice")
-    assert captured.get("tools") and set(captured["tools"][0]["input_schema"]["properties"]) == {"id"}, "real schema bound"
+    assert captured.get("tool_choice") == "required", captured.get("tool_choice")
+    assert captured.get("tools") and set(captured["tools"][0]["function"]["parameters"]["properties"]) == {"id"}, \
+        "real schema bound"
     # GUARD: replay must NOT pin temperature — the reference-set engine depends on re-runs sampling natural variance.
     assert "temperature" not in captured, "replay pinned temperature; coherence needs the model-default spread"
     print("[ok] replay binds real tool schema + forwards forced tool_choice + stays at model-default temperature")

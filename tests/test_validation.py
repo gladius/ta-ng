@@ -1,7 +1,7 @@
 """The validation engine, its judge-reply readers, the downgrade adapter and the measured run record. Offline."""
 import types
 
-import anthropic
+import openai
 import pytest
 
 from validation import judges, engine, Spec, Item, Candidate, validate, validate_many
@@ -129,11 +129,15 @@ def test_downgrade_rollup(monkeypatch):
 
 
 # ── the model call returns a measured record, and only a 400 degrades the request ────────────────────────────────
-def _resp(text="hi"):
-    return types.SimpleNamespace(content=[types.SimpleNamespace(type="text", text=text)], model="claude-haiku-4-5-20251001",
-                                 stop_reason="end_turn",
-                                 usage=types.SimpleNamespace(input_tokens=50, output_tokens=5, cache_read_input_tokens=0,
-                                                             cache_creation_input_tokens=0))
+def _resp(text="hi", tool_calls=None):
+    msg = types.SimpleNamespace(content=text, tool_calls=tool_calls)
+    return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")],
+                                 model="claude-haiku-4-5-20251001",
+                                 usage=types.SimpleNamespace(prompt_tokens=50, completion_tokens=5))
+
+
+def _client(create):
+    return types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
 
 
 def test_run_records_usage_and_degrades_only_on_400(monkeypatch):
@@ -141,18 +145,27 @@ def test_run_records_usage_and_degrades_only_on_400(monkeypatch):
     monkeypatch.setattr(llm_client, "_complete_raw", lambda **kw: (seen.append(kw), _resp())[1])
     r = llm_client.run(model="claude-haiku-4-5", messages=[{"role": "user", "content": "x"}], max_tokens=10)
     assert r["text"] == "hi" and r["usage"]["input"] == 50 and r["model"] == "claude-haiku-4-5-20251001"
-    assert r["latency_ms"] >= 0 and r["stop_reason"] == "end_turn" and r["degraded"] is False
+    assert r["latency_ms"] >= 0 and r["stop_reason"] == "stop" and r["degraded"] is False
+    assert seen[0]["messages"] == [{"role": "user", "content": "x"}] and seen[0]["max_tokens"] == 10
 
-    bad = anthropic.BadRequestError.__new__(anthropic.BadRequestError)            # the target rejects the request
+    call = types.SimpleNamespace(function=types.SimpleNamespace(name="refund", arguments='{"amount": 50}'))
+    monkeypatch.setattr(llm_client, "_complete_raw", lambda **kw: _resp(None, [call]))
+    r = llm_client.run(model="m", messages=[], max_tokens=10)
+    assert (r["text"], r["tool_calls"]) == ("", [{"name": "refund", "args": {"amount": 50}}])
+
+    bad = openai.BadRequestError.__new__(openai.BadRequestError)                  # the target rejects the request
     calls = []
     def flaky(**kw):
         calls.append(kw)
-        if "thinking" in kw:
+        if "reasoning_effort" in kw or "temperature" in kw:
             raise bad
         return _resp()
     monkeypatch.setattr(llm_client, "_complete_raw", flaky)
-    r = llm_client.run(model="m", messages=[], max_tokens=10, reasoning=True)
-    assert r["degraded"] is True and "thinking" not in calls[-1] and len(calls) == 2
+    r = llm_client.run(model="m", messages=[], max_tokens=10, reasoning=True,
+                       params={"temperature": 0.2, "response_format": {"type": "json_object"}})
+    assert r["degraded"] is True and len(calls) == 2
+    assert calls[0]["temperature"] == 0.2 and "reasoning_effort" not in calls[1] and "temperature" not in calls[1]
+    assert calls[1]["response_format"] == {"type": "json_object"}               # what the answer must look like stays
 
     monkeypatch.setattr(llm_client, "_complete_raw", lambda **kw: (_ for _ in ()).throw(RuntimeError("network")))
     try:
@@ -164,29 +177,31 @@ def test_run_records_usage_and_degrades_only_on_400(monkeypatch):
 
 def test_gateway_is_one_setting_and_skips_its_cache_and_log(monkeypatch):
     from app import registry
-    monkeypatch.setattr(llm_client, "_client", None)
-    monkeypatch.setattr(llm_client, "_gateway", False)
+    with pytest.raises(llm_client.Refused):                   # no gateway: every call would fail, so the job stops
+        llm_client.client()
     monkeypatch.setattr(registry, "_gateway", lambda: ("http://gw.test:4000", "sk-gw"))
     c = llm_client.client()                                   # the registry's (url, key) is what we send through
-    assert str(c.base_url).startswith("http://gw.test:4000") and c.api_key == "sk-gw" and llm_client._gateway
+    assert str(c.base_url) == "http://gw.test:4000/v1/" and c.api_key == "sk-gw"
 
     sent = []
-    fake = types.SimpleNamespace(messages=types.SimpleNamespace(create=lambda **kw: (sent.append(kw), _resp())[1]))
-    monkeypatch.setattr(llm_client, "client", lambda: fake)
+    monkeypatch.setattr(llm_client, "client", lambda: _client(lambda **kw: (sent.append(kw), _resp())[1]))
     monkeypatch.setattr(registry, "serving_name", lambda m: m)
     llm_client._complete_raw(model="gpt-5.4-mini", messages=[], max_tokens=5)
-    monkeypatch.setattr(llm_client, "_gateway", False)
-    llm_client._complete_raw(model="claude-haiku-4-5", messages=[], max_tokens=5)
     assert sent[0]["extra_body"] == {"cache": {"no-cache": True}, "no-log": True}   # fresh answer, not logged as traffic
-    assert "extra_body" not in sent[1]                        # the direct Anthropic API gets the plain request
+
+    r = llm_client.complete(model="gpt-5.4-mini", max_tokens=5, system="be brief",
+                            messages=[{"role": "user", "content": [llm_client.cache_block("long prefix")]}])
+    assert sent[1]["messages"] == [{"role": "system", "content": "be brief"},
+                                   {"role": "user", "content": [{"type": "text", "text": "long prefix"}]}]
+    assert "system" not in sent[1] and llm_client.text(r) == "hi"   # cache_control only goes to Claude
 
 
 def test_unreachable_endpoint_is_raised_not_recorded(monkeypatch):
     import httpx
     monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
     def refused(**kw):
-        raise anthropic.APIConnectionError(request=httpx.Request("POST", "http://gw.test"))
-    monkeypatch.setattr(llm_client, "client", lambda: types.SimpleNamespace(messages=types.SimpleNamespace(create=refused)))
+        raise openai.APIConnectionError(request=httpx.Request("POST", "http://gw.test"))
+    monkeypatch.setattr(llm_client, "client", lambda: _client(refused))
     for call in (lambda: llm_client._complete_raw(model="m", messages=[], max_tokens=5),            # after its retries
                  lambda: validate(_item(), Spec(), lambda trace, model: llm_client._complete_raw(model=model))):
         try:
@@ -196,17 +211,26 @@ def test_unreachable_endpoint_is_raised_not_recorded(monkeypatch):
             pass
 
 
-def test_replays_stay_under_the_sdks_non_streaming_limit(monkeypatch):
-    from app.services import audit, llm_client
-    seen = {}
+def test_a_logged_request_is_re_sent_as_it_was(monkeypatch):
+    from app.services import audit
+    from connectors.bigquery.source import to_trace
+    seen = []
+    monkeypatch.setattr(llm_client, "_complete_raw", lambda **kw: (seen.append(kw), _resp())[1])
+    msgs = [{"role": "system", "content": "Billing agent."}, {"role": "user", "content": "refund 1"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function",
+                                                                    "function": {"name": "lookup", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "order 1: $50"}]
+    body = {"model": "gpt-5.4", "messages": msgs, "max_tokens": 32768, "temperature": 0.2, "stream": True,
+            "response_format": {"type": "json_object"}, "metadata": {"team": "x"}}
+    audit.replay(to_trace(body, {}, "api"), "gpt-5.4-mini")
+    assert seen[0]["messages"] == msgs and seen[0]["max_tokens"] == 32768           # no conversion, no 21k cap
+    assert (seen[0]["model"], seen[0]["temperature"], seen[0]["response_format"]) == \
+        ("gpt-5.4-mini", 0.2, {"type": "json_object"})
+    assert "stream" not in seen[0] and "metadata" not in seen[0]
 
-    def run(**kw):
-        seen.update(kw)
-        return {"text": "ok", "tool_calls": [], "usage": {}, "latency_ms": 1, "model": kw["model"],
-                "stop_reason": "end_turn", "degraded": False}
-    monkeypatch.setattr(llm_client, "run", run)
-    audit.replay({"input_messages": [{"role": "user", "content": "hi"}], "max_output_tokens": 32768}, "gpt-5.4-mini")
-    assert seen["max_tokens"] == audit.NONSTREAMING_MAX_TOKENS        # logged 32k would be refused by the SDK
+    seen.clear()                                              # messages that aren't OpenAI chat: rebuilt from the trace
+    audit.replay(to_trace({"model": "gpt-5.4", "messages": "just a prompt"}, {}, "api"), "gpt-5.4-mini")
+    assert seen[0]["messages"] == [{"role": "user", "content": "just a prompt"}]
 
 
 def test_out_of_credit_is_raised_at_once_not_recorded(monkeypatch):
@@ -220,9 +244,9 @@ def test_out_of_credit_is_raised_at_once_not_recorded(monkeypatch):
                          (401, "invalid x-api-key")):
         def refused(**kw):
             calls.append(1)
-            raise anthropic.APIStatusError(body, response=httpx.Response(status, request=httpx.Request("POST", "http://gw")),
-                                           body=None)
-        monkeypatch.setattr(llm_client, "client", lambda: types.SimpleNamespace(messages=types.SimpleNamespace(create=refused)))
+            raise openai.APIStatusError(body, response=httpx.Response(status, request=httpx.Request("POST", "http://gw")),
+                                        body=None)
+        monkeypatch.setattr(llm_client, "client", lambda: _client(refused))
         calls.clear()
         with pytest.raises(llm_client.Refused):
             llm_client._complete_raw(model="m", messages=[], max_tokens=5)
@@ -233,8 +257,8 @@ def test_out_of_credit_is_raised_at_once_not_recorded(monkeypatch):
                          (403, "Request blocked by content policy"),
                          (429, "Quota exceeded for metric: generate_content requests per minute. "
                                "You exceeded your current quota")):                  # one model / request / a rate limit
-        e = anthropic.APIStatusError(body, response=httpx.Response(status, request=httpx.Request("POST", "http://gw")),
-                                     body=None)
+        e = openai.APIStatusError(body, response=httpx.Response(status, request=httpx.Request("POST", "http://gw")),
+                                  body=None)
         assert not llm_client._refused(e), body
 
 
@@ -242,9 +266,9 @@ def test_a_timeout_is_one_slow_call_not_an_unreachable_endpoint(monkeypatch):
     import httpx
     monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
     def slow(**kw):
-        raise anthropic.APITimeoutError(request=httpx.Request("POST", "http://gw.test"))
-    monkeypatch.setattr(llm_client, "client", lambda: types.SimpleNamespace(messages=types.SimpleNamespace(create=slow)))
-    with pytest.raises(anthropic.APITimeoutError):
+        raise openai.APITimeoutError(request=httpx.Request("POST", "http://gw.test"))
+    monkeypatch.setattr(llm_client, "client", lambda: _client(slow))
+    with pytest.raises(openai.APITimeoutError):
         llm_client._complete_raw(model="m", messages=[], max_tokens=5)
     _judges(monkeypatch)
     c = validate(_item(), Spec(), lambda trace, model: llm_client._complete_raw(model=model))["candidates"][0]

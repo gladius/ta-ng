@@ -27,7 +27,8 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from pydantic import BaseModel, Field, HttpUrl
+from fastapi.security import APIKeyHeader
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 import credentials
 from validation import jobs
@@ -37,7 +38,43 @@ MAX_CANDIDATES = 5
 PER_PAGE = 50               # requests per page in the UI
 
 
-def require_key(x_api_key: Optional[str] = Header(None)):
+API_DOC = """Check whether cheaper models or routers behave like the original model, on your own logged requests.
+
+**Flow**
+1. `POST /api/validations` with up to 1000 items. Each item is a logged call, named by `request_id` (looked up in
+   BigQuery) or sent as its OpenAI-format `request` and `response`, with up to 5 `candidates`: your `label` for each
+   and the `model` to call. Returns `202` and the job `id`.
+2. Wait. Either give a `callback_url` (the job status is POSTed there once, when the job ends), or poll
+   `GET /api/validations/{id}`, sending its `ETag` back as `If-None-Match` (`304` = unchanged). `queued` and `running`
+   mean still working; `done`, `stopped` (budget reached or the provider refused the account, see `stop_reason`) and
+   `failed` (see `error`) mean it ended. A stopped or failed job goes on with `POST /api/validations/{id}/resume`.
+3. Read `summary`: one row per label across the batch, plus `original`, the baseline.
+4. Drill down: `GET /api/validations/{id}/results?label=...&verdict=outside` lists the requests a label drifted on,
+   each with every answer and the judge's reasons.
+
+**How a request is judged.** The original model is re-run 4 times; with its logged answer, these 5 answers show how
+much the original itself varies. Each candidate answers 5 times, and each answer is judged 3 times against them.
+- Each answer: `match` (same behaviour), `acceptable` (differs only where the original itself varies), `drift`
+  (changed a decision, value or action, or made something up) or `unclear`.
+- Each request, per candidate: `within` (passes: its answers stay within the original's own consistency), `outside`
+  (drifts) or `unverified` (could not be judged; `reason` says why).
+
+No winner is picked: decide per label, e.g. from `within_rate`, `cost_vs_original_pct` and `latency_vs_original_pct`.
+Run one batch per agent to get results per agent.
+
+**Re-runs** send the logged request as it was (messages, tools, tool_choice, response_format, temperature ...); only
+the model changes. They are not served from a cache and are not logged as production traffic.
+
+**Spend.** Per request: 4 re-runs of the original, 5 answers per candidate, and 15 judge calls per candidate (3 per
+answer) plus 1. `max_budget_usd` caps a job (no cap unless given); `spend_usd` is what it used.
+
+**Auth.** Every call needs the `X-API-Key` header.
+"""
+
+_key = APIKeyHeader(name="X-API-Key", auto_error=False, description="The server's VALIDATION_API_KEY")
+
+
+def require_key(x_api_key: Optional[str] = Depends(_key)):
     expected = credentials.get_secret("VALIDATION_API_KEY")
     if not expected:
         raise HTTPException(503, "VALIDATION_API_KEY is not set on the server")
@@ -45,32 +82,226 @@ def require_key(x_api_key: Optional[str] = Header(None)):
         raise HTTPException(401, "missing or wrong X-API-Key")
 
 
-api = APIRouter(prefix="/api", dependencies=[Depends(require_key)])
+api = APIRouter(prefix="/api", dependencies=[Depends(require_key)], tags=["validations"],
+                responses={401: {"description": "Missing or wrong X-API-Key"},
+                           503: {"description": "The server has no VALIDATION_API_KEY, or a BigQuery lookup failed"}})
 pages = APIRouter()
 
 
 class CandidateIn(BaseModel):
-    label: str = Field(min_length=1, max_length=120)
-    model: str = Field(min_length=1, max_length=120)
+    label: str = Field(min_length=1, max_length=120, description="Your name for it, e.g. a router or a release. "
+                                                                 "Unique within the item; 'original' is reserved")
+    model: str = Field(min_length=1, max_length=120, description="The model or router to call, as the gateway names it")
 
 
 class ItemIn(BaseModel):
-    id: Optional[str] = Field(default=None, min_length=1)   # defaults to request_id
-    request: Optional[dict] = None          # OpenAI chat request: model, messages, tools?, tool_choice?, max_tokens?
-    response: Optional[dict] = None         # the original's OpenAI chat completion; omitted -> it is re-run once more
-    request_id: Optional[str] = Field(default=None, min_length=1, max_length=200)  # or: a logged call, from BigQuery
+    id: Optional[str] = Field(default=None, min_length=1,
+                              description="Your id for the request, unique in the batch; defaults to request_id")
+    request: Optional[dict] = Field(default=None, description="The logged OpenAI chat request: model (the original), "
+                                    "messages, and tools, tool_choice, response_format, temperature, max_tokens when used")
+    response: Optional[dict] = Field(default=None, description="The original's logged OpenAI chat completion; "
+                                     "without it the original is re-run once more")
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=200,
+                                      description="Instead of request and response: a logged LiteLLM call, looked up "
+                                                  "in BigQuery")
     candidates: list[CandidateIn] = Field(min_length=1, max_length=MAX_CANDIDATES)
 
 
 class JobIn(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{
+        "items": [
+            {"request_id": "chatcmpl-ET2KW1d347oy8pFVy3NbMzm3liZzC",
+             "candidates": [{"label": "mini", "model": "gpt-5.4-mini"}, {"label": "router", "model": "jev-router"}]},
+            {"id": "refund-17",
+             "request": {"model": "gpt-5.4", "max_tokens": 1024, "messages": [
+                 {"role": "system", "content": "You are a billing agent."},
+                 {"role": "user", "content": "Refund order 17, it arrived broken."}]},
+             "response": {"model": "gpt-5.4", "choices": [{"message": {"role": "assistant",
+                                                                        "content": "I've started a refund for order 17."}}],
+                          "usage": {"prompt_tokens": 31, "completion_tokens": 12}},
+             "candidates": [{"label": "mini", "model": "gpt-5.4-mini"}]}],
+        "max_budget_usd": 25,
+        "callback_url": "https://example.internal/hooks/validation"}]})
     items: list[ItemIn] = Field(min_length=1, max_length=MAX_ITEMS)
-    judge_model: Optional[str] = None
-    max_budget_usd: Optional[float] = Field(default=None, gt=0)     # none: no budget, the job runs to the end
-    callback_url: Optional[HttpUrl] = None
+    judge_model: Optional[str] = Field(default=None, description="The judge; defaults to the server's (claude-sonnet-5)")
+    max_budget_usd: Optional[float] = Field(default=None, gt=0, description="Stop once the job has spent this much; "
+                                            "no cap when left out")
+    callback_url: Optional[HttpUrl] = Field(default=None, description="POSTed the job status once, when the job ends")
 
 
 class ResumeIn(BaseModel):
-    max_budget_usd: Optional[float] = Field(default=None, gt=0)
+    max_budget_usd: Optional[float] = Field(default=None, gt=0, description="A new budget for the job")
+
+
+# ── what the API returns: documentation for /docs and /openapi.json. The routes return plain dicts; the tests check
+# real responses against these models (extra fields refused), so the documentation can't drift from the code ──────
+class _Out(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+Verdict = Literal["within", "outside", "unverified"]
+
+
+class Submitted(_Out):
+    id: str
+    status: str
+    items: int = Field(description="Requests in the job")
+    url: str = Field(description="Where to follow it")
+
+
+class JobSpec(_Out):
+    reference_runs: int = Field(description="Fresh re-runs of the original per request")
+    candidate_runs: int = Field(description="Answers per candidate per request")
+    votes: int = Field(description="Judge calls per candidate answer")
+    coherence_floor: float = Field(description="Below this self-agreement the original has no stable behaviour, so "
+                                               "the request is unverified")
+    margin: float = Field(description="How far a candidate may trail the original's self-agreement and still pass")
+    judge_model: str
+    judge_max_tokens: int
+    ref_chars: int
+    cap_chars: int
+    max_parallel: int
+
+
+class Job(_Out):
+    id: str
+    status: Literal["queued", "running", "done", "stopped", "failed"]
+    created_at: str
+    updated_at: str
+    items_total: int
+    items_done: int
+    spend_usd: float
+    max_budget_usd: Optional[float]
+    judge_model: str
+    stop_reason: Optional[str] = Field(description="Why a stopped job stopped")
+    error: Optional[str] = Field(description="Why a failed job failed")
+    workers: int = Field(description="Workers on it right now")
+    unpriced_calls: int = Field(description="Calls to models without a catalog price: spend is understated")
+    spec: JobSpec
+
+
+class Answers(_Out):
+    match: int = Field(description="Same behaviour as the original")
+    acceptable: int = Field(description="Differs only where the original itself varies")
+    drift: int = Field(description="Changed a decision, value or action, or made something up")
+    unclear: int = Field(description="Not judged: the call failed or the judges were unsure")
+
+
+class LabelSummary(_Out):
+    label: str = Field(description="A candidate label, or 'original' for the baseline row")
+    models: list[str] = Field(description="Models this label was asked to call")
+    requests: int
+    answers: Optional[Answers] = Field(description="Every answer of this label, by category; null on the original")
+    within: int = Field(description="Requests that pass")
+    outside: int = Field(description="Requests that drift")
+    unverified: int = Field(description="Requests that could not be judged")
+    avg_fit_rate: Optional[float] = Field(default=None, description="Candidates: share of answers that fit, averaged")
+    avg_consistency: Optional[float] = Field(default=None, description="Original: how often its own answers agree")
+    avg_latency_ms: Optional[int]
+    avg_cost_usd: Optional[float] = Field(description="Per call, over the same requests as the original's")
+    within_rate: Optional[float] = Field(default=None, description="Candidates: within / requests")
+    cost_vs_original_pct: Optional[int] = Field(default=None, description="Candidates: -72 means 72% cheaper")
+    latency_vs_original_pct: Optional[int] = Field(default=None, description="Candidates: -31 means 31% faster")
+
+
+class Routing(_Out):
+    label: str
+    served_model: Optional[str] = Field(description="The model that answered, as named in its responses")
+    requests: int
+    within: int
+    outside: int
+    unverified: int
+
+
+class Callback(_Out):
+    sent_at: Optional[str] = Field(description="When it was delivered; null until then")
+    error: Optional[str] = Field(description="Why the last delivery failed")
+
+
+class Status(Job):
+    summary: list[LabelSummary]
+    routing: list[Routing] = Field(description="For labels answered by several models (routers): results per model")
+    callback: Optional[Callback] = Field(description="null without a callback_url")
+    results_url: str
+
+
+class Listed(Job):
+    summary: Optional[list[LabelSummary]] = Field(default=None, description="With ?with_summary=1")
+
+
+class Usage(_Out):
+    input: int = Field(description="Input tokens not read from a cache")
+    output: int
+    cache_read: int
+    cache_write: int
+
+
+class Call(_Out):
+    output: str = Field(description="The answer: its text, then any tool call as [calls name({args})]")
+    model: Optional[str] = Field(description="The model that answered")
+    usage: Optional[Usage]
+    latency_ms: Optional[int]
+    cost_usd: Optional[float]
+    error: Optional[str] = Field(description="Why the call failed")
+    stop_reason: Optional[str]
+
+
+class OriginalAnswer(Call):
+    recorded: Optional[bool] = Field(description="true: the logged answer; otherwise a fresh re-run")
+    agrees: bool = Field(description="Agrees with the rest of the original's answers")
+    reason: str = Field(description="Why it doesn't, when it doesn't")
+
+
+class Reference(_Out):
+    agree: Optional[int] = Field(description="How many of the original's answers agree; null when unknown")
+    of: int
+    consistency: Optional[float] = Field(description="agree / of")
+    runs: list[OriginalAnswer]
+
+
+class Vote(_Out):
+    kept: Optional[bool] = Field(description="true: fits the original's answers; null: the judge was unsure")
+    reason: str
+
+
+class CandidateAnswer(Call):
+    degraded: Optional[bool] = Field(description="The model refused a setting of the request (e.g. reasoning), so "
+                                                 "it ran without it")
+    kept: bool = Field(description="The judges' majority: it fits")
+    category: Optional[Literal["match", "acceptable", "drift", "unclear"]]
+    votes: str = Field(description="e.g. '3/3': the judges that agree with the outcome")
+    reason: str
+    judges: list[Vote]
+
+
+class CandidateResult(_Out):
+    label: str
+    model: str
+    verdict: Verdict
+    reason: str = Field(description="Why this verdict, e.g. '(4/5 vs original 5/5)' or why it is unverified")
+    judge_reason: str = Field(description="The judges' most common reason behind the verdict")
+    kept: int = Field(description="Answers that fit")
+    of: int
+    fit_rate: Optional[float]
+    answers: Optional[Answers]
+    latency_ms: Optional[int] = Field(description="Average over its answers")
+    cost_usd: Optional[float] = Field(description="Average per answer")
+    runs: list[CandidateAnswer]
+
+
+class Result(_Out):
+    id: str
+    model: str = Field(description="The original model")
+    spend_usd: float = Field(description="What judging this request cost")
+    reference: Reference = Field(description="The original's own answers")
+    candidates: list[CandidateResult]
+
+
+class ResultsPage(_Out):
+    page: int
+    per_page: int
+    total: int
+    results: list[Result]
 
 
 def _logged(items):
@@ -133,8 +364,11 @@ def _items(body):
     return out
 
 
-@api.post("/validations", status_code=202)
+@api.post("/validations", status_code=202, summary="Submit a batch", responses={
+    202: {"model": Submitted}, 422: {"description": "The batch was refused whole; `detail` lists every problem"}})
 def submit(body: JobIn):
+    """Queue a batch. Items named by `request_id` are looked up in BigQuery first; nothing starts unless every item
+    is usable."""
     from app.services.downgrade_refset import spec as app_spec
     spec = app_spec()
     if body.judge_model:
@@ -151,8 +385,11 @@ def _known(job_id):
     return job
 
 
-@api.get("/validations/{job_id}")
+@api.get("/validations/{job_id}", summary="Status and summary", responses={
+    200: {"model": Status}, 304: {"description": "Unchanged since the ETag sent as If-None-Match"},
+    404: {"description": "No such validation"}})
 def status(job_id: str, if_none_match: Optional[str] = Header(None)):
+    """Progress, spend, and the per-label summary. Small enough to poll; the callback sends the same body."""
     job = _known(job_id)
     cb = jobs.callback(job_id)
     tag = 'W/"%s-%d-%d-%s-%s"' % (job["status"], job["items_done"], job["workers"], job["updated_at"],
@@ -163,8 +400,11 @@ def status(job_id: str, if_none_match: Optional[str] = Header(None)):
                          "results_url": "/api/validations/%s/results" % job_id}, headers={"ETag": tag})
 
 
-@api.post("/validations/{job_id}/resume")
+@api.post("/validations/{job_id}/resume", summary="Resume a stopped or failed job", responses={
+    200: {"model": Job}, 404: {"description": "No such validation"},
+    409: {"description": "Not stopped or failed, or its budget is spent: send a higher max_budget_usd"}})
 def resume(job_id: str, body: Optional[ResumeIn] = None):
+    """Its unfinished requests run; finished ones are kept. The callback is sent again when it ends."""
     _known(job_id)
     job = jobs.resume(job_id, body.max_budget_usd if body else None)
     if job is None:
@@ -173,16 +413,21 @@ def resume(job_id: str, body: Optional[ResumeIn] = None):
     return job
 
 
-@api.get("/validations/{job_id}/results")
+@api.get("/validations/{job_id}/results", summary="Results per request", responses={
+    200: {"model": ResultsPage}, 404: {"description": "No such validation"}})
 def results(job_id: str, page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200),
-            show: Literal["all", "problems", "split"] = "all", label: Optional[str] = None,
-            verdict: Optional[Literal["within", "outside", "unverified"]] = None, q: str = ""):
+            show: Literal["all", "problems", "split"] = Query(
+                "all", description="problems: a candidate is outside or unverified; split: candidates disagree"),
+            label: Optional[str] = Query(None, description="With verdict: requests where this label has it"),
+            verdict: Optional[Verdict] = None, q: str = Query("", description="Part of a request id")):
+    """Finished requests in submission order, each with every answer and the judges' reasons."""
     _known(job_id)
     total, res = jobs.page(job_id, page, per_page, show=show, label=label, verdict=verdict, q=q)
     return {"page": page, "per_page": per_page, "total": total, "results": res}
 
 
-@api.get("/validations/{job_id}/results/{request_id:path}")
+@api.get("/validations/{job_id}/results/{request_id:path}", summary="One request's result", responses={
+    200: {"model": Result}, 404: {"description": "No such validation, or the request has not finished"}})
 def one_result(job_id: str, request_id: str):
     got = jobs.request(job_id, request_id)
     if not got or got[1] is None:
@@ -190,8 +435,9 @@ def one_result(job_id: str, request_id: str):
     return got[1]
 
 
-@api.get("/validations")
+@api.get("/validations", summary="List jobs", responses={200: {"model": list[Listed]}})
 def recent(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200), with_summary: bool = False):
+    """Newest first."""
     found = jobs.recent(per_page, (page - 1) * per_page)
     return _with_summaries(found) if with_summary else found
 

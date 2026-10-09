@@ -59,7 +59,7 @@ def comprehend_node(node, selection):
               "marker + its char size):\n" + _digests(selection["digests"]) + "\n\n" + _SCHEMA)
     r = llm_client.complete(model=PROFILE_MODEL, max_tokens=PROFILE_MAX_TOKENS, system=_SYS,
                             messages=[{"role": "user", "content": user}])
-    raw = "".join(b.text for b in r.content if getattr(b, "type", None) == "text")
+    raw = llm_client.text(r)
     return _parse(raw)
 
 
@@ -126,7 +126,7 @@ def deployment_summary(agent, per_node, edges, function_nodes=None):
                _DEPLOY_SCHEMA))
     r = llm_client.complete(model=PROFILE_MODEL, max_tokens=PROFILE_MAX_TOKENS, system=_DEPLOY_SYS,
                             messages=[{"role": "user", "content": user}])
-    raw = "".join(b.text for b in r.content if getattr(b, "type", None) == "text")
+    raw = llm_client.text(r)
     s, e = raw.find("{"), raw.rfind("}")
     if s >= 0 and e > s:
         try:

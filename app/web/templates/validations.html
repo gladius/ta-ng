@@ -5,7 +5,6 @@
 {% from "_vparts.html" import vstyle, pct, answers_bar %}{{ vstyle() }}
 <style>
   .v-intro{color:var(--muted);max-width:72ch;margin:0 0 var(--s5)}
-  .v-call{white-space:pre;overflow:auto;font-size:12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
   .lrow{display:flex;align-items:center;gap:8px;white-space:nowrap;margin:2px 0}
   .lrow b{min-width:64px}
   .lrow .abar{min-width:64px;width:64px;height:8px}
@@ -34,24 +33,5 @@
 <p class="empty">No validations yet.</p>
 {% endif %}
 
-<h2>Submit one</h2>
-<pre class="v-call">curl -X POST {{ request.base_url }}api/validations \
-  -H "X-API-Key: $VALIDATION_API_KEY" -H "Content-Type: application/json" -d '{
-  "items": [{
-    "id": "req-123",
-    "request":  {"model": "gpt-5.4", "messages": [{"role": "user", "content": "..."}]},
-    "response": {"choices": [{"message": {"role": "assistant", "content": "..."}}]},
-    "candidates": [{"label": "router-a", "model": "gpt-5.4-mini"},
-                   {"label": "router-b", "model": "gpt-5.4-nano"}]
-  }, {
-    "request_id": "chatcmpl-...",
-    "candidates": [{"label": "router-a", "model": "gpt-5.4-mini"}]
-  }]}'
-# an item can name a logged LiteLLM call by request_id instead (looked up in BigQuery); optional:
-# "judge_model", "max_budget_usd" (none: no limit), "callback_url" (POSTed once the job ends)
-
-# status + per-candidate summary (poll this; send If-None-Match with the last ETag to get 304 when unchanged)
-curl -H "X-API-Key: $VALIDATION_API_KEY" {{ request.base_url }}api/validations/&lt;id&gt;
-# full results, 50 per page; filter with show=problems|split, label=&amp;verdict=, q=&lt;request id&gt;
-curl -H "X-API-Key: $VALIDATION_API_KEY" "{{ request.base_url }}api/validations/&lt;id&gt;/results?page=1"</pre>
+<p class="v-links">API: <a href="/docs">reference</a> (try calls with your key) · <a href="/openapi.json">openapi.json</a> (for client code or a coding assistant)</p>
 {% endblock %}

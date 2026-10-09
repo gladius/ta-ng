@@ -121,7 +121,7 @@ def _edit(request, answer, change):
     from app.services import llm_client
     r = llm_client.complete(model=EDITOR, max_tokens=800, system=EDITOR_SYSTEM, messages=[{"role": "user", "content":
         "REQUEST:\n%s\n\nANSWER:\n%s\n\nCHANGE: %s" % (request, answer, change)}])
-    return "".join(b.text for b in r.content if getattr(b, "type", "") == "text").strip()
+    return llm_client.text(r).strip()
 
 
 def build(_args):

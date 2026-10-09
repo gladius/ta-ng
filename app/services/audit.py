@@ -6,7 +6,8 @@ majority-voted to belong to it. `audit_node` samples N distinct inputs and deleg
 
 This module provides the pieces that path shares:
   replay(trace, model)   -> re-run the recorded request on `model`: {output (text + tool calls as ONE string),
-                            usage, latency_ms, model as served, stop_reason, degraded}.
+                            usage, latency_ms, model as served, stop_reason, degraded}. A logged OpenAI request
+                            (trace["logged_request"]) is sent as it was; otherwise it is rebuilt from the trace.
   _recorded(trace)       -> the ORIGINAL's recorded output — the reference we must preserve (never re-run).
   _distinct / _tools / _tool_choice / _render / _messages -> input sampling + provider-neutral request shaping.
 """
@@ -34,8 +35,9 @@ def _system_text(t):
 
 
 def _messages(trace):
-    """Recorded conversation as an Anthropic messages array: system pulled out, roles mapped, consecutive
-    same-role merged (the API needs alternation), must start with user. Recorded tool results are text."""
+    """Recorded conversation as a chat messages array: system pulled out (run() puts it first), roles mapped,
+    consecutive same-role merged (some providers need alternation), must start with user. Recorded tool results are
+    text."""
     out = []
     for m in trace.get("input_messages", []):
         if m.get("role") == "system":
@@ -108,19 +110,15 @@ def _tool_choice(raw):
     return None                                           # auto / none / unknown -> don't force
 
 
-# The Anthropic SDK refuses a non-streaming call that may run past 10 minutes ("Streaming is required ..."),
-# i.e. max_tokens above ~21.3k. Logged requests often ask for 32k+ while answering far less, so re-runs are capped
-# here, the original's and the candidates' alike. ponytail: an original longer than this re-runs truncated.
-NONSTREAMING_MAX_TOKENS = 21_000
-
-
 def replay(trace, model, max_tokens=None):
     """Re-run the recorded request on `model` and return the run record (behaviour rendered as one string + usage).
-    This expresses NEUTRAL INTENT only — bind these tools, force this tool_choice, use reasoning if the node did —
-    and hands it to llm_client.run, which owns the provider request shape. Tools BOUND (read-only), never executed. Output budget SCALES to the recorded output (+headroom), capped
-    at the model's real max_output. temperature left at the model DEFAULT on purpose — re-runs must SAMPLE the model's
-    natural run-to-run variance (that's exactly what coherence/self-consistency measures), and the thinking path
-    rejects a custom temperature anyway. The deterministic side (judges, optimizer, profiler) goes through complete()."""
+    A logged OpenAI request (API / BigQuery items) is sent AS IT WAS: its messages, tools, tool_choice, response_format,
+    temperature etc.; only the model and max_tokens change. Otherwise (other sources) this expresses NEUTRAL INTENT —
+    bind these tools, force this tool_choice, use reasoning if the node did — and llm_client.run shapes the request.
+    Tools BOUND (read-only), never executed. Output budget SCALES to the recorded output (+headroom), capped at the
+    model's real max_output. No temperature is ever invented: the logged one, else the model DEFAULT — re-runs must
+    SAMPLE the model's natural run-to-run variance (that's exactly what coherence/self-consistency measures). The
+    deterministic side (judges, optimizer, profiler) goes through complete()."""
     if max_tokens is None:
         # FAITHFUL budget: give the re-run the SAME room the ORIGINAL ran under (trace's max_output_tokens). A thinking
         # model (Gemini 2.5 thinks by default) counts thinking tokens AGAINST this budget, so a budget sized to the
@@ -134,13 +132,17 @@ def replay(trace, model, max_tokens=None):
             if rec_out <= 0:
                 rec_out = len(trace.get("output") or "") // 4
             max_tokens = min(registry.max_output(model), max(512, rec_out * 3))
-    max_tokens = min(max_tokens, NONSTREAMING_MAX_TOKENS)
-    system = "\n".join(m["content"] for m in trace.get("input_messages", []) if m.get("role") == "system")
-    tools = _tools(trace)
-    res = llm_client.run(model=model, messages=_messages(trace), max_tokens=max_tokens,
-                         system=(system.strip() or None), tools=tools,
-                         tool_choice=(_tool_choice(trace.get("tool_choice")) if tools else None),
-                         reasoning=bool(trace.get("thinking_enabled")))
+    logged = trace.get("logged_request")
+    if logged:
+        res = llm_client.run(model=model, messages=logged["messages"], max_tokens=max_tokens,
+                             params={k: v for k, v in logged.items() if k != "messages"})
+    else:
+        system = "\n".join(m["content"] for m in trace.get("input_messages", []) if m.get("role") == "system")
+        tools = _tools(trace)
+        res = llm_client.run(model=model, messages=_messages(trace), max_tokens=max_tokens,
+                             system=(system.strip() or None), tools=tools,
+                             tool_choice=(_tool_choice(trace.get("tool_choice")) if tools else None),
+                             reasoning=bool(trace.get("thinking_enabled")))
     return {"output": _render(res["text"], res["tool_calls"]), "usage": res["usage"], "latency_ms": res["latency_ms"],
             "model": res["model"], "stop_reason": res["stop_reason"], "degraded": res["degraded"]}
 
