@@ -119,6 +119,8 @@ def test_grid_cell_opens_the_request_page_and_downloads(client):
     page = client.get("/validations/%s/requests/req-2?cand=router-b" % job_id).text
     assert 'id="evidence"' in page and "refund order 2" in page            # the request itself is shown
     assert "router-b (gpt-5.4-nano)" in page and "router-b run 1" in page   # the candidate's runs, labelled
+    first = client.get("/validations/%s/requests/req-2" % job_id).text       # no candidate chosen: the first one,
+    assert 'class="on" href="?cand=router-a#evidence"' in first and 'href="?cand=router-b#evidence"' in first   # +switch
     assert client.get("/validations/%s/requests/nope" % job_id).status_code == 404
     assert client.get("/api/validations/%s/results/req-2" % job_id, headers=KEY).json()["id"] == "req-2"
     assert client.get("/api/validations/%s/results/nope" % job_id, headers=KEY).status_code == 404

@@ -6,7 +6,8 @@
 {% block content %}
 {{ evidence_style() }}
 {{ vstyle() }}
-<style>.why{font-size:13px;line-height:1.45;min-width:240px}</style>
+<style>.why{font-size:13px;line-height:1.45;min-width:240px}
+  .v-tabs{align-items:center;margin-top:var(--s5,20px)} .v-tabs + .v-panel{margin-top:10px}</style>
 <h1>{{ r.id }}</h1>
 <p class="v-meta">Original <span class="mono">{{ r.model }}</span> · in <a href="/validations/{{ job.id }}">{{ job.id }}</a></p>
 
@@ -36,8 +37,9 @@
 </table>
 {{ legend() }}
 
+<div class="v-filters v-tabs" id="evidence"><span class="v-small">Details for</span>{% for x in cands %}<a class="{{ 'on' if x.c.label == cand }}" href="?cand={{ x.c.label | urlencode }}#evidence">{{ x.c.label }} · {{ vword(x.c.verdict) }}</a>{% endfor %}</div>
 {% for x in cands %}{% if x.c.label == cand %}{% set c = x.c %}
-<section class="v-panel" id="evidence">
+<section class="v-panel">
   <h2>{{ c.label }} <span class="mono v-small">{{ c.model }}</span></h2>
   <p>{{ verdict(c) }} {{ c.judge_reason or c.reason }}{% if c.judge_reason %} <span class="v-small">({{ c.reason }})</span>{% endif %}</p>
   {{ evidence([x.row], ok_word='passes', bad_word='drifts', who=c.label ~ ' (' ~ c.model ~ ')', run_meta=c.label ~ ' run', open=True) }}
