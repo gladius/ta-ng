@@ -43,9 +43,9 @@
   .vsb-track b.up{background:#c0392b}
   .vsb-track b.base{background:#6b6b72}
   .vsb-track i{position:absolute;left:56px;top:-4px;bottom:-4px;width:2px;border-radius:1px;background:#18181b;opacity:.55}
-  .vsb .pc{font-weight:700;font-size:13px}
-  .vsb .pc.good{color:var(--ok-ink)} .vsb .pc.bad{color:var(--bad)}
-  .vsb .val{grid-column:1/3;font-size:12px;color:var(--muted)}
+  .vsb .val{font-size:13px;color:var(--ink)}
+  .vsb .pc{grid-column:1/3;font-size:12px;color:var(--muted)}
+  .vsb .pc.good{color:var(--ok-ink);font-weight:700} .vsb .pc.bad{color:var(--bad);font-weight:700}
   .legend .tick{width:2px;height:12px;border-radius:1px;background:#18181b;opacity:.55;vertical-align:-2px}
   .kpis{display:flex;flex-wrap:wrap;gap:12px;margin:var(--s4,14px) 0 var(--s5,20px)}
   .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 16px;min-width:150px}
@@ -73,5 +73,6 @@
 {% macro legend() %}<div class="legend"><span><i class="a-match"></i>match: same behaviour</span><span><i class="a-acceptable"></i>acceptable: differs only where the original itself varies</span><span><i class="a-drift"></i>drift: changed a decision, value or action, or made something up</span><span><i class="a-unclear"></i>unclear</span><span><i class="tick"></i>cost and latency: the original (green ends before it, red goes past it)</span></div>{% endmacro %}
 
 {# `v` against the original's `base`: the track's tick is the original, the fill is v on the same scale (up to 1.5x),
-   green when lower (cheaper, faster), red when higher; then the change in % and the value. is_base: the original's row #}
-{% macro vsbar(v, base, value, is_base=False) %}{% set r = (v / base) if (v is not none and base) else none %}<div class="vsb"><span class="vsb-track"><b class="{{ 'base' if is_base else 'up' if r and r > 1 }}" style="width:{{ '%.0f' % ([r, 1.5] | min * 56) if r is not none else 0 }}px"></b><i></i></span>{% if is_base %}<span class="pc">{{ value }}</span><span class="val">baseline</span>{% elif r is none %}<span class="val">{{ value }}</span>{% else %}{% set p = ((r - 1) * 100) | round | int %}<span class="pc {{ 'good' if p < 0 else 'bad' if p > 0 }}">{{ '%+d%%' % p if p else 'same' }}</span><span class="val">{{ value }}</span>{% endif %}</div>{% endmacro %}
+   green when lower (cheaper, faster), red when higher. The value sits beside the bar so a column of them lines up;
+   below it, the change in % (or "baseline" on the original's row, is_base) #}
+{% macro vsbar(v, base, value, is_base=False) %}{% set r = (v / base) if (v is not none and base) else none %}<div class="vsb"><span class="vsb-track"><b class="{{ 'base' if is_base else 'up' if r and r > 1 }}" style="width:{{ '%.0f' % ([r, 1.5] | min * 56) if r is not none else 0 }}px"></b><i></i></span><span class="val">{{ value }}</span>{% if is_base %}<span class="pc">baseline</span>{% elif r is not none %}{% set p = ((r - 1) * 100) | round | int %}<span class="pc {{ 'good' if p < 0 else 'bad' if p > 0 }}">{{ '%+d%%' % p if p else 'same as original' }}</span>{% endif %}</div>{% endmacro %}
