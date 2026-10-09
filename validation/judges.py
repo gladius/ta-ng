@@ -1,30 +1,40 @@
 """The two LLM judges, and the strict readers of their replies.
 
-fit        does ONE candidate output belong to the reference set? Majority of `votes` calls decides (engine).
+fit        does ONE candidate output belong to the reference set: equivalent, a variation the original allows, or
+           drift? Majority of `votes` calls decides (engine); an unsure vote abstains.
 coherence  how many of the reference outputs agree with each other — the bar a candidate is held to.
 
-A verdict is the first line that STARTS with the verdict word, case-sensitive; prose that merely contains "kept" or
-"broke" is not a verdict. A reply with no readable verdict is never read as a pass: fit -> BROKE, coherence -> unknown.
+A verdict is the first line that STARTS with the verdict word, case-sensitive; prose that merely contains one is not a
+verdict. A reply with no readable verdict is never read as a pass: fit -> an abstaining vote, coherence -> unknown.
 """
 import re
 
 from validation.pricing import cost_of
 
 FIT_SYSTEM = (
-    "You decide whether a CANDIDATE output belongs to the same behaviour as a REFERENCE SET of outputs the model "
-    "already considers acceptable for the SAME request. Does the CANDIDATE carry the SAME decision / classification "
-    "/ required facts / values / tool call — SAME tool AND same material arguments — as the set, differing ONLY in "
-    "ways the set ITSELF already shows? Judge material CONTENT, not surface form:\n"
-    "- Wording and ordering differences are always fine.\n"
-    "- A FORMAT or STRUCTURE difference (e.g. JSON vs plain text) is fine ONLY IF the reference set itself varies "
-    "that way. If every output in the set holds one form, a candidate that breaks it does NOT belong.\n"
-    "- A changed decision, a changed tool argument, a dropped / added material fact or value, or an invented / "
-    "contradicted claim NEVER belongs.\n"
-    "- If unsure -> BROKE.\n"
-    "Reply with ONE line only: the word KEPT or BROKE, then ' - ', then a <=15-word reason naming the specific "
-    "decision / fact / value / tool-argument that matches or differs. Examples:\n"
-    "KEPT - same escalate decision and same account_id argument\n"
-    "BROKE - changed the refund amount from 50 to 100"
+    "You compare a CANDIDATE output with a REFERENCE SET: outputs the same model produced for the SAME request, all "
+    "acceptable. Decide whether the candidate behaves the way the reference set does.\n"
+    "Read the reference set as evidence of what the model keeps FIXED and what it treats as FREE:\n"
+    "- FIXED: what every reference agrees on: decisions, classifications, chosen actions and tool calls with their "
+    "material arguments, values taken from the request, required parts, format, refusals.\n"
+    "- FREE: where the references differ from one another: wording, order, length, level of detail, which of several "
+    "valid options or examples is chosen.\n"
+    "Classify the candidate:\n"
+    "EQUIVALENT - the same fixed content; it differs only in wording, order or form.\n"
+    "VARIATION - keeps all fixed content and differs in a free aspect with a choice the request allows; an option or "
+    "example no reference used is fine when it is valid for the request. It may add general, correct context that "
+    "states nothing specific about the request's people, organisation, policies, products, numbers or systems.\n"
+    "DRIFT - any of: changes or drops fixed content (another decision, label, action, tool or material argument; a "
+    "changed value from the request; a part every reference has; the format every reference uses); states a specific "
+    "claim that neither the request nor the references support (about a person, customer, organisation, policy, "
+    "product, number, or what a system does or stores), even if it sounds plausible; makes a commitment or takes an "
+    "action the references do not; breaks an instruction in the request.\n"
+    "UNSURE - what you were given is not enough to tell.\n"
+    "Reply with ONE line only: the category, then ' - ', then a <=15-word reason naming the specific fixed content "
+    "kept, or the specific difference. Examples:\n"
+    "EQUIVALENT - same decision and identifier; wording differs\n"
+    "VARIATION - chooses another option the request allows; all fixed content kept\n"
+    "DRIFT - claims a system behaviour that neither the request nor the references state"
 )
 # request + reference set are identical across every fit call for one item -> the cached prefix; only the candidate varies
 FIT_PREFIX = "REQUEST:\n%s\n\nREFERENCE SET — %d outputs the model considers ACCEPTABLE for this request:\n%s\n\n"
@@ -34,8 +44,10 @@ COHERENCE_TEMPLATE = (
     "REQUEST:\n%s\n\n"
     "Here are %d outputs the SAME model produced for this request:\n%s\n\n"
     "How many carry the SAME decision / classification / required facts / values / tool call as one another? Judge "
-    "material CONTENT, not surface form — wording, ordering, and format differences do NOT count as disagreement "
-    "UNLESS they change the meaning; a changed decision or a different material value DOES.\n"
+    "material CONTENT, not surface form: wording, ordering and format differences do NOT count as disagreement UNLESS "
+    "they change the meaning; a changed decision or a different material value DOES. Where the request leaves room "
+    "for several valid answers (which option, example or detail to give), outputs that choose differently but are "
+    "each valid AGREE; only a contradiction, or a different decision or value the request fixes, is divergence.\n"
     "Line 1 — output exactly: CONSISTENT n/%d\n"
     "Line 2 — output: DIVERGENT followed by the numbers of the outputs that break from the majority "
     "(e.g. 'DIVERGENT 2,4'), or 'DIVERGENT none'.\n"
@@ -52,14 +64,21 @@ def cap(s, n):
     return s[:n] + "\n…[TRUNCATED %d chars — output exceeds the judge's %dk-char budget]" % (len(s) - n, n // 1000)
 
 
+_CATEGORY = {"EQUIVALENT": True, "VARIATION": True, "KEPT": True, "DRIFT": False, "BROKE": False, "UNSURE": None}
+
+
 def parse_fit(raw):
-    """-> (kept, reason). No verdict line -> BROKE ("if unsure -> BROKE"), and the reason says the reply was unreadable."""
-    m = re.search(r"^\W*(?:[Vv]erdict\W*)?(KEPT|BROKE)\b", raw or "", flags=re.M)
+    """-> (kept, reason). kept: True (equivalent, or a variation the original allows), False (drift), or None when the
+    judge is unsure or its reply has no verdict: an abstaining vote, never read as a pass or a fail. A variation's or
+    an unsure vote's reason says so ("variation: ...")."""
+    m = re.search(r"^\W*(?:[Vv]erdict\W*)?(EQUIVALENT|VARIATION|DRIFT|UNSURE|KEPT|BROKE)\b", raw or "", flags=re.M)
     if not m:
-        return False, "no verdict in the judge's reply"
-    kept = m.group(1) == "KEPT"
+        return None, "no verdict in the judge's reply"
+    word = m.group(1)
+    kept = _CATEGORY[word]
     tail = raw[m.end():].split("\n", 1)[0].strip(" \t:.-–—*_`|")
-    return kept, (tail[:240] or ("matches the set" if kept else "differs from the set"))
+    reason = tail[:240] or {True: "matches the set", False: "differs from the set", None: "the judge is unsure"}[kept]
+    return kept, ("%s: %s" % (word.lower(), reason) if word in ("VARIATION", "UNSURE") else reason)
 
 
 def parse_coherence(raw, total):

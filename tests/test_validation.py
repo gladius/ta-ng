@@ -16,8 +16,12 @@ def test_fit_reply_parsing():
     # prose that merely contains the words is not a verdict; the verdict line decides
     assert judges.parse_fit("The candidate kept the tool but changed the amount.\nBROKE - amount 50 -> 100") == \
         (False, "amount 50 -> 100")
-    assert judges.parse_fit("It broke nothing material.")[0] is False          # lowercase, no verdict -> BROKE
-    assert judges.parse_fit("") == (False, "no verdict in the judge's reply")
+    assert judges.parse_fit("It broke nothing material.")[0] is None           # no verdict: the vote abstains
+    assert judges.parse_fit("") == (None, "no verdict in the judge's reply")
+    assert judges.parse_fit("EQUIVALENT - same decision and identifier") == (True, "same decision and identifier")
+    assert judges.parse_fit("VARIATION - another valid option") == (True, "variation: another valid option")
+    assert judges.parse_fit("**DRIFT** - claims an unstated policy") == (False, "claims an unstated policy")
+    assert judges.parse_fit("UNSURE - output is truncated") == (None, "unsure: output is truncated")
 
 
 def test_coherence_reply_parsing():
@@ -258,3 +262,16 @@ def test_a_failed_judge_call_leaves_the_request_unverified(monkeypatch):
     monkeypatch.setattr(engine.judges, "coherence", blocked)
     c = validate(_item(), Spec(), _run)["candidates"][0]
     assert c["verdict"] == "unverified" and c["reason"].startswith("a judge call failed")
+
+
+
+def test_unsure_votes_abstain(monkeypatch):
+    _judges(monkeypatch)
+    votes = iter([(True, "same", 0.0), (None, "unsure: truncated", 0.0), (True, "same", 0.0)] * 5)
+    monkeypatch.setattr(engine.judges, "fit", lambda *a: next(votes))
+    one_at_a_time = Spec(max_parallel=1)                         # votes reach runs in order
+    c = validate(_item(), one_at_a_time, _run)["candidates"][0]
+    assert (c["verdict"], c["kept"]) == ("within", 5)            # 2 of 3 decided, both kept: one unsure vote is fine
+    votes = iter([(None, "unsure: truncated", 0.0), (None, "unsure: truncated", 0.0), (True, "same", 0.0)] * 5)
+    c = validate(_item(), one_at_a_time, _run)["candidates"][0]
+    assert (c["verdict"], c["reason"]) == ("unverified", "unsure: truncated")   # most abstained: not judged

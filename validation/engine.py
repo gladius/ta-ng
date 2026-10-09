@@ -137,14 +137,16 @@ def validate_many(items, spec, run=None):
             unjudged = None
             for j, r in enumerate(cruns):
                 votes = verdicts[("fit", i, c)][j * spec.votes:(j + 1) * spec.votes] if not r.get("error") else []
-                unjudged = unjudged or next((w for k, w, _ in votes if k is None), None)
-                yes = sum(1 for k, _, _ in votes if k)
-                ok = bool(votes) and yes * 2 > len(votes) and all(k is not None for k, _, _ in votes)
+                decided = [k for k, _, _ in votes if k is not None]      # unsure or failed votes abstain
+                if votes and len(decided) * 2 <= len(votes):            # most abstained: this run isn't judged
+                    unjudged = unjudged or next(w for k, w, _ in votes if k is None)
+                yes = sum(1 for k in decided if k)
+                ok = len(decided) * 2 > len(votes) and yes * 2 > len(decided)
                 kept += ok
                 spend += (r["cost_usd"] or 0) + sum(cost for _, _, cost in votes)
                 rows.append({**{k: r.get(k) for k in ("output", "model", "usage", "latency_ms", "cost_usd", "error",
                                                        "degraded", "stop_reason")},
-                             "kept": ok, "votes": "%d/%d" % (yes if ok else len(votes) - yes, len(votes)) if votes else "",
+                             "kept": ok, "votes": "%d/%d" % (yes if ok else len(decided) - yes, len(decided)) if votes else "",
                              "reason": next((w for k, w, _ in votes if k == ok), votes[0][1] if votes else
                                             (r.get("error") or "")),
                              "judges": [{"kept": k, "reason": w} for k, w, _ in votes]})
