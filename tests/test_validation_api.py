@@ -40,6 +40,15 @@ def _fake_engine(items, spec, run=None):
     return out
 
 
+@pytest.fixture(autouse=True)
+def _empty_queue():
+    """Each test starts with no jobs. On a slow database (Postgres over a WAN) a whole run takes minutes, so an
+    earlier test's unfinished group goes stale and would be claimable in a later test."""
+    with jobs._engine().begin() as c:
+        for t in (jobs._callbacks, jobs._cells, jobs._items, jobs._jobs):
+            c.execute(t.delete())
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("VALIDATION_API_KEY", "test-key")
@@ -484,3 +493,15 @@ def test_the_callback_waits_for_groups_still_running(client, monkeypatch):
     jobs.claim("w1")
     j = jobs.get(job_id)
     assert (j["status"], j["items_done"], j["stop_reason"]) == ("done", 10, None) and sent == [("done", 10)]
+
+
+def test_job_list_shows_each_candidates_result(client):
+    job_id = _post(client, {"items": [_item(i) for i in range(2)]})
+    _work()
+    assert "summary" not in client.get("/api/validations", headers=KEY).json()[0]
+    got = client.get("/api/validations?with_summary=1", headers=KEY).json()[0]
+    assert got["id"] == job_id
+    assert [(s["label"], s.get("within_rate"), s.get("cost_vs_original_pct")) for s in got["summary"]] == [
+        ("original", None, None), ("router-a", 1.0, -80), ("router-b", 0.0, -90)]
+    page = client.get("/validations").text
+    assert "<b>router-a</b> 100% within, -80% cost" in page and "<b>router-b</b> 0% within, -90% cost" in page

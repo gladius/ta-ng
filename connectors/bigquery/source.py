@@ -10,18 +10,31 @@ logs (trust_router's `litellm.v_requests`). Three .env settings; everything else
                         only the messages (as trust_router's view does: model_parameters)
     BQ_MODEL_COLUMN     (optional) the model that answered; set it when a router is in front, whose responses name
                         the router (e.g. jev-router) instead (trust_router's view: model). Else the response's model
+    BQ_AGENT_COLUMN     (optional) the agent / service name: one agent per value instead of one for the whole table
+    BQ_NODE_COLUMN      (optional) the call-site name; rows where it is NULL fall back to the system-prompt hash
+    BQ_TIME_COLUMN      (optional) a DATE or TIMESTAMP partition column: pulls read only the last BQ_DAYS days
+                        (default 7) instead of scanning the whole table
 
-A request log names no agent and no graph node, so the table is ONE agent and a call-site is its system prompt
-(numbers masked, so a date in the prompt doesn't split it). Auth is Google Application Default Credentials.
+Without BQ_AGENT_COLUMN the table is ONE agent, and without BQ_NODE_COLUMN a call-site is its system prompt (numbers
+masked, so a date in the prompt doesn't split it). Auth is Google Application Default Credentials, else the gcloud
+login. Machine-specific auth or network setup goes in connectors/bigquery/_local.py, which git ignores and which is
+imported first when present.
 """
 import hashlib
 import json
+import math
 import re
 import subprocess
 
 import credentials
 from connectors import schema
 from connectors.datasource import DataSource
+
+try:                                       # machine-specific overrides (corporate auth, proxies), never in git
+    import connectors.bigquery._local  # noqa: F401
+except ModuleNotFoundError as e:
+    if e.name != "connectors.bigquery._local":
+        raise                              # a real error inside _local.py must show, not vanish
 
 # ponytail: no time column configured -> an arbitrary _ROWS rows and a full scan of both columns per pull; add a
 # partition-column filter + ORDER BY when the table outgrows that.
@@ -31,6 +44,22 @@ _COPIES = 5             # identical requests kept: health checks / probes repeat
 
 def _cfg():
     return tuple(credentials.get_config(k) for k in ("BQ_TABLE", "BQ_REQUEST_COLUMN", "BQ_RESPONSE_COLUMN"))
+
+
+def _days(since_hours=None):
+    """The lookback in whole days: since_hours rounded up, else BQ_DAYS (default 7)."""
+    return math.ceil(since_hours / 24) if since_hours else int(credentials.get_config("BQ_DAYS", "7"))
+
+
+def _window(params, days):
+    """SQL keeping only the last `days` days of BQ_TIME_COLUMN (BigQuery then skips older partitions; DATE() works
+    for a DATE or a TIMESTAMP column, and still prunes), or TRUE without one. Adds its query parameter to `params`."""
+    from google.cloud import bigquery
+    col = credentials.get_config("BQ_TIME_COLUMN")
+    if not col:
+        return "TRUE"
+    params.append(bigquery.ScalarQueryParameter("days", "INT64", days))
+    return "DATE(`%s`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)" % col
 
 
 def _agent():
@@ -76,13 +105,13 @@ def to_trace(request, response, agent):
     msgs = schema.norm_messages(body.get("messages"))
     message = ((resp.get("choices") or [{}])[0] or {}).get("message") or {}
     out = {"generations": [[{"message": message}]]}     # the shape schema's output readers already take
-    usage = resp.get("usage") or {}
+    from app.services.llm_client import usage as read_usage    # THE usage reader: OpenAI- or Anthropic-shaped
+    u = read_usage(resp.get("usage") or {})
     t = schema.build_trace(
         trace_id=resp.get("id"), agent_id=agent, node_id=_callsite(msgs),
         model=resp.get("model") or body.get("model"), input_messages=msgs,
         output=schema.render_behavior(out), tools_called=schema.tool_calls_from_output(out),
-        usage={"input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
-               "cached_tokens": (usage.get("prompt_tokens_details") or {}).get("cached_tokens")},
+        usage={"input_tokens": u["input"], "output_tokens": u["output"], "cached_tokens": u["cache_read"]},
         tools_defined=schema.norm_tools(body.get("tools")), tool_choice=body.get("tool_choice"), source="bigquery")
     t["max_output_tokens"] = body.get("max_tokens") or body.get("max_completion_tokens")
     return t
@@ -130,18 +159,40 @@ class BigQuerySource(DataSource):
         return [{"id": "bq", "name": _cfg()[0]}]
 
     def agents(self, ws_id):
-        return [{"id": _agent(), "name": _agent()}]
+        col = credentials.get_config("BQ_AGENT_COLUMN")
+        if not col:
+            return [{"id": _agent(), "name": _agent()}]
+        from google.cloud import bigquery
+        table, params = _cfg()[0], []
+        sql = "SELECT DISTINCT `{a}` AS name FROM `{t}` WHERE `{a}` IS NOT NULL AND {w} ORDER BY name LIMIT 200".format(
+            a=col, t=table, w=_window(params, _days()))
+        rows = _client(table.split(".")[0]).query(sql, job_config=bigquery.QueryJobConfig(
+            query_parameters=params)).result(timeout=120)
+        return [{"id": r["name"], "name": r["name"]} for r in rows]
 
     def pull(self, ws_id, project, limit=None, since_hours=None):
-        """(buckets, skipped): contract traces from the table, bucketed by call-site."""
+        """(buckets, skipped): contract traces from the table, bucketed by call-site. `project` is the agent when
+        BQ_AGENT_COLUMN is set. ponytail: `limit` (whole traces, for LangSmith) is not used; _ROWS calls are read."""
+        from google.cloud import bigquery
         table, req_col, resp_col = _cfg()
-        client = _client(table.split(".")[0])
-        sql = ("SELECT `{q}` AS request, `{r}` AS response FROM `{t}` WHERE `{r}` IS NOT NULL "
-               "QUALIFY ROW_NUMBER() OVER (PARTITION BY TO_JSON_STRING(`{q}`)) <= {c} LIMIT {n}"
-               ).format(q=req_col, r=resp_col, t=table, c=_COPIES, n=_ROWS)
+        agent_col, node_col = credentials.get_config("BQ_AGENT_COLUMN"), credentials.get_config("BQ_NODE_COLUMN")
+        params, where = [], ["`%s` IS NOT NULL" % resp_col]
+        if agent_col:                                   # a parameter: `project` comes from the page's URL
+            where.append("`%s` = @agent" % agent_col)
+            params.append(bigquery.ScalarQueryParameter("agent", "STRING", project))
+        where.append(_window(params, _days(since_hours)))
+        part = "`%s`" % node_col if node_col else "TO_JSON_STRING(`%s`)" % req_col   # a named call-site is cheaper
+        sql = ("SELECT `{q}` AS request, `{r}` AS response{x} FROM `{t}` WHERE {w} "
+               "QUALIFY ROW_NUMBER() OVER (PARTITION BY {p}) <= {c} LIMIT {n}"
+               ).format(q=req_col, r=resp_col, t=table, w=" AND ".join(where), p=part, c=_COPIES, n=_ROWS,
+                        x=", `%s` AS node" % node_col if node_col else "")
         buckets, skipped = {}, []
-        for row in client.query(sql).result():
-            t = to_trace(row["request"], row["response"], _agent())
+        rows = _client(table.split(".")[0]).query(sql, job_config=bigquery.QueryJobConfig(
+            query_parameters=params)).result(timeout=300)
+        for row in rows:
+            t = to_trace(row["request"], row["response"], project if agent_col else _agent())
+            if node_col and row["node"]:
+                t["node_id"] = row["node"]
             if [p for p in schema.validate_trace(t) if not p.startswith("unknown model")]:
                 skipped.append(t["trace_id"])
                 continue

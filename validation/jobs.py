@@ -475,29 +475,39 @@ def summary(job_id):
     """Per label across the job's finished requests, the original first as the baseline. No winner is picked.
     avg_fit_rate: the share of a candidate's runs the judge placed among the original's own answers, averaged over
     requests; avg_consistency (the original's row): how often the original's own answers agree."""
+    return summaries([job_id]).get(job_id, [])
+
+
+def summaries(job_ids):
+    """{job_id: summary()} for several jobs in two queries, whatever their number (a page of the job list)."""
+    if not job_ids:
+        return {}
     ce = _cells.c
     with _engine().connect() as c:
-        agg = c.execute(select(ce.label, func.count(), *_verdicts(ce),
+        agg = c.execute(select(ce.job_id, ce.label, func.count(), *_verdicts(ce),
                                func.avg(case((ce.runs > 0, ce.kept * 1.0 / ce.runs))),
                                func.avg(ce.latency_ms), func.avg(ce.cost_usd))
-                        .where(ce.job_id == job_id).group_by(ce.label).order_by(func.min(ce.pos), ce.label)).all()
-        models = c.execute(select(ce.label, ce.model).where(ce.job_id == job_id).distinct()
-                           .order_by(ce.label, ce.model)).all()
-    rows = []
-    for label, n, within, outside, unverified, fit, lat, cost in agg:
-        s = {"label": label, "models": [m for l, m in models if l == label], "requests": n,
-             "within": int(within or 0), "outside": int(outside or 0), "unverified": int(unverified or 0),
-             "avg_consistency" if label == "original" else "avg_fit_rate": _num(fit, 3),
-             "avg_latency_ms": None if lat is None else round(float(lat)), "avg_cost_usd": _num(cost, 6)}
-        rows.append(s)
-    base = next((s for s in rows if s["label"] == "original"), {})
-    for s in rows:
-        if s["label"] == "original":
-            continue
-        s["within_rate"] = round(s["within"] / s["requests"], 3) if s["requests"] else None
-        for k, out in (("avg_cost_usd", "cost_vs_original_pct"), ("avg_latency_ms", "latency_vs_original_pct")):
-            s[out] = round((s[k] - base[k]) / base[k] * 100) if s.get(k) is not None and base.get(k) else None
-    return rows
+                        .where(ce.job_id.in_(job_ids)).group_by(ce.job_id, ce.label)
+                        .order_by(ce.job_id, func.min(ce.pos), ce.label)).all()
+        models = defaultdict(list)
+        for job_id, label, model in c.execute(select(ce.job_id, ce.label, ce.model).where(ce.job_id.in_(job_ids))
+                                              .distinct().order_by(ce.job_id, ce.label, ce.model)):
+            models[(job_id, label)].append(model)
+    out = defaultdict(list)
+    for job_id, label, n, within, outside, unverified, fit, lat, cost in agg:
+        out[job_id].append({"label": label, "models": models[(job_id, label)], "requests": n,
+                            "within": int(within or 0), "outside": int(outside or 0), "unverified": int(unverified or 0),
+                            "avg_consistency" if label == "original" else "avg_fit_rate": _num(fit, 3),
+                            "avg_latency_ms": None if lat is None else round(float(lat)), "avg_cost_usd": _num(cost, 6)})
+    for rows in out.values():
+        base = next((s for s in rows if s["label"] == "original"), {})
+        for s in rows:
+            if s["label"] == "original":
+                continue
+            s["within_rate"] = round(s["within"] / s["requests"], 3) if s["requests"] else None
+            for k, pct in (("avg_cost_usd", "cost_vs_original_pct"), ("avg_latency_ms", "latency_vs_original_pct")):
+                s[pct] = round((s[k] - base[k]) / base[k] * 100) if s.get(k) is not None and base.get(k) else None
+    return dict(out)
 
 
 def routing(job_id):

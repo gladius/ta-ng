@@ -27,3 +27,6 @@ venv/
 
 # browser-test snapshots and screenshots (contain page text)
 .playwright-mcp/
+
+# machine-specific BigQuery auth / network overrides (see connectors/bigquery/source.py)
+connectors/bigquery/_local.py

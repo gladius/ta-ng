@@ -2,7 +2,7 @@
 {% block title %}Validations · Token Auditor{% endblock %}
 {% block crumbs %}<a href="/">Data sources</a> <span class="sep">›</span> <b>validations</b>{% endblock %}
 {% block content %}
-{% from "_vparts.html" import vstyle %}{{ vstyle() }}
+{% from "_vparts.html" import vstyle, pct %}{{ vstyle() }}
 <style>
   .v-intro{color:var(--muted);max-width:72ch;margin:0 0 var(--s5)}
   .v-call{white-space:pre;overflow:auto;font-size:12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
@@ -11,7 +11,7 @@
 <p class="v-intro">Batches submitted through the API. Each request is re-run on its original model and on every candidate, and each candidate is judged against the range of answers the original itself gives. No winner is picked: compare the rows.</p>
 {% if jobs %}
 <table class="grid">
-  <thead><tr><th>Job</th><th>Status</th><th>Submitted (UTC)</th><th class="num">Requests</th><th class="num">Spend</th><th>Judge</th></tr></thead>
+  <thead><tr><th>Job</th><th>Status</th><th>Submitted (UTC)</th><th class="num">Requests</th><th class="num">Spend</th><th>Judge</th><th>Results</th></tr></thead>
   <tbody>
   {% for j in jobs %}
     <tr>
@@ -21,6 +21,7 @@
       <td class="num">{{ j.items_done }} / {{ j.items_total }}</td>
       <td class="num">${{ '%.2f' % j.spend_usd }}</td>
       <td class="mono">{{ j.judge_model }}</td>
+      <td class="v-small">{% for s in j.summary if s.label != 'original' %}<span class="nowrap"><b>{{ s.label }}</b> {{ pct(s.within_rate) }} within{% if s.cost_vs_original_pct is not none %}, {{ '%+d' % s.cost_vs_original_pct }}% cost{% endif %}</span>{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</td>
     </tr>
   {% endfor %}
   </tbody>

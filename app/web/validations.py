@@ -9,7 +9,8 @@
   GET  /api/validations/{id}/results          -> finished requests' full results, paged: ?page=&per_page= (max 200)
                                                  &show=all|problems|split &label=&verdict= &q= (in the request id)
   GET  /api/validations/{id}/results/{req}    -> one request's full result
-  GET  /api/validations                       -> jobs, newest first: ?page=&per_page=
+  GET  /api/validations                       -> jobs, newest first: ?page=&per_page=, &with_summary=1 adds each
+                                                 job's per-candidate summary
   GET  /validations[/{id}[/requests/{req}]]   -> the same as pages
 
 With "callback_url", the job's status and summary are POSTed there once it ends (done, stopped or failed).
@@ -190,15 +191,22 @@ def one_result(job_id: str, request_id: str):
 
 
 @api.get("/validations")
-def recent(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200)):
-    return jobs.recent(per_page, (page - 1) * per_page)
+def recent(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200), with_summary: bool = False):
+    found = jobs.recent(per_page, (page - 1) * per_page)
+    return _with_summaries(found) if with_summary else found
+
+
+def _with_summaries(found):
+    by = jobs.summaries([j["id"] for j in found])
+    return [{**j, "summary": by.get(j["id"], [])} for j in found]
 
 
 @pages.get("/validations", response_class=HTMLResponse)
 def list_page(request: Request, page: int = Query(1, ge=1)):
     from app.web.server import _page
     found = jobs.recent(PER_PAGE + 1, (page - 1) * PER_PAGE)
-    return _page(request, "validations.html", jobs=found[:PER_PAGE], page=page, more=len(found) > PER_PAGE)
+    return _page(request, "validations.html", jobs=_with_summaries(found[:PER_PAGE]), page=page,
+                 more=len(found) > PER_PAGE)
 
 
 @pages.get("/validations/{job_id}", response_class=HTMLResponse)

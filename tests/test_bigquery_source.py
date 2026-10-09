@@ -22,6 +22,9 @@ def test_row_to_trace():
     assert t["output"] == 'Refund issued.\n[calls refund({"amount": 5})]'
     assert t["tools_called"] == ["refund"]
     assert [m["role"] for m in t["input_messages"]] == ["system", "user"]
+    anthropic_shaped = dict(_RESP, usage={"input_tokens": 100, "output_tokens": 10, "cache_read_input_tokens": 40})
+    t = bq.to_trace(json.dumps(_msgs("You are a billing assistant.")), json.dumps(anthropic_shaped), "agent")
+    assert t["usage"] == {"input_tokens": 100, "output_tokens": 10, "cached_tokens": 40}
 
 
 def test_request_body_form():
@@ -54,9 +57,9 @@ def test_pull_buckets_and_skips(monkeypatch):
         def __init__(self, project):
             seen["project"] = project
 
-        def query(self, sql):
+        def query(self, sql, job_config=None):
             seen["sql"] = sql
-            return type("Job", (), {"result": lambda self: rows})()
+            return type("Job", (), {"result": lambda self, timeout=None: rows})()
 
     from google.cloud import bigquery
     monkeypatch.setattr(bigquery, "Client", FakeClient)
@@ -82,8 +85,8 @@ def test_no_adc_falls_back_to_gcloud_login(monkeypatch):
                 raise DefaultCredentialsError("Your default credentials were not found.")
             used["token"] = credentials.token
 
-        def query(self, sql):
-            return type("Job", (), {"result": lambda self: []})()
+        def query(self, sql, job_config=None):
+            return type("Job", (), {"result": lambda self, timeout=None: []})()
 
     monkeypatch.setattr(bigquery, "Client", FakeClient)
     monkeypatch.setattr(bq.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "tok-123\n"})())
@@ -119,3 +122,36 @@ def test_lookup_by_request_id(monkeypatch):
     assert body["model"] == "openai/gpt-5.4-mini" and body["max_tokens"] == 32768 and "temperature" not in body
     assert [t["function"]["name"] for t in body["tools"]] == ["refund"] and resp["id"] == "chatcmpl-1"
     assert list(got) == ["chatcmpl-1"]                         # an unknown id is just absent
+
+
+def test_agent_callsite_and_time_columns(monkeypatch):
+    for k, v in (("BQ_TABLE", "proj.ds.vegas"), ("BQ_REQUEST_COLUMN", "messages"), ("BQ_RESPONSE_COLUMN", "response"),
+                 ("BQ_AGENT_COLUMN", "common_service_name"), ("BQ_NODE_COLUMN", "vegas_usecase_name"),
+                 ("BQ_TIME_COLUMN", "published_dt"), ("BQ_DAYS", "3")):
+        monkeypatch.setenv(k, v)
+    rows = [{"request": json.dumps(_msgs("Billing agent.")), "response": json.dumps(_RESP), "node": "refunds"},
+            {"request": json.dumps(_msgs("Triage agent.")), "response": json.dumps(_RESP), "node": None}]
+    seen = []
+
+    class FakeClient:
+        def __init__(self, project):
+            pass
+
+        def query(self, sql, job_config=None):
+            seen.append((sql, {p.name: p.value for p in job_config.query_parameters}))
+            return type("Job", (), {"result": lambda self, timeout=None: rows if "AS request" in sql
+                                    else [{"name": "billing-svc"}, {"name": "claims-svc"}]})()
+
+    from google.cloud import bigquery
+    monkeypatch.setattr(bigquery, "Client", FakeClient)
+    assert bq.SOURCE.agents("bq") == [{"id": "billing-svc", "name": "billing-svc"},
+                                      {"id": "claims-svc", "name": "claims-svc"}]
+    assert "DISTINCT `common_service_name`" in seen[-1][0] and seen[-1][1] == {"days": 3}
+    buckets, _ = bq.SOURCE.pull("bq", "billing-svc' OR 1=1 --", since_hours=6)
+    sql, params = seen[-1]
+    assert "`common_service_name` = @agent" in sql and params == {"agent": "billing-svc' OR 1=1 --", "days": 1}
+    assert "DATE(`published_dt`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)" in sql
+    assert "PARTITION BY `vegas_usecase_name`" in sql
+    nodes = sorted(buckets)
+    assert "refunds" in nodes and any(n.startswith("triage-agent") for n in nodes)    # NULL -> system-prompt hash
+    assert all(t["agent_id"] == "billing-svc' OR 1=1 --" for b in buckets.values() for t in b)
