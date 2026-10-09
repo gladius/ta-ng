@@ -224,7 +224,7 @@ def _args(raw):
 
 # a target may reject these (reasoning, a forced tool, a sampling setting); the second try leaves them out and the
 # result says it was degraded. The gateway already drops what it knows a model doesn't take (seed on Claude, ...)
-_OPTIONAL = ("reasoning_effort", "tool_choice", "parallel_tool_calls", "temperature", "top_p", "seed",
+_OPTIONAL = ("reasoning_effort", "tool_choice", "parallel_tool_calls", "temperature", "top_p", "seed", "stop",
              "frequency_penalty", "presence_penalty")
 
 

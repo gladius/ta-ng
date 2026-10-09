@@ -162,9 +162,9 @@ def test_run_records_usage_and_degrades_only_on_400(monkeypatch):
         return _resp()
     monkeypatch.setattr(llm_client, "_complete_raw", flaky)
     r = llm_client.run(model="m", messages=[], max_tokens=10, reasoning=True,
-                       params={"temperature": 0.2, "response_format": {"type": "json_object"}})
+                       params={"temperature": 0.2, "stop": ["END"], "response_format": {"type": "json_object"}})
     assert r["degraded"] is True and len(calls) == 2
-    assert calls[0]["temperature"] == 0.2 and "reasoning_effort" not in calls[1] and "temperature" not in calls[1]
+    assert calls[0]["temperature"] == 0.2 and not {"reasoning_effort", "temperature", "stop"} & set(calls[1])
     assert calls[1]["response_format"] == {"type": "json_object"}               # what the answer must look like stays
 
     monkeypatch.setattr(llm_client, "_complete_raw", lambda **kw: (_ for _ in ()).throw(RuntimeError("network")))
