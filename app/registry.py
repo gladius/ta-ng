@@ -90,7 +90,9 @@ def _load(force=False):
                 flavours.setdefault(c, []).append(m["model_name"])   # every gateway flavour of this catalog model
                 gwmeta.setdefault(c, {"context_window": mi.get("max_input_tokens"),   # the gateway's OWN limits/mode —
                                       "max_output": mi.get("max_output_tokens"),        # truth for THIS deployment, used
-                                      "mode": mi.get("mode")})                          # over models.json; first wins
+                                      "mode": mi.get("mode"),                           # over models.json; first wins
+                                      "input_cost": mi.get("input_cost_per_token"),     # what it charges, per token
+                                      "output_cost": mi.get("output_cost_per_token")})
     serving = {c: _pick_flavour(c, names) for c, names in flavours.items()}     # ONE deterministic name we CALL / model
     names = {n for lst in flavours.values() for n in lst}                        # all wire names (idempotent passthrough)
     _cache.update(loaded=True, deployment=deployment, source=source, available=served,
@@ -150,7 +152,7 @@ def serving_name(model):
 
 
 def gateway_map():
-    """The resolved gateway mapping, for one-glance verification (the /models page renders it). Per catalog id the app
+    """The resolved gateway mapping, for one-glance verification (the model catalog page shows it). Per catalog id the app
     can call: the flavour we CHOSE and every flavour the gateway advertised — so a wrong pick or an unresolved name is
     caught by looking, not by trusting the resolver. Empty off-gateway."""
     _load()
@@ -177,6 +179,21 @@ def context_window(model):
     """Context window: the gateway's max_input_tokens if it serves this model, else the catalog value."""
     v = _gwmeta(model, "context_window")
     return int(v) if v else (meta(model) or {}).get("context_window")
+
+
+def price_gaps():
+    """Served models whose catalog price differs from what the gateway charges, in USD per million tokens. Costs are
+    computed from the catalog (config/models.json), so a gap makes them wrong until the catalog is corrected."""
+    _load()
+    out = []
+    for c, g in sorted(_cache.get("gwmeta", {}).items()):
+        p = PRICE.get(c)
+        if not p or g.get("input_cost") is None or g.get("output_cost") is None:
+            continue
+        gw = {"input": round(g["input_cost"] * 1e6, 4), "output": round(g["output_cost"] * 1e6, 4)}
+        if any(abs(gw[k] - p[k]) > 0.01 * p[k] for k in ("input", "output")):
+            out.append({"model": c, "catalog": {"input": p["input"], "output": p["output"]}, "gateway": gw})
+    return out
 
 
 def report():

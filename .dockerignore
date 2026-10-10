@@ -1,0 +1,21 @@
+# secrets and local state never go into the image
+.env
+.galileo_key
+*.key
+.data/
+.audit_debug/
+.diag_out/
+.playwright-mcp/
+.git/
+.venv/
+venv/
+**/__pycache__/
+**/*.py[cod]
+.claude/
+.deepeval/
+.pytest_cache/
+CLAUDE.md
+REVIEW-FINDINGS.md
+# the web UI is built inside the image
+web/node_modules/
+web/dist/

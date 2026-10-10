@@ -435,19 +435,14 @@ def main():
     ok = all(http("/api/validations/%s/results/%s" % (a, urllib.parse.quote(i, safe="")))[2].get("id") == i for i in odd)
     check(ok, "one-request endpoint works for all %d ids with / space # ? ü" % len(odd))
 
-    print("\n== Pages and downloads", flush=True)
-    check(all(http("/validations/%s" % a, key=False, port=p)[0] == 200 for p in up), "job page serves from every live instance")
-    pages = [http("/validations/%s?page=1" % a, key=False), http("/validations/%s?show=problems" % a, key=False),
-             http("/validations/%s?q=extract" % a, key=False), http("/validations", key=False)]
-    check(all(x[0] == 200 for x in pages), "job page, filtered page, searched page, job list: all 200")
-    check(all(urllib.parse.quote(it["id"]) in pages[0][2] or it["id"] in pages[0][2] for it in A),
-          "job page lists all %d requests (one page of 50)" % len(A))
-    req_ok = [http("/validations/%s/requests/%s?cand=nano" % (a, urllib.parse.quote(it["id"], safe="")), key=False)[0]
-              for it in A]
-    check(all(x == 200 for x in req_ok), "request page opens for all %d requests" % len(A))
-    s, _, csv_txt = http("/validations/%s/results.csv" % a, key=False)
+    print("\n== Status and downloads", flush=True)
+    check(all(http("/api/validations/%s" % a, port=p)[0] == 200 for p in up), "job status serves from every live instance")
+    check(len(http("/api/validations")[2]) >= 2, "job list returns the jobs")
+    req_ok = [http("/api/validations/%s/results/%s" % (a, urllib.parse.quote(it["id"], safe="")))[0] for it in A]
+    check(all(x == 200 for x in req_ok), "every one of the %d requests opens on its own" % len(A))
+    s, _, csv_txt = http("/api/validations/%s/results.csv" % a)
     check(s == 200 and len(list(csv.reader(io.StringIO(csv_txt)))) == 1 + len(A) * 2, "CSV: header + %d rows" % (len(A) * 2))
-    s, _, js = http("/validations/%s/results.json" % a, key=False)
+    s, _, js = http("/api/validations/%s/results.json" % a)
     js = json.loads(js) if isinstance(js, str) else js
     check(s == 200 and len(js["results"]) == len(A), "JSON download holds all %d results" % len(A))
 

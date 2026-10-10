@@ -22,6 +22,7 @@ def _no_gateway(monkeypatch):
     from app.services import llm_client
     monkeypatch.setattr(registry, "_gateway", lambda: (None, None))
     monkeypatch.setattr(llm_client, "_client", None)
+    monkeypatch.setenv("VALIDATION_UI_OPEN", "0")              # a developer's .env must not open the API in tests
     registry.refresh()
 
 

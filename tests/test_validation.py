@@ -119,7 +119,7 @@ def test_downgrade_rollup(monkeypatch):
     sample = [_trace("t%d" % i) for i in range(5)]
     rows, node, safe = downgrade_refset.prove_transform_refset(sample, "claude-haiku-4-5", "claude-sonnet-5")
     assert (node, safe) == ("SAFE", 4) and rows[4]["verdict"] == "NOT-SAFE"        # 4 of 5 inputs -> SAFE
-    assert rows[0]["self_rate"] == "5/5" and rows[0]["samples"][0]["votes"] == "3/3" and rows[0]["cost_usd"] == 0.001
+    assert rows[0]["self_rate"] == "5/5" and rows[0]["samples"][0]["votes"] == "3/3"
     rows, node, safe = downgrade_refset.prove_transform_refset(sample[:3], "claude-haiku-4-5", "claude-sonnet-5")
     assert (node, safe) == ("SAFE", 3)
     monkeypatch.setattr(downgrade_refset, "validate_many",

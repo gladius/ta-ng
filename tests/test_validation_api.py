@@ -104,31 +104,23 @@ def test_job_runs_and_reports(client):
     assert res["total"] == 2 and [r["id"] for r in res["results"]] == ["req-1", "req-2"]
     assert job_id in [x["id"] for x in client.get("/api/validations", headers=KEY).json()]
     assert by["router-a"]["within_rate"] == 1.0 and by["router-a"]["cost_vs_original_pct"] == -80
-    page = client.get("/validations/" + job_id).text
-    assert "verdict-within" in page and "verdict-outside" in page and "refreshing" not in page
-    assert "Candidates disagree (2)" in page and 'id="evidence"' not in page
-    assert job_id in client.get("/validations").text
+    assert client.get("/api/validations/%s/results?show=split" % job_id, headers=KEY).json()["total"] == 2
 
 
-def test_grid_cell_opens_the_request_page_and_downloads(client):
+def test_one_request_and_the_downloads(client):
     job_id = _post(client, {"items": [_item(1), _item(2)]})
     _work()
-    grid = client.get("/validations/" + job_id).text
-    assert "/requests/req-2?cand=router-b" in grid and "show=split" in grid
-    assert client.get("/validations/%s?show=nonsense" % job_id).status_code == 200
-    page = client.get("/validations/%s/requests/req-2?cand=router-b" % job_id).text
-    assert 'id="evidence"' in page and "refund order 2" in page            # the request itself is shown
-    assert "router-b (gpt-5.4-nano)" in page and "router-b run 1" in page   # the candidate's runs, labelled
-    first = client.get("/validations/%s/requests/req-2" % job_id).text       # no candidate chosen: the first one,
-    assert 'class="on" href="?cand=router-a#evidence"' in first and 'href="?cand=router-b#evidence"' in first   # +switch
-    assert client.get("/validations/%s/requests/nope" % job_id).status_code == 404
+    assert client.get("/", follow_redirects=False).headers["location"] == "/app/"   # the web UI
+    assert client.get("/api/validations/%s/results.csv" % job_id).status_code == 401  # downloads need sign-in too
+    one = client.get("/api/validations/%s/results/req-2" % job_id, headers=KEY).json()
+    assert "refund order 2" in one["request"]["messages"][1]["content"]       # what was sent comes with the result
     assert client.get("/api/validations/%s/results/req-2" % job_id, headers=KEY).json()["id"] == "req-2"
     assert client.get("/api/validations/%s/results/nope" % job_id, headers=KEY).status_code == 404
-    csv_rows = client.get("/validations/%s/results.csv" % job_id).text.strip().splitlines()
+    csv_rows = client.get("/api/validations/%s/results.csv" % job_id, headers=KEY).text.strip().splitlines()
     assert len(csv_rows) == 1 + 2 * 2
     assert csv_rows[1].startswith("req-1,gpt-5.4,5/5,300,0.01,router-a,gpt-5.4-mini,gpt-5.4-mini,within,5/5,1.0,100,0.002")
-    assert client.get("/validations/%s/results.json" % job_id).json()["id"] == job_id
-    assert client.get("/validations/val_missing/results.csv").status_code == 404
+    assert client.get("/api/validations/%s/results.json" % job_id, headers=KEY).json()["id"] == job_id
+    assert client.get("/api/validations/val_missing/results.csv", headers=KEY).status_code == 404
 
 
 def test_budget_stops_between_chunks(client):
@@ -198,7 +190,7 @@ def test_engine_crash_fails_the_job_and_frees_the_group(client, monkeypatch):
 
 def test_unknown_job_is_404(client):
     assert client.get("/api/validations/nope", headers=KEY).status_code == 404
-    assert client.get("/validations/nope").status_code == 404
+    assert client.get("/api/validations/nope/results", headers=KEY).status_code == 404
 
 
 def test_parallel_workers_run_each_request_exactly_once(client, monkeypatch):
@@ -277,7 +269,7 @@ def test_unreachable_gateway_leaves_the_requests_queued(client, monkeypatch):
     j = jobs.get(job_id)
     assert (j["status"], j["items_done"], j["workers"]) == ("running", 0, 0)                     # waiting, not failed
     assert j["error"].startswith("Waiting: the model endpoint has been unreachable since")
-    assert "Waiting: the model endpoint" in client.get("/validations/" + job_id).text
+    assert client.get("/api/validations/" + job_id, headers=KEY).json()["error"].startswith("Waiting:")
     monkeypatch.setattr(jobs, "validate_many", _fake_engine)                                    # the gateway is back
     _work()
     j = jobs.get(job_id)
@@ -285,7 +277,6 @@ def test_unreachable_gateway_leaves_the_requests_queued(client, monkeypatch):
 
 
 def test_results_are_paged_filtered_and_searchable(client, monkeypatch):
-    from app.web import validations
     def half(items, spec, run=None):                      # router-b is within on req-0..5, outside on req-6..11
         out = _fake_engine(items, spec)
         for r in out:
@@ -304,11 +295,7 @@ def test_results_are_paged_filtered_and_searchable(client, monkeypatch):
     assert get("show=problems")["total"] == get("show=split")["total"] == 6
     assert get("q=REQ-1")["total"] == 3                                     # req-1, req-10, req-11; any case
     assert client.get("/api/validations/%s/results?verdict=bad" % job_id, headers=KEY).status_code == 422
-    monkeypatch.setattr(validations, "PER_PAGE", 5)
-    page = client.get("/validations/%s?page=3" % job_id).text
-    assert "Page 3 of 3" in page and ">req-11<" in page and ">req-4<" not in page and "Previous" in page
-    page = client.get("/validations/%s?q=req-1" % job_id).text
-    assert "All (3)" in page and "Needs a look (2)" in page and ">req-10<" in page and ">req-2<" not in page
+    assert (get("q=req-1&show=problems")["total"], get("q=req-1&show=all")["total"]) == (2, 3)    # counts per filter
     assert len(client.get("/api/validations?per_page=1", headers=KEY).json()) == 1
 
 
@@ -329,7 +316,6 @@ def test_status_polling_says_unchanged_and_shows_router_choices(client, monkeypa
     assert done.status_code == 200 and done.json()["status"] == "done"
     routing = {(x["label"], x["served_model"]): x["requests"] for x in done.json()["routing"]}
     assert routing == {("router-a", "gpt-5.4-mini"): 2, ("router-a", "gpt-5.4-nano"): 2}   # router-b used one model
-    assert "Where routers sent requests" in client.get("/validations/" + job_id).text
 
 
 def test_a_worker_thread_survives_an_unexpected_error(monkeypatch):
@@ -457,7 +443,7 @@ def test_without_a_budget_a_job_runs_to_the_end(client):
     _work()
     j = jobs.get(job_id)
     assert (j["status"], j["items_done"], j["max_budget_usd"], j["stop_reason"]) == ("done", 12, None, None)
-    assert "no budget limit" in client.get("/validations/" + job_id).text
+    assert client.get("/api/validations/" + job_id, headers=KEY).json()["max_budget_usd"] is None
 
 
 def test_a_refused_account_stops_the_job_until_resumed(client, monkeypatch):
@@ -505,8 +491,6 @@ def test_job_list_shows_each_candidates_result(client):
     assert got["id"] == job_id
     assert [(s["label"], s.get("within_rate"), s.get("cost_vs_original_pct")) for s in got["summary"]] == [
         ("original", None, None), ("router-a", 1.0, -80), ("router-b", 0.0, -90)]
-    page = client.get("/validations").text
-    assert "100% pass · -80% cost" in page and "0% pass · -90% cost" in page
 
 
 def test_a_batch_counts_each_labels_answers(client, monkeypatch):
@@ -521,7 +505,6 @@ def test_a_batch_counts_each_labels_answers(client, monkeypatch):
     by = {s["label"]: s.get("answers") for s in jobs.summary(job_id)}
     assert by == {"original": None, "router-a": {"match": 9, "acceptable": 3, "drift": 3, "unclear": 0},
                   "router-b": None}                              # router-b's results carry no counts (older results)
-    assert "60% match" in client.get("/validations/" + job_id).text
 
 
 def test_a_new_optional_column_is_added_to_an_existing_table():
@@ -562,7 +545,8 @@ def test_the_api_reference_matches_what_the_api_returns(client, monkeypatch):
     assert got.status == "done" and got.routing and got.callback.sent_at and got.summary[1].answers.match == 10
     page = v.ResultsPage.model_validate(client.get("/api/validations/%s/results" % job_id, headers=KEY).json())
     assert page.total == 2 and page.results[0].candidates[0].runs[0].judges[0].kept is True
-    v.Result.model_validate(client.get("/api/validations/%s/results/req-1" % job_id, headers=KEY).json())
+    one = v.Result.model_validate(client.get("/api/validations/%s/results/req-1" % job_id, headers=KEY).json())
+    assert [m.role for m in one.request.messages] == ["system", "user"] and one.request.tools == []
     for q in ("", "?with_summary=1"):
         [v.Listed.model_validate(x) for x in client.get("/api/validations" + q, headers=KEY).json()]
 
@@ -574,3 +558,65 @@ def test_the_api_reference_matches_what_the_api_returns(client, monkeypatch):
     assert spec["paths"]["/api/validations/{job_id}"]["get"]["responses"]["200"]["content"]["application/json"][
         "schema"] == {"$ref": "#/components/schemas/Status"}
     assert client.get("/docs").status_code == 200
+
+
+def test_a_signed_in_browser_may_call_the_api(client, monkeypatch):
+    from app.web import validations as v
+    assert client.get("/api/validations").status_code == 401
+    monkeypatch.setenv("VALIDATION_UI_OPEN", "1")                       # a developer's machine, for the web UI
+    assert client.get("/api/validations").status_code == 200
+    monkeypatch.setenv("K_SERVICE", "token-auditor")                    # never on Cloud Run
+    assert client.get("/api/validations").status_code == 401
+    monkeypatch.setattr(v, "_iap_user", lambda a: "someone@example.com" if a == "signed" else None)
+    assert client.get("/api/validations", headers={"x-goog-iap-jwt-assertion": "signed"}).status_code == 200
+    assert client.get("/api/validations", headers={"x-goog-iap-jwt-assertion": "forged"}).status_code == 401
+
+
+def test_iap_sign_in_is_checked_against_its_audience_and_issuer(monkeypatch):
+    import time
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from google.auth import crypt, jwt
+    from app.web import validations as v
+    key = ec.generate_private_key(ec.SECP256R1())
+    signer = crypt.ES256Signer.from_string(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()), key_id="k1")
+    public = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    now, audience = int(time.time()), "/projects/1/global/backendServices/2"
+
+    def token(**claims):
+        return jwt.encode(signer, {"iss": "https://cloud.google.com/iap", "aud": audience, "email": "someone@example.com",
+                                   "iat": now, "exp": now + 600, **claims}).decode()
+    monkeypatch.setattr(v, "_iap", {"at": time.time(), "certs": {"k1": public.decode()}})   # IAP's keys, as fetched
+    monkeypatch.setenv("IAP_AUDIENCE", "")
+    assert v._iap_user(token()) is None                                  # no audience configured: never trusted
+    monkeypatch.setenv("IAP_AUDIENCE", audience)
+    assert v._iap_user(token()) == "someone@example.com"
+    assert v._iap_user(token(aud="/projects/1/global/backendServices/9")) is None    # another service's sign-in
+    assert v._iap_user(token(iss="https://accounts.google.com")) is None             # not from IAP
+    assert v._iap_user(token(exp=now - 60, iat=now - 700)) is None                    # expired
+    assert v._iap_user("not-a-token") is None
+
+
+def test_the_web_ui_is_served_under_app(client, monkeypatch, tmp_path):
+    from app.web import server
+    assert client.get("/app/validations").status_code in (200, 503)      # 503 until `npm run build` has run
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<div id=root></div>")
+    (tmp_path / "assets" / "index-abc.js").write_text("console.log(1)")
+    monkeypatch.setattr(server, "_DIST", str(tmp_path))
+    r = client.get("/app/validations/val_1/requests/a/b")                  # any page route -> the app's index.html
+    assert r.status_code == 200 and "root" in r.text and r.headers["cache-control"] == "no-cache"
+    r = client.get("/app/assets/index-abc.js")
+    assert r.text == "console.log(1)" and "immutable" in r.headers["cache-control"]
+    assert "root" in client.get("/app/..%2f..%2fcredentials.py").text      # never a file outside the build
+    assert client.get("/app", follow_redirects=False).headers["location"] == "/app/"
+
+
+def test_agent_names_with_a_slash_or_any_language_reach_their_routes(client):
+    from app.web import suite
+    r = client.get("/api/suite/agents/recorded/recorded/team%2Fagent/select?snap=nope", headers=KEY)
+    assert (r.status_code, r.json()["detail"]) == (404, "no such snapshot: build one first")   # routed, not "Not Found"
+    header = suite._attachment("token-audit-équipe/agent.zip")
+    header.encode("latin-1")                                             # a valid header for any name
+    assert 'filename="token-audit-_quipe_agent.zip"' in header and "%C3%A9quipe%2Fagent" in header

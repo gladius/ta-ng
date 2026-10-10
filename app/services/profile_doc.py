@@ -87,11 +87,9 @@ def _profile_md(prof):
     return "\n".join(L) + "\n"
 
 
-def build_zip(prof, html=None):
-    """Return the profile as ZIP bytes: profile.html (self-contained, when the caller renders it) + profile.md."""
+def build_zip(prof):
+    """Return the profile as ZIP bytes: profile.md. The web UI's profile page is the styled view; it prints to PDF."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        if html:
-            z.writestr("profile.html", html)
         z.writestr("profile.md", _profile_md(prof))
     return buf.getvalue()

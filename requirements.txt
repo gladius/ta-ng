@@ -1,6 +1,5 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
-jinja2>=3.1
 langsmith>=0.1          # live LangSmith trace pull (offline/recorded mode needs no key)
 openai>=1.40            # OpenAI-format SDK to the LiteLLM gateway: paid re-runs + judge calls (llm_client)
 google-cloud-bigquery>=3.0  # BigQuery source (connectors/bigquery); auth = Google Application Default Credentials

@@ -43,7 +43,6 @@ HEARTBEAT_S = 20
 STALE_S = 120               # a group not heart-beaten for this long is claimable again
 WORKER = "%s-%s" % (socket.gethostname(), uuid.uuid4().hex[:6])   # this process; threads add a suffix
 LIVE = ("queued", "running")
-SHOW = ("all", "problems", "split")   # every finished request / any candidate not within / candidates disagree
 RETRY_S = (2, 5)            # waits between 3 attempts: delivering a callback, recording a group's results
 
 _jobs = Table(
@@ -212,7 +211,8 @@ def _where(job_id, show="all", label=None, verdict=None, q=""):
 
 
 def count(job_id, **filters):
-    """How many finished requests match: show (SHOW), label + verdict (a candidate's), q (in the request id)."""
+    """How many finished requests match: show (all | problems: a candidate not within | split: candidates disagree),
+    label + verdict (a candidate's), q (in the request id)."""
     with _engine().connect() as c:
         return c.execute(select(func.count()).select_from(_items).where(*_where(job_id, **filters))).scalar()
 

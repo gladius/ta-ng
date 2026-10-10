@@ -1,4 +1,4 @@
-"""Validation API and pages: submit a batch of requests with candidate models, follow it, read the results.
+"""Validation API: submit a batch of requests with candidate models, follow it, read the results.
 
   POST /api/validations                       -> 202 {id, status, items, url}   every /api route needs X-API-Key
   GET  /api/validations/{id}                  -> status, progress, spend, per-candidate summary, routing breakdown,
@@ -11,7 +11,7 @@
   GET  /api/validations/{id}/results/{req}    -> one request's full result
   GET  /api/validations                       -> jobs, newest first: ?page=&per_page=, &with_summary=1 adds each
                                                  job's per-candidate summary
-  GET  /validations[/{id}[/requests/{req}]]   -> the same as pages
+  GET  /api/validations/{id}/results.csv|json -> downloads (for the web UI; not in /openapi.json)
 
 With "callback_url", the job's status and summary are POSTed there once it ends (done, stopped or failed).
 
@@ -22,11 +22,15 @@ the caller (a router, a release); each candidate is compared with the original m
 """
 import dataclasses
 import hmac
-from collections import Counter
+import json
+import os
+import threading
+import time
+import urllib.request
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import JSONResponse, Response
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
@@ -35,7 +39,6 @@ from validation import jobs
 
 MAX_ITEMS = 1000
 MAX_CANDIDATES = 5
-PER_PAGE = 50               # requests per page in the UI
 
 
 API_DOC = """Check whether cheaper models or routers behave like the original model, on your own logged requests.
@@ -72,9 +75,41 @@ answer) plus 1. `max_budget_usd` caps a job (no cap unless given); `spend_usd` i
 """
 
 _key = APIKeyHeader(name="X-API-Key", auto_error=False, description="The server's VALIDATION_API_KEY")
+_IAP_KEYS = "https://www.gstatic.com/iap/verify/public_key"
+_iap = {"at": 0.0, "certs": None}
+_iap_lock = threading.Lock()
 
 
-def require_key(x_api_key: Optional[str] = Depends(_key)):
+def _iap_user(assertion):
+    """The signed-in user's email when the request came through Google IAP, else None. IAP signs every request it
+    lets through (x-goog-iap-jwt-assertion); IAP_AUDIENCE is this service's audience in IAP, and without it the
+    header is never trusted. IAP's public keys are fetched at most once an hour."""
+    audience = credentials.get_config("IAP_AUDIENCE")
+    if not (assertion and audience):
+        return None
+    from google.auth import jwt
+    try:
+        with _iap_lock:
+            if time.time() - _iap["at"] > 3600:
+                with urllib.request.urlopen(_IAP_KEYS, timeout=10) as r:
+                    _iap.update(certs=json.loads(r.read()), at=time.time())
+        claims = jwt.decode(assertion, certs=_iap["certs"], audience=audience)
+    except Exception:
+        return None
+    return claims.get("email") if claims.get("iss") == "https://cloud.google.com/iap" else None
+
+
+def _ui_open():
+    """VALIDATION_UI_OPEN=1: the web UI may call the API without a key, on a developer's machine only (there is no
+    IAP there). Ignored on Cloud Run."""
+    return credentials.get_config("VALIDATION_UI_OPEN") == "1" and not os.environ.get("K_SERVICE")
+
+
+def require_key(x_api_key: Optional[str] = Depends(_key),
+                iap: Optional[str] = Header(None, alias="x-goog-iap-jwt-assertion", include_in_schema=False)):
+    """Code calls the API with X-API-Key; the web UI calls it as the person signed in through IAP."""
+    if _iap_user(iap) or _ui_open():
+        return
     expected = credentials.get_secret("VALIDATION_API_KEY")
     if not expected:
         raise HTTPException(503, "VALIDATION_API_KEY is not set on the server")
@@ -85,7 +120,6 @@ def require_key(x_api_key: Optional[str] = Depends(_key)):
 api = APIRouter(prefix="/api", dependencies=[Depends(require_key)], tags=["validations"],
                 responses={401: {"description": "Missing or wrong X-API-Key"},
                            503: {"description": "The server has no VALIDATION_API_KEY, or a BigQuery lookup failed"}})
-pages = APIRouter()
 
 
 class CandidateIn(BaseModel):
@@ -289,12 +323,23 @@ class CandidateResult(_Out):
     runs: list[CandidateAnswer]
 
 
+class Message(_Out):
+    role: str
+    content: str
+
+
+class Sent(_Out):
+    messages: list[Message] = Field(description="The conversation as text, system prompt first")
+    tools: list[str] = Field(description="Names of the tools the request offered")
+
+
 class Result(_Out):
     id: str
     model: str = Field(description="The original model")
     spend_usd: float = Field(description="What judging this request cost")
     reference: Reference = Field(description="The original's own answers")
     candidates: list[CandidateResult]
+    request: Optional[Sent] = Field(default=None, description="What was sent; on the one-request call only")
 
 
 class ResultsPage(_Out):
@@ -429,10 +474,14 @@ def results(job_id: str, page: int = Query(1, ge=1), per_page: int = Query(50, g
 @api.get("/validations/{job_id}/results/{request_id:path}", summary="One request's result", responses={
     200: {"model": Result}, 404: {"description": "No such validation, or the request has not finished"}})
 def one_result(job_id: str, request_id: str):
+    """Everything about one request, including what was sent."""
     got = jobs.request(job_id, request_id)
     if not got or got[1] is None:
         raise HTTPException(404, "no finished request %r in this validation" % request_id)
-    return got[1]
+    trace = got[0]["request"]
+    return {**got[1], "request": {"messages": [{"role": m["role"], "content": m["content"]}
+                                               for m in trace.get("input_messages", [])],
+                                  "tools": [t[0] for t in trace.get("tools_defined", [])]}}
 
 
 @api.get("/validations", summary="List jobs", responses={200: {"model": list[Listed]}})
@@ -447,50 +496,7 @@ def _with_summaries(found):
     return [{**j, "summary": by.get(j["id"], [])} for j in found]
 
 
-@pages.get("/validations", response_class=HTMLResponse)
-def list_page(request: Request, page: int = Query(1, ge=1)):
-    from app.web.server import _page
-    found = jobs.recent(PER_PAGE + 1, (page - 1) * PER_PAGE)
-    return _page(request, "validations.html", jobs=_with_summaries(found[:PER_PAGE]), page=page,
-                 more=len(found) > PER_PAGE)
-
-
-@pages.get("/validations/{job_id}", response_class=HTMLResponse)
-def job_page(request: Request, job_id: str, page: int = Query(1, ge=1), show: str = "all", q: str = ""):
-    """Per-candidate headline, routing breakdown, and one page of the request x candidate grid."""
-    from app.web.server import _page
-    job = _known(job_id)
-    show = show if show in jobs.SHOW else "all"
-    summary = jobs.summary(job_id)
-    total, res = jobs.page(job_id, page, PER_PAGE, show=show, q=q)
-    return _page(request, "validation.html", job=job, summary=summary, routing=jobs.routing(job_id),
-                 callback=jobs.callback(job_id),
-                 rows=[{"r": r, "cells": {c["label"]: c for c in r["candidates"]}} for r in res],
-                 labels=[s["label"] for s in summary if s["label"] != "original"], show=show, q=q,
-                 counts={k: jobs.count(job_id, show=k, q=q) for k in jobs.SHOW}, page=page, total=total,
-                 pages=max(1, -(-total // PER_PAGE)), live=job["status"] in jobs.LIVE)
-
-
-@pages.get("/validations/{job_id}/requests/{item_id:path}", response_class=HTMLResponse)
-def request_page(request: Request, job_id: str, item_id: str, cand: str = ""):
-    """One request: what was sent, the original's own answers, and every candidate's runs with the judge's reasons."""
-    from app.web.server import _page
-    from app.services.downgrade_refset import evidence_row
-    job = _known(job_id)
-    got = jobs.request(job_id, item_id)
-    if not got or got[1] is None:
-        raise HTTPException(404, "no finished request %r in this validation" % item_id)
-    submitted, r = got
-    lat, cost = jobs.original_averages(r)
-    cands = [{"c": c, "row": evidence_row(submitted["request"], r, job["spec"]["cap_chars"], c),
-              "served": [m for m, _ in Counter(x["model"] for x in c["runs"]
-                                                  if x.get("model") and not x.get("error")).most_common()]}
-             for c in r["candidates"]]
-    return _page(request, "validation_request.html", job=job, r=r, cands=cands,
-                 cand=cand or r["candidates"][0]["label"], orig_latency_ms=lat, orig_cost_usd=cost)
-
-
-@pages.get("/validations/{job_id}/results.json")
+@api.get("/validations/{job_id}/results.json", include_in_schema=False)
 def download_json(job_id: str):
     import json
     _known(job_id)
@@ -498,7 +504,7 @@ def download_json(job_id: str):
                     headers={"Content-Disposition": 'attachment; filename="%s.json"' % job_id})
 
 
-@pages.get("/validations/{job_id}/results.csv")
+@api.get("/validations/{job_id}/results.csv", include_in_schema=False)
 def download_csv(job_id: str):
     """One row per request x candidate: what a spreadsheet needs to compare candidates."""
     import csv

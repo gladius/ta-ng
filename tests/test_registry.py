@@ -12,6 +12,23 @@ _SAMPLE = [
 ]
 
 
+def test_a_catalog_price_the_gateway_does_not_charge_is_found(monkeypatch):
+    sample = [{"model_name": "claude-sonnet-5", "underlying": "anthropic/claude-sonnet-5", "model_info": {
+                   "mode": "chat", "input_cost_per_token": 2e-06, "output_cost_per_token": 1e-05}},
+              {"model_name": "gpt-5.4-mini", "underlying": "openai/gpt-5.4-mini", "model_info": {
+                   "mode": "chat", "input_cost_per_token": 7.5e-07, "output_cost_per_token": 4.5e-06}}]
+    monkeypatch.setattr(registry, "_gateway", lambda: ("https://gw.example", "k"))
+    monkeypatch.setattr(registry, "_fetch_model_info", lambda b, k: sample)
+    monkeypatch.setitem(registry.PRICE, "claude-sonnet-5", {"input": 3.0, "output": 15.0})
+    monkeypatch.setitem(registry.PRICE, "gpt-5.4-mini", {"input": 0.75, "output": 4.5})
+    registry.refresh()
+    try:
+        assert registry.price_gaps() == [{"model": "claude-sonnet-5", "catalog": {"input": 3.0, "output": 15.0},
+                                          "gateway": {"input": 2.0, "output": 10.0}}]     # mini matches: no gap
+    finally:
+        registry.refresh()
+
+
 def test_availability_with_gateway(monkeypatch):
     monkeypatch.setattr(registry, "_gateway", lambda: ("https://gw.example", "k"))
     monkeypatch.setattr(registry, "_fetch_model_info", lambda b, k: _SAMPLE)

@@ -199,14 +199,11 @@ def _evidence_md(f, proof):
     return "\n".join(L) + "\n"
 
 
-def build_zip(f, proof, html=None):
-    """Return the audit record as ZIP bytes: report.html (the self-contained styled report — opens anywhere, prints
-    to PDF from the browser; included when the caller renders it), report.md (the deliverable) and evidence.md (the
-    proof appendix, only when there is per-input evidence to show)."""
+def build_zip(f, proof):
+    """Return the audit record as ZIP bytes: report.md (the deliverable) and evidence.md (the proof appendix, only
+    when there is per-input evidence to show). The web UI's report page is the styled view; it prints to PDF."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        if html:
-            z.writestr("report.html", html)
         z.writestr("report.md", _report_md(f, proof))
         has_ev = any((x.get("downgrade") or {}).get("inputs") for x in (proof["results"] if proof else []))
         if has_ev:

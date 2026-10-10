@@ -21,19 +21,17 @@ def spec(k=None):
                 cap_chars=AUDIT_JUDGE_MAX_CHARS, max_parallel=AUDIT_MAX_PARALLEL)
 
 
-def evidence_row(t, r, cap, c=None):
-    """One engine result, for candidate `c` (default: its only one) -> the row the shared evidence view renders."""
-    c, ref = c or r["candidates"][0], r["reference"]
-    return {"input": _user_text(t)[:cap], "system": _system_text(t)[:cap], "recorded": _recorded(t)[:cap],
+def evidence_row(t, r, cap):
+    """One engine result (its only candidate) -> the row the audit report's evidence shows."""
+    c, ref = r["candidates"][0], r["reference"]
+    return {"input": _user_text(t)[:cap], "system": _system_text(t)[:cap],
             "kept": c["kept"], "k": c["of"], "verdict": "SAFE" if c["verdict"] == "within" else "NOT-SAFE",
             "note": c["reason"], "unverified": c["verdict"] == "unverified",
             "self_rate": "%s/%d" % ("?" if ref["agree"] is None else ref["agree"], ref["of"]),
             "orig_runs": [{"preserved": x["agrees"], "reason": x["reason"], "votes": "",
                            "output": (x["output"] or "")[:cap]} for x in ref["runs"]],
-            "samples": [{"preserved": x["kept"], "reason": x["reason"], "votes": x["votes"], "judges": x["judges"],
-                         "output": (x["output"] or "")[:cap], "latency_ms": x["latency_ms"], "cost_usd": x["cost_usd"]}
-                        for x in c["runs"]],
-            "latency_ms": c["latency_ms"], "cost_usd": c["cost_usd"], "spend_usd": r["spend_usd"]}
+            "samples": [{"preserved": x["kept"], "reason": x["reason"], "votes": x["votes"],
+                         "output": (x["output"] or "")[:cap]} for x in c["runs"]]}
 
 
 def prove_transform_refset(sample, cheaper, original, k=None):
