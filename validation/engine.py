@@ -25,6 +25,20 @@ def _pmap(fn, items, width):
         return list(ex.map(fn, items))
 
 
+def _pmap_warm(fn, items, key, width):
+    """_pmap with the first item of each `key` run before the rest: calls that share a prompt prefix then read the
+    provider's prompt cache instead of all writing it at once."""
+    seen, first, rest = set(), [], []
+    for n, x in enumerate(items):
+        (rest if key(x) in seen else first).append(n)
+        seen.add(key(x))
+    out = [None] * len(items)
+    for batch in (first, rest):
+        for n, r in zip(batch, _pmap(lambda n: fn(items[n]), batch, width)):
+            out[n] = r
+    return out
+
+
 def _text(trace, role, sep="\n"):
     return sep.join((m.get("content") or "") for m in trace.get("input_messages", []) if m.get("role") == role)
 
@@ -93,7 +107,8 @@ def validate_many(items, spec, run=None):
         for c, cand in enumerate(it.candidates):
             calls += [(i, c, cand.model)] * spec.candidate_runs
     runs = defaultdict(list)
-    for (i, who, _), r in zip(calls, _pmap(lambda x: _call(run, items[x[0]].request, x[2]), calls, spec.max_parallel)):
+    for (i, who, _), r in zip(calls, _pmap_warm(lambda x: _call(run, items[x[0]].request, x[2]), calls,
+                                                lambda x: (x[0], x[2]), spec.max_parallel)):
         runs[(i, who)].append(r)
     reference = {i: ([_recorded_run(it)] if it.recorded else []) + runs[(i, "ref")] for i, it in enumerate(items)}
     reqs = {i: request_text(it.request, spec) for i, it in enumerate(items)}
@@ -120,7 +135,7 @@ def validate_many(items, spec, run=None):
                         "error": why}
             return None, why, 0.0                               # no vote: the run counts as not judged
     verdicts = defaultdict(list)
-    for job, v in zip(jobs, _pmap(judge, jobs, spec.max_parallel)):
+    for job, v in zip(jobs, _pmap_warm(judge, jobs, lambda j: j[:2], spec.max_parallel)):     # one prefix per item
         verdicts[job[:3]].append(v)
 
     out = []

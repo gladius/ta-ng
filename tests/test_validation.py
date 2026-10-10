@@ -312,3 +312,12 @@ def test_each_answer_is_judged_match_acceptable_drift_or_unclear(monkeypatch):
     c = validate(_item(), Spec(max_parallel=1), _run)["candidates"][0]
     assert [r["category"] for r in c["runs"]] == ["match", "acceptable", "drift", "unclear", "match"]
     assert c["answers"] == {"match": 2, "acceptable": 1, "drift": 1, "unclear": 1}
+
+
+def test_the_first_call_per_prompt_runs_before_the_rest():
+    # calls sharing a prompt prefix wait for the first one, so they read the provider's cache instead of all writing it
+    order = []
+    items = [("a", 1), ("a", 2), ("b", 1), ("b", 2), ("a", 3)]
+    out = engine._pmap_warm(lambda x: order.append(x) or x[1] * 10, items, lambda x: x[0], 4)
+    assert set(order[:2]) == {("a", 1), ("b", 1)}
+    assert out == [10, 20, 10, 20, 30]                       # results stay in the input's order
