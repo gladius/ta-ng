@@ -42,7 +42,7 @@ export default function Evidence({ inputs }: { inputs: EvidenceRow[] }) {
           <details>
             <summary>
               <span className={'tag ' + (iv.verdict === 'SAFE' ? 'tag-ok' : 'tag-bad')}>{iv.verdict === 'SAFE' ? 'safe' : 'not safe'}</span>
-              {iv.unverified && <span className="tag tag-warn" title="A call failed, an output was too long to judge whole, a judge reply was unreadable, or the original was too inconsistent to compare against">not verified</span>}
+              {iv.unverified && <span className="tag tag-warn" title="Could not be judged: see the reason">not verified</span>}
               <span className="ev-note">{iv.note || 'judged'}</span>
               <span className="mono small nowrap">kept {iv.kept}/{iv.k}{iv.self_rate && ` · original ${iv.self_rate}`}</span>
             </summary>
@@ -50,9 +50,9 @@ export default function Evidence({ inputs }: { inputs: EvidenceRow[] }) {
               <h3 className="eyebrow">What was sent</h3>
               <Box label="system" text={iv.system} />
               <Box label="user" text={iv.input} />
-              <h3 className="eyebrow">The original's own answers — the reference set{iv.self_rate && ` · agree ${iv.self_rate}`}</h3>
+              <h3 className="eyebrow">The original's answers{iv.self_rate && ` · agree ${iv.self_rate}`}</h3>
               <Runs runs={iv.orig_runs} name="original" fits="Fits the other originals:" />
-              <h3 className="eyebrow">The cheaper model's answers · judged against the reference set</h3>
+              <h3 className="eyebrow">The cheaper model's answers</h3>
               <Runs runs={iv.samples} name="re-run" fits="Fits the reference set:" />
             </div>
           </details>

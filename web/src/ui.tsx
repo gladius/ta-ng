@@ -6,10 +6,11 @@ import { candidates, type Answers, type Category, type Job, type LabelSummary, t
 
 type Crumb = { label: string; to?: string }
 
-/** A page inside the shell: the bar with where you are, then the content. */
-export function Page({ crumbs, children }: { crumbs: Crumb[]; children: ReactNode }) {
+/** A page inside the shell: the bar with where you are, then the content. `fill`: the page fills the window and
+    its panes scroll on their own (the review inbox). */
+export function Page({ crumbs, children, fill = false }: { crumbs: Crumb[]; children: ReactNode; fill?: boolean }) {
   return (
-    <main className="page">
+    <main className={'page' + (fill ? ' fill' : '')}>
       <div className="topbar">
         <nav className="crumbs" aria-label="Breadcrumb">
           {crumbs.map((c, i) => (

@@ -1,26 +1,8 @@
-"""A rich, TREE-STRUCTURED LangGraph sample — the whole-deployment golden corpus.
+"""A tree-structured LangGraph sample: a multi-subgraph agent run tree for the whole-deployment graph.
 
-Unlike `sample_runs.json` (flat llm spans, for adapter PARSING), this is a faithful multi-subgraph agent
-run tree, folded through the REAL langsmith adapter + `build_graph` (offline, no key). It exists to exercise
-the whole-DEPLOYMENT graph (llm + tool + retriever nodes + topology + subgraphs) and to PLANT the failure
-cases the engine must survive. It is STRUCTURAL test/demo data — never a source of $ claims.
-
-Planted failure cases (each asserted in tests/test_tree_deployment.py):
-  - tool + retriever runs                         -> typed NON-LLM nodes (whole deployment, not just llm)
-  - node 'worker' in billing vs refund subgraphs  -> two DISTINCT call-sites, not one blended bucket
-  - ReAct pre/post-tool split at one node         -> two call-sites, but ONE node in the topology (a cycle)
-  - a tool that ERRORS (issue_refund)             -> non-llm error surfaced
-  - a failed llm (errored, empty output)          -> excluded from the audited bucket but COUNTED
-  - a recovered error (error + real output)       -> kept (a real decision)
-  - an UNTAGGED deep-agent llm (no node, generic parent) -> resolved to run.name, FLAGGED untagged
-  - a WINDOW-SLICED run whose parent is outside the fetch -> resolves without crashing (top-level)
-  - a MIXED-model node (responder: sonnet in one trace, gpt-4o-mini in another)
-  - an UNKNOWN model (some-new-model-9000)         -> priced as unknown, never invented
-  - GENERIC scaffolding (LangGraph/__start__/RunnableSequence) -> filtered from nodes AND edges
-  - multiple REVISIONS (sha1, sha2)                -> captured distinct + sorted
-
-The builder emits raw LangSmith-Run-shaped dicts (what `LangSmithAdapter._run_to_dict` accepts); order is
-carried by an increasing `dotted_order` + `start_time`, and the tree by `parent_run_id`.
+Folded offline through the real langsmith adapter and build_graph, it plants the failure cases that
+tests/test_tree_deployment.py asserts (each trace below says which). Structural test and demo data, never a source of
+cost claims. Runs are raw LangSmith Run dicts; order comes from dotted_order + start_time, the tree from parent_run_id.
 """
 
 SONNET = "claude-sonnet-4-5-20250101"
@@ -39,8 +21,7 @@ _TOOLS = [
 
 
 class _Clock:
-    """Monotonic tick -> (dotted_order, start_time, end_time) so runs sort in execution order and every
-    run has a positive wall-clock (needed for non-llm node latency)."""
+    """Monotonic tick -> (dotted_order, start_time, end_time); non-llm node latency needs a positive wall-clock."""
     def __init__(self):
         self.n = 0
 
@@ -50,7 +31,7 @@ class _Clock:
             sec, micro = divmod(us, 1_000_000)
             return "2026-08-01T00:%02d:%02d.%06dZ" % (sec // 60, sec % 60, micro)
         start_us = self.n * 1_000_000
-        return "%020d" % self.n, iso(start_us), iso(start_us + dur_ms * 1000)   # do, start, end (honors dur_ms)
+        return "%020d" % self.n, iso(start_us), iso(start_us + dur_ms * 1000)
 
 
 def _ai_message(content, tool_calls=None):
@@ -65,8 +46,8 @@ def _ai_message(content, tool_calls=None):
 def _run(clk, rid, tid, rt, name, parent, *, node=None, ns=None, model=None, tools=None,
          sys=None, user=None, tool_msg=None, out=None, tool_calls=None, error="", rev=None,
          pt=None, ct=None, fb=None, ttft=False, task=None, dur_ms=800):
-    """One raw LangSmith Run dict. llm runs carry prompt/usage + messages; tool/retriever/chain carry
-    structure only. `node`/`ns` become langgraph_node / langgraph_checkpoint_ns metadata."""
+    """One raw LangSmith Run dict; only llm runs carry messages and usage. `node`/`ns` become langgraph_node /
+    langgraph_checkpoint_ns metadata."""
     do, start, end = clk.stamp(dur_ms)
     meta = {"agent_id": AGENT}
     if node is not None:
@@ -112,7 +93,7 @@ def runs():
     clk = _Clock()
     R = []
 
-    # ── T1: billing path — supervisor routes, worker does a ReAct tool loop (lookup_account) ──
+    # ── T1: billing path, supervisor routes, worker does a ReAct tool loop (one node, two call-sites) ──
     R += [
         _run(clk, "t1-root", "t1", "chain", "LangGraph", None),                      # generic root -> filtered
         _run(clk, "t1-sup", "t1", "chain", "supervisor", "t1-root", node="supervisor"),
@@ -135,7 +116,7 @@ def runs():
              out="I refunded the duplicate $20 charge on order 123.", pt=3400, ct=70),
     ]
 
-    # ── T2: refund path — SAME node name 'worker' but refund subgraph; issue_refund tool ERRORS ──
+    # ── T2: refund path, same node name 'worker' in another subgraph; the issue_refund tool errors ──
     R += [
         _run(clk, "t2-root", "t2", "chain", "LangGraph", None),
         _run(clk, "t2-sup", "t2", "chain", "supervisor", "t2-root", node="supervisor"),
@@ -157,10 +138,10 @@ def runs():
              user="Refund the subscription on account 456.",
              tool_msg="issue_refund failed: gateway timeout",
              out="The refund gateway timed out; I have queued a manual refund for account 456.",
-             pt=2800, ct=80),   # error + REAL output -> recovered, KEPT
+             pt=2800, ct=80),   # error + real output -> recovered, kept
     ]
 
-    # ── T3: research subgraph — retriever node + UNKNOWN-model summarize + an UNTAGGED deep-agent llm ──
+    # ── T3: research subgraph, a retriever node, an unknown-model summarize, an untagged deep-agent llm ──
     R += [
         _run(clk, "t3-root", "t3", "chain", "LangGraph", None),
         _run(clk, "t3-res", "t3", "chain", "research", "t3-root", node="research"),
@@ -173,14 +154,14 @@ def runs():
              sys="Summarize the retrieved policy for the agent.",
              user="Summarize: subscriptions are refundable within 30 days.",
              out="Subscriptions are refundable within 30 days of renewal."),
-        # untagged: NO langgraph_node, parent is a GENERIC RunnableSequence -> _resolve_node falls back to run.name
+        # untagged: no langgraph_node and a generic parent, so the node falls back to run.name
         _run(clk, "t3-seq", "t3", "chain", "RunnableSequence", "t3-root"),           # generic -> filtered
         _run(clk, "t3-untag-l", "t3", "llm", "ChatOpenAI", "t3-seq", model=MINI,
              sys="Draft the final reply.", user="Draft a reply about the refund policy.",
              out="Here is the policy summary you asked for."),
     ]
 
-    # ── T4: a FAILED llm at billing/worker — errored with EMPTY output -> excluded but counted ──
+    # ── T4: a failed llm at billing/worker, errored with empty output -> excluded but counted ──
     R += [
         _run(clk, "t4-root", "t4", "chain", "LangGraph", None),
         _run(clk, "t4-sup", "t4", "chain", "supervisor", "t4-root", node="supervisor"),
@@ -192,7 +173,7 @@ def runs():
              user="Ticket: charge dispute order 999.", out="", pt=3100, ct=0),   # empty output -> excluded
     ]
 
-    # ── T5: responder node with SONNET (mixed-model half #1) ──
+    # ── T5: responder node with Sonnet (mixed-model half 1) ──
     R += [
         _run(clk, "t5-root", "t5", "chain", "LangGraph", None),
         _run(clk, "t5-resp", "t5", "chain", "responder", "t5-root", node="responder"),
@@ -203,14 +184,14 @@ def runs():
              out="Hi! So sorry about the double charge on order 123 — it is refunded.", pt=1500, ct=120),
     ]
 
-    # ── T6: WINDOW-SLICED trace — parent_run_id points OUTSIDE the fetched set ──
+    # ── T6: window-sliced trace, parent_run_id points outside the fetched set ──
     R += [
         _run(clk, "t6-l", "t6", "llm", "ChatOpenAI", "sliced-parent-not-in-window", model=MINI,
              sys="Draft the final reply.", user="Confirm the refund for order 456.",
              out="Your refund for order 456 is on its way!", pt=900, ct=30),
     ]
 
-    # ── T7: responder with GPT-4o-mini (mixed-model half #2) under a generic __start__; revision sha2 ──
+    # ── T7: responder with gpt-4o-mini (mixed-model half 2) under a generic __start__ ──
     R += [
         _run(clk, "t7-root", "t7", "chain", "LangGraph", None),
         _run(clk, "t7-start", "t7", "chain", "__start__", "t7-root"),                # generic -> filtered

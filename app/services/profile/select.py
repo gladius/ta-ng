@@ -1,17 +1,10 @@
-"""Profile-layer selection + full-bucket facts + structure-aware digests. Deterministic, $0.
-
-Three jobs, none of which is a judgment (that's the LLM's job in comprehend.py):
-  1. SAMPLE — `_distinct(bucket, n)`, the SAME deterministic sampler the downgrade proof uses (app.services.audit),
-     so the profile describes the EXACT instances the proof re-runs.
-  2. FACTS  — counts over ALL N (not the sample). `distinct_system == 1` is the ground truth that the system prompt
-     is identical on every call — a static verdict at 100% coverage, which the analyst reconciles against.
-  3. DIGEST — a big instance (50k–200k tokens at enterprise scale) is reduced to a bounded head+tail skeleton so we
-     never ship raw giant prompts to the analyst; a small block stays verbatim. Each system block carries a cheap
-     "identical across the sample" mark.
+"""Profile sampling, whole-bucket facts and bounded digests. Deterministic, no LLM.
+The sample is audit._distinct, the same one the downgrade proof re-runs; facts count all N calls; big messages are
+cut to head + tail so the analyst never gets a giant prompt.
 """
 from collections import Counter
 
-from app.services.audit import _distinct   # the ONE deterministic sampler — shared with the proof, by design
+from app.services.audit import _distinct
 
 
 def _system_text(t):
@@ -23,12 +16,12 @@ def _user_text(t):
 
 
 def bucket_facts(bucket):
-    """$0 counts over the WHOLE bucket — the cross-check that turns a 5-instance read into a node-level claim."""
+    """Counts over the whole bucket: the cross-check that turns a 5-instance read into a node-level claim."""
     systems = [_system_text(t) for t in bucket]
     users = [_user_text(t) for t in bucket]
     return {
         "n_total": len(bucket),
-        "distinct_system": len(set(systems)),          # 1 => system prompt provably identical on every call (static)
+        "distinct_system": len(set(systems)),          # 1: the system prompt is identical on every call
         "distinct_user": len(set(users)),
         "models": dict(Counter((t.get("model") or "?") for t in bucket)),
     }
@@ -50,7 +43,7 @@ def _digest(trace, sample_systems):
         body, n = _digest_msg(m.get("content"))
         d = {"role": role, "chars": n, "text": body}
         if role == "system":
-            # cheap cross-instance evidence: is THIS whole system block identical across the sampled instances?
+            # is this whole system block identical across the sampled instances?
             d["identical_across_sample"] = sample_systems.count(m.get("content") or "") == len(sample_systems)
         msgs.append(d)
     out = str(trace.get("output") or "")

@@ -1,15 +1,5 @@
-"""The ONE database engine for the whole app — backend chosen by DATABASE_URL, same code either way.
-
-  dev (restricted / no Postgres): defaults to a local SQLite FILE — stdlib sqlite3, ZERO install. WAL mode so the
-      prove thread-pool's concurrent writes don't lock each other.
-  prod: set DATABASE_URL=postgresql+psycopg://user:pass@host/db and the SAME code runs on Postgres — which is what
-      lets the app scale horizontally (many Cloud Run instances sharing one store) instead of pinning to one.
-
-DATABASE_URL resolves through credentials.get_config (process env first, .env fallback) so it lives with the rest of
-the app's config. The engine is built once, lazily, on first use. `reset()` exists for tests (point DATABASE_URL at a
-temp DB, reset, run). Nothing backend-specific lives here except the SQLite pragmas; the one upsert dialect branch is
-isolated in store.py.
-"""
+"""The app's one database engine: Postgres when DATABASE_URL is set (production, shared by every instance), else a
+local SQLite file in WAL mode (dev). Same code either way; the engine is built lazily on first use."""
 import os
 import threading
 
@@ -17,14 +7,11 @@ from sqlalchemy import create_engine, event, exc, inspect, MetaData, text
 
 import credentials
 
-# Dev store lives under repo-root/.data/ (gitignored, dev convenience only — prod is Postgres via DATABASE_URL).
-# db.py is app/services/db.py -> up 3 = repo root.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _DATA_DIR = os.path.join(_REPO_ROOT, ".data")
 _DEFAULT_SQLITE = "sqlite:///" + os.path.join(_DATA_DIR, "audit_store.db")
 
-# The ONE metadata every table registers on (the store's kv, the validation_* tables). ready() creates them on first
-# use (CREATE TABLE IF NOT EXISTS, idempotent).
+# Every table registers here; ready() creates missing ones on first use.
 metadata = MetaData()
 
 _engine = None
@@ -33,7 +20,7 @@ _tables_lock = threading.Lock()
 
 
 def url():
-    """The active DATABASE_URL (or the dev SQLite default). Never logged with credentials intact by callers."""
+    """The active DATABASE_URL (or the dev SQLite default). It holds credentials: don't log it."""
     u = credentials.get_config("DATABASE_URL")
     if not u and os.environ.get("K_SERVICE"):                    # on Cloud Run a local SQLite file is lost per instance
         raise RuntimeError("DATABASE_URL is not set: Cloud Run needs a shared Postgres")
@@ -41,7 +28,6 @@ def url():
 
 
 def engine():
-    """The process-wide SQLAlchemy engine, built once on first use."""
     global _engine
     if _engine is None:
         _engine = _build(url())
@@ -49,9 +35,8 @@ def engine():
 
 
 def ready():
-    """The engine, with every table on `metadata` created if missing (CREATE TABLE IF NOT EXISTS: no migration step
-    for a new table). One thread per process does it. When another instance creates the same tables at that moment,
-    Postgres rejects the second CREATE; the retry then finds them made."""
+    """The engine, with every table on `metadata` created if missing, by one thread per process. If another instance
+    creates the same tables at that moment, Postgres rejects the second CREATE and the retry finds them made."""
     global _tables_for
     eng = engine()
     key = (eng, len(metadata.tables))
@@ -67,9 +52,7 @@ def ready():
 
 
 def _create(eng):
-    """Missing tables, then missing columns: a nullable column added in code is added to the existing table too
-    (ALTER TABLE ... ADD COLUMN, on SQLite and Postgres), so an upgrade needs no manual step for it. Never alters or
-    drops anything; a changed column still needs tools/migrate_validation_schema.py."""
+    """Missing tables, then missing nullable columns. Never alters or drops: see tools/migrate_validation_schema.py."""
     metadata.create_all(eng)
     insp = inspect(eng)
     with eng.begin() as c:
@@ -82,7 +65,6 @@ def _create(eng):
 
 
 def _ensure_sqlite_dir(u):
-    """SQLite won't create a missing parent directory — make it (handles the .data/ default and any custom path)."""
     path = u.split("sqlite:///", 1)[-1]
     if path and path != ":memory:":
         d = os.path.dirname(path)
@@ -94,10 +76,10 @@ def _build(u):
     sqlite = u.startswith("sqlite")
     kw = {"pool_pre_ping": True, "future": True, "hide_parameters": True}   # no prompt text in error logs
     if sqlite:
-        _ensure_sqlite_dir(u)                                    # create .data/ (or any custom dir) before opening
+        _ensure_sqlite_dir(u)
         kw["connect_args"] = {"check_same_thread": False}        # one file, shared across the prove thread-pool
-    else:                                                        # Postgres on Cloud Run: keep pools SMALL — many
-        kw["pool_size"] = int(credentials.get_config("DB_POOL_SIZE", "5"))       # instances x big pools exhausts PG
+    else:                                                        # small pools: many instances x big pools exhaust PG
+        kw["pool_size"] = int(credentials.get_config("DB_POOL_SIZE", "5"))
         kw["max_overflow"] = int(credentials.get_config("DB_MAX_OVERFLOW", "5"))
     eng = create_engine(u, **kw)
     if sqlite:
@@ -112,7 +94,7 @@ def _build(u):
 
 
 def reset():
-    """Drop the cached engine (tests: set DATABASE_URL to a temp DB, call reset(), then use the store)."""
+    """Drop the cached engine (tests: point DATABASE_URL at a temp DB, then call this)."""
     global _engine
     if _engine is not None:
         _engine.dispose()
@@ -120,11 +102,7 @@ def reset():
 
 
 def health():
-    """Live DB health for /healthz/db — the answer to 'am I on Postgres or SQLite, and is it connected?'.
-
-    Returns {ok, backend, target, entries, last_write}. `backend` is the live dialect ('postgresql' | 'sqlite');
-    `target` is host+database (SQLite: the file path) with NO credentials (username/password are never read here);
-    `ok` is True only if a real query ran. Best-effort stats (row count + last write) come from the kv table."""
+    """Live DB health for /healthz/db: {ok, backend, target, entries, last_write}. `target` never holds credentials."""
     from sqlalchemy import text
     eng = engine()
     u = eng.url
@@ -135,13 +113,13 @@ def health():
     out = {"ok": False, "backend": eng.dialect.name, "target": target, "entries": None, "last_write": None}
     try:
         from app.services import store
-        store._ensure()                                          # validates connectivity + ensures kv exists (idempotent)
+        store._ensure()
         with eng.connect() as c:
             row = c.execute(text("SELECT count(*), max(created_at) FROM kv")).first()
         out["ok"] = True
         out["entries"] = int(row[0]) if row and row[0] is not None else 0
         lw = row[1] if row else None                            # raw SQL: SQLite returns a str, Postgres a datetime
         out["last_write"] = lw.isoformat() if hasattr(lw, "isoformat") else (str(lw) if lw is not None else None)
-    except Exception as e:                                       # unreachable / auth / etc. — report, don't leak details
+    except Exception as e:                                       # report the error type only, never its details
         out["error"] = type(e).__name__
     return out

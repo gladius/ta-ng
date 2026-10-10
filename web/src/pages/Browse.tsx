@@ -20,10 +20,7 @@ export function Sources() {
   const q = useQuery({ queryKey: ['sources'], queryFn: () => get<Source[]>('/suite/sources') })
   return (
     <Page crumbs={[{ label: 'Agent audits' }]}>
-      <div className="head"><div>
-        <h1>{ow ? 'Open-weight audit' : 'Tier downgrade audit'}</h1>
-        <p className="meta">Pick a data source, then an agent. Its recorded calls are grouped by call-site, and the ones you choose are re-run on {ow ? 'a same-tier open-weight model' : 'a cheaper tier'} to prove whether the behaviour holds.</p>
-      </div></div>
+      <div className="head"><h1>{ow ? 'Open-weight audit' : 'Tier downgrade audit'}</h1></div>
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? (
         <p className="empty">No data source has credentials on this server.</p>
       ) : (
@@ -43,7 +40,7 @@ export function Workspaces() {
   const q = useQuery({ queryKey: ['workspaces', source], queryFn: () => get<Workspace[]>(`/suite/sources/${encodeURIComponent(source)}/workspaces`) })
   return (
     <Page crumbs={[{ label: 'Agent audits', to: '/sources' + modeQuery(mode) }, { label: source }]}>
-      <div className="head"><div><h1>Workspaces</h1><p className="meta">{source}</p></div></div>
+      <div className="head"><h1>Workspaces</h1></div>
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? (
         <p className="empty">No workspaces: check this source's credentials, or it may be unreachable.</p>
       ) : (
@@ -66,7 +63,7 @@ export function Agents() {
   const q = useQuery({ queryKey: ['agents', source, ws], queryFn: () => get<Agents>(`/suite/sources/${encodeURIComponent(source)}/workspaces/${encodeURIComponent(ws)}/agents`) })
   return (
     <Page crumbs={[{ label: 'Agent audits', to: '/sources' + modeQuery(mode) }, { label: source, to: `/sources/${encodeURIComponent(source)}${modeQuery(mode)}` }, { label: q.data?.name ?? ws }]}>
-      <div className="head"><div><h1>Agents</h1><p className="meta">{q.data?.name ?? ws}</p></div></div>
+      <div className="head"><h1>Agents</h1></div>
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.agents.length ? (
         <p className="empty">No agents in this workspace.</p>
       ) : (

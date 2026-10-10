@@ -1,15 +1,5 @@
-"""Dev-only traceability dump. When AUDIT_DEBUG is set, write each pipeline stage per SNAPSHOT to disk so you can
-inspect exactly what was fetched, how it was grouped into call-sites, and what was proven:
-
-    .audit_debug/<snap>/
-      traces/<call-site>.json   the raw recorded runs in each call-site bucket (what was downloaded)
-      graph/nodes.json          the call-sites with their derived stats
-      graph/edges.json          the graph edges
-      graph/summary.json        agent, trace count, subgraphs, bucket keys
-      results/proof.json        the frozen proof (verdicts, per-input evidence)
-
-STRICTLY off unless AUDIT_DEBUG is truthy, so it never runs in production. Best-effort: a dump failure is logged and
-swallowed — diagnostics must never break the audit. `.audit_debug/` is gitignored.
+"""Dev-only dump of each pipeline stage per snapshot to .audit_debug/<snap>/ (traces/, graph/, results/, JUDGE_*.md).
+Off unless AUDIT_DEBUG is set. Best-effort: a dump failure is logged and never breaks the audit.
 """
 import json
 import os
@@ -47,7 +37,7 @@ def dump_graph(snap, g):
             "agent": g.get("agent"), "traces": g.get("traces"), "graphs": g.get("graphs", []),
             "node_count": len(g.get("nodes", [])), "bucket_keys": list(buckets.keys()),
             "bucket_sizes": {k: len(v) for k, v in buckets.items()}})
-    except Exception as e:                                    # diagnostics must never break the audit
+    except Exception as e:
         print("[snapdump] graph dump failed for %s: %s" % (snap, e))
 
 
@@ -62,9 +52,7 @@ def dump_results(snap, proof):
 
 
 def _judge_cache_verdict(n, reads, writes, sent, anth, avg_in):
-    """Explain a 0% cache hit from EVIDENCE (was cache_control sent? treated as Anthropic? tokens above the min?),
-    not a one-size guess — so the note points at the real cause (stripped locally vs. dropped by a gateway vs. below
-    the model's minimum vs. write-but-never-read)."""
+    """Explain the cache outcome from evidence: stripped locally, dropped upstream, below the minimum, or never read."""
     if reads:
         return ("**Caching ENGAGED** — the shared judge prefix was written once and re-read: fewer full-price input "
                 "tokens and lower latency on the repeat calls.")
@@ -86,8 +74,7 @@ def _judge_cache_verdict(n, reads, writes, sent, anth, avg_in):
 
 
 def dump_judge_cache(snap):
-    """AUDIT_DEBUG: the judge-cache PROOF — did prompt caching actually engage on the audit's judge calls, and is it
-    cheaper + faster? Writes .audit_debug/<snap>/JUDGE_CACHE.md from llm_client's recorded per-call cache stats."""
+    """Write JUDGE_CACHE.md: did prompt caching engage on the judge calls, and what did it save?"""
     if not (enabled() and snap):
         return
     try:
@@ -104,8 +91,8 @@ def dump_judge_cache(snap):
         otok = sum(s.get("output", 0) for s in stats)
         avg_ms = round(sum(s["ms"] for s in stats) / n)
         avg_in, avg_out = round(itok / n), round(otok / n)
-        sent = sum(1 for s in stats if s.get("cache_sent"))          # cache_control actually left our process
-        anth = sum(1 for s in stats if s.get("anthropic"))           # treated as Claude (else breakpoint stripped)
+        sent = sum(1 for s in stats if s.get("cache_sent"))          # cache_control actually sent
+        anth = sum(1 for s in stats if s.get("anthropic"))           # treated as Claude (else the mark is stripped)
         models = sorted({str(s.get("model")) for s in stats})
         bases = sorted({s.get("base_url") for s in stats if s.get("base_url")})
         L = ["# Judge-cache proof  (AUDIT_DEBUG)\n",
@@ -126,9 +113,7 @@ def dump_judge_cache(snap):
 
 
 def dump_judge_raw(snap):
-    """AUDIT_DEBUG: EXACTLY what the fit judge returned (`raw`) next to what we parsed — so a canned
-    'differs from the set' can be diagnosed at a glance: is `raw` BLANK / just a verdict word (the model gave no
-    reason — not a parse bug), or does it hold a reason we failed to keep (a parse bug)? Writes JUDGE_RAW.md."""
+    """Write JUDGE_RAW.md: each fit-judge raw reply beside what was parsed (a blank reply vs. a parse bug)."""
     if not (enabled() and snap):
         return
     try:

@@ -1,18 +1,15 @@
 """The validation engine: does a candidate model behave like the original on a request?
 
-Per item, the original's recorded answer plus `reference_runs` fresh re-runs are the REFERENCE SET: the range of
-behaviour the original itself shows. One coherence judgement says how consistent that set is. Each candidate is
-re-run `candidate_runs` times and every output is judged, by majority of `votes`, on whether it belongs to the set.
-Verdict per candidate, relative to the original's own consistency:
+The original's recorded answer plus `reference_runs` fresh re-runs form the reference set, the range of behaviour the
+original itself shows; one coherence judgement says how consistent it is. Each of `candidate_runs` candidate outputs
+is judged, by majority of `votes`, on whether it belongs to the set. Verdict, relative to the original's consistency:
 
     unverified  a call failed, an output is too long to judge whole, the coherence reply was unreadable, or the
                 original agrees with itself less than `coherence_floor` of the time (nothing stable to certify against)
     within      fit rate >= original's consistency - margin
     outside     otherwise
 
-`judge_reason` is the judge's most common reason behind the verdict (e.g. "urgency changed from medium to high").
-The engine never picks a winner. It reports every run with its latency, tokens, served model and cost, so the
-caller can rank candidates by whatever it values.
+No winner is picked: every run is reported with latency, tokens, served model and cost for the caller to rank.
 """
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +30,7 @@ def _text(trace, role, sep="\n"):
 
 
 def request_text(trace, spec):
-    """The judge's view of the request (system + user text). Identical across an item's judge calls: the cached prefix."""
+    """The judge's view of the request (system + user text); the same in all of an item's judge calls, so cached."""
     return ("SYSTEM:\n%s\n\nUSER:\n%s" % (_text(trace, "system"), _text(trace, "user", " ")))[:spec.cap_chars]
 
 
@@ -43,9 +40,8 @@ def _default_run(trace, model):
 
 
 def _call(run, trace, model):
-    """One model call -> run record. A failure is a record too (the item becomes unverified), never an exception —
-    except an unreachable endpoint or a refused account (out of credit, over budget), which say nothing about the
-    model: raised for the caller to wait or stop instead of recording unverified results."""
+    """One model call -> run record; a failure is a record too (the item becomes unverified). An unreachable endpoint
+    or a refused account says nothing about the model, so it raises for the caller to wait or stop."""
     try:
         r = dict(run(trace, model))
     except Exception as e:
@@ -89,8 +85,7 @@ def _verdict(kept, nruns, failed, oversize, coh, spec):
 
 
 def validate_many(items, spec, run=None):
-    """[Item] -> [result]. Two pools across ALL items: every model call, then every judge call (so N items with M
-    candidates keep the provider busy `max_parallel` wide instead of running item by item)."""
+    """[Item] -> [result]. Two pools across all items, every model call then every judge call, `max_parallel` wide."""
     run = run or _default_run
     calls = []                                                  # (item index, "ref" | candidate index, model)
     for i, it in enumerate(items):

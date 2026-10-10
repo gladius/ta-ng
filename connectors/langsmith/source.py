@@ -1,8 +1,5 @@
-"""LangSmith dashboard data source — navigation over the LangSmith REST API + the langsmith Adapter.
-
-ALL LangSmith-specific API calls live here (workspaces = GET /workspaces, agents = GET /sessions scoped by
-X-Tenant-Id, pull = the langsmith adapter scoped to the workspace). The web layer talks only to the neutral
-DataSource interface, so nothing outside this folder knows LangSmith exists.
+"""LangSmith DataSource: workspaces and agents from the LangSmith REST API, traces through the langsmith adapter.
+Every LangSmith-specific call lives here; the web layer sees only the neutral DataSource interface.
 """
 
 import os
@@ -13,7 +10,7 @@ import credentials
 from connectors import get_adapter, pull, pull_graph
 from connectors.datasource import DataSource
 
-credentials.load()                                           # the ONE .env loader (also mirrors LC aliases)
+credentials.load()
 _KEY_ALIASES = ("LANGCHAIN_API_KEY", "LANGSMITH_KEY")
 
 
@@ -51,14 +48,12 @@ class LangSmithSource(DataSource):
             key=lambda a: (a["name"] or "").lower())
 
     def pull(self, ws_id, project, limit=500, since_hours=None):
-        """RAW contract traces for one agent's recent LLM spans (the web layer caches + prices them)."""
+        """Raw contract traces of one agent's recent whole run trees (the web layer caches and prices them)."""
         os.environ["LANGSMITH_WORKSPACE_ID"] = ws_id             # scope the SDK client to this workspace
-        # fetch the WHOLE run tree (no run_type filter) so the graph layer can resolve node identity +
-        # topology; the adapter builds contract traces for the llm runs and structural records for the rest.
         return pull(get_adapter("langsmith"), project=project, limit=limit, since_hours=since_hours)
 
     def pull_graph(self, ws_id, project, limit=500, since_hours=None):
-        """The real execution graph — folds the run tree (topology + node identity), not a flat fallback."""
+        """The execution graph folded from the run tree (topology and node identity)."""
         os.environ["LANGSMITH_WORKSPACE_ID"] = ws_id
         return pull_graph(get_adapter("langsmith"), project=project, limit=limit, since_hours=since_hours)
 

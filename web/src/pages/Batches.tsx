@@ -17,11 +17,8 @@ export default function Batches() {
   return (
     <Page crumbs={[{ label: 'Models' }, { label: 'Validations' }]}>
       <div className="head">
-        <div>
-          <h1>Validations</h1>
-          <p className="meta">Batches sent through the API. Each request is re-run on its original model and on every candidate, and each candidate is judged against the range of answers the original itself gives.</p>
-        </div>
-        <a className="btn" href="/docs">API reference</a>
+        <h1>Validations</h1>
+        <a className="btn" href="/docs" target="_blank" rel="noopener">API reference ↗</a>
       </div>
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? (
         <p className="empty">No validations yet.</p>

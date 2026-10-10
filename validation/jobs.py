@@ -1,20 +1,12 @@
-"""Validation jobs — durable batches whose requests are shared out to every free worker.
+"""Validation jobs: durable batches whose requests are shared out to every free worker.
 
-Tables on the app's database (SQLite in dev, Postgres in prod — app.services.db):
-  validation_jobs   one row per batch: status, progress, spend
-  validation_items  one row per request: what to validate, its result once done, and which worker holds it
-  validation_cells  one row per request x candidate (and the original): verdict, fit, served model, latency, cost —
-                    what summaries, filters, pages and exports read, so they never load the full answers
+Tables: validation_jobs (one per batch), validation_items (one per request), validation_cells (one per request x
+candidate and the original: what summaries, filters and exports read, so they never load the full answers) and
+validation_callbacks. Job status: queued -> running -> done | stopped (budget) | failed.
 
-    queued -> running -> done | stopped (budget) | failed
-
-A job submitted with a callback URL is POSTed its status and per-candidate summary once it ends (validation_callbacks).
-
-The unit of work is a GROUP of up to CHUNK unfinished requests. Any free worker claims the next group of the oldest
-live job, so one big batch is spread across all workers. Claiming is one conditional UPDATE per group: each row's
-WHERE is re-checked under its row lock (Postgres) or the single writer (SQLite), so no request is ever held by two
-workers. A holder heart-beats its group; a group whose holder went quiet for STALE_S is claimable again. Results
-are written only while the claim is still held, so a worker that lost its group writes nothing.
+A free worker claims a group of up to CHUNK requests of the oldest live job with one conditional UPDATE, re-checked
+under the row lock (Postgres) or the single writer (SQLite), so no request is held twice. The holder heart-beats it;
+a group quiet for STALE_S is claimable again. Results land only while the claim holds (a lost group writes nothing).
 
 ponytail: jobs are served oldest first, so a huge batch delays later ones; add per-job fairness if teams collide.
 """
@@ -67,10 +59,10 @@ _items = Table(
     Column("seq", Integer, primary_key=True),
     Column("item_id", Text, nullable=False),
     Column("payload", Text, nullable=False),       # {id, request (contract trace), model, recorded, candidates}
-    Column("result", Text),                        # the engine's result once this request is done
+    Column("result", Text),
     Column("claim", String(32), index=True),       # the group token of the worker holding it, while unfinished
     Column("claimed_at", DateTime),                # that worker's last heartbeat
-    Column("worker", String(120)),                 # who holds / held it
+    Column("worker", String(120)),
 )
 _cells = Table(
     "validation_cells", db.metadata,
@@ -87,7 +79,7 @@ _cells = Table(
     Column("cost_usd", Float),
     Column("reason", Text),
     Column("judge_reason", Text),
-    Column("match", Integer),                        # the candidate's answers by category (None before they existed)
+    Column("match", Integer),
     Column("acceptable", Integer),
     Column("drift", Integer),
     Column("unclear", Integer),
@@ -97,7 +89,7 @@ _callbacks = Table(
     Column("job_id", String(32), primary_key=True),
     Column("url", Text, nullable=False),
     Column("sent_at", DateTime),                   # set by the one worker that delivers it
-    Column("error", Text),                         # why delivery failed after every attempt
+    Column("error", Text),
 )
 
 def _engine():
@@ -122,7 +114,6 @@ def _unfinished():
 
 
 def _free():
-    """Unfinished and not held by a live worker."""
     return and_(_items.c.result.is_(None), or_(_items.c.claim.is_(None), _items.c.claimed_at < _stale()))
 
 
@@ -177,7 +168,6 @@ def recent(limit=50, offset=0):
 
 
 def results(job_id):
-    """Every finished request's full result, in submission order (the JSON download; pages use page())."""
     with _engine().connect() as c:
         rows = c.execute(select(_items.c.result).where(_items.c.job_id == job_id, _items.c.result.is_not(None))
                          .order_by(_items.c.seq))
@@ -185,7 +175,7 @@ def results(job_id):
 
 
 def request(job_id, item_id):
-    """(what was submitted — its contract trace is under "request" —, its result or None), or None if unknown."""
+    """-> (submitted payload, result or None), or None if unknown."""
     with _engine().connect() as c:
         row = c.execute(select(_items.c.payload, _items.c.result)
                         .where(_items.c.job_id == job_id, _items.c.item_id == item_id)).first()
@@ -245,8 +235,7 @@ def view(job_id):
 
 # ── claiming and running groups ─────────────────────────────────────────────────────────────────────────────────────
 def _tidy():
-    """Close out live jobs: done when nothing is unfinished; stopped once over budget (in-flight groups still land).
-    Run before every claim, so a job is closed within one poll even when its last two groups finish together."""
+    """Close out live jobs: done when nothing is unfinished, stopped once over budget (in-flight groups still land)."""
     now = _now()
     with _engine().begin() as c:
         c.execute(update(_jobs).where(_jobs.c.status.in_(LIVE + ("stopped",)), ~exists().where(_unfinished()))
@@ -268,9 +257,8 @@ def callback(job_id):
 
 
 def resume(job_id, max_budget_usd=None):
-    """Queue a failed or stopped job again, optionally with a new budget: its unfinished requests run, the finished
-    ones are kept, and its callback is sent again when it ends. -> the job, or None if it was not failed or stopped,
-    or its budget (the new one if given) is already spent."""
+    """Requeue a failed or stopped job, optionally with a new budget; finished requests are kept, the callback resent.
+    -> the job, or None if it was not failed or stopped, or its budget (the new one if given) is already spent."""
     budget = _jobs.c.max_budget_usd if max_budget_usd is None else max_budget_usd
     with _engine().begin() as c:
         if not c.execute(update(_jobs).where(
@@ -291,8 +279,8 @@ def _deliver(url, body):
 
 
 def _notify():
-    """POST each ended job's status and summary to its callback URL, once: the worker whose UPDATE marks it sent
-    delivers it. ponytail: 3 attempts inline; a receiver down for longer misses it (the error is kept on the row)."""
+    """POST each ended job's summary to its callback URL once: the worker whose UPDATE marks it sent delivers it.
+    ponytail: 3 attempts inline; a receiver down for longer misses it (the error is kept on the row)."""
     with _engine().connect() as c:
         due = c.execute(select(_callbacks.c.job_id, _callbacks.c.url).where(   # ended, and no group still landing
             _callbacks.c.sent_at.is_(None), _callbacks.c.job_id == _jobs.c.id, _jobs.c.status.not_in(LIVE),
@@ -302,7 +290,7 @@ def _notify():
         with _engine().begin() as c:
             if not c.execute(update(_callbacks).where(_callbacks.c.job_id == job_id, _callbacks.c.sent_at.is_(None))
                              .values(sent_at=_now())).rowcount:
-                continue                               # another worker is delivering it
+                continue
         body = {**get(job_id), "summary": summary(job_id), "routing": routing(job_id),
                 "results_url": "/api/validations/%s/results" % job_id}
         error = None
@@ -410,10 +398,8 @@ def _record(job_id, token, group, res):
 
 def run_group(job_id, token, group):
     """Validate one claimed group and record it. -> how many requests were recorded.
-      model endpoint unreachable   the group goes back to the queue; the job says it is waiting, and since when
-      account refused              out of credit / quota / budget or no access: the job stops with why (resume later)
-      any other error validating   the job fails with it (frees the group; resume() runs the rest later)
-      database error recording     retried; if it lasts it reaches the worker and the group is redone after STALE_S"""
+    Unreachable endpoint: requeued, the job marked waiting. Refused account: the job stops. Other errors: it fails.
+    A database error while recording is retried; if it lasts, the group is redone after STALE_S."""
     stop = threading.Event()
     threading.Thread(target=_beat, args=(token, stop), daemon=True).start()
     try:
@@ -430,7 +416,7 @@ def run_group(job_id, token, group):
                     error="Waiting: the model endpoint has been unreachable since %s UTC (%s)"
                           % (_now().strftime("%H:%M"), str(e)[:200]), updated_at=_now()))
             raise
-        except Refused as e:                           # every other group would be refused too: stop the job
+        except Refused as e:                           # every other group would be refused too
             release(token)
             with _engine().begin() as c:
                 c.execute(update(_jobs).where(_jobs.c.id == job_id, _jobs.c.status.in_(LIVE)).values(
@@ -478,9 +464,8 @@ def _verdicts(ce):
 
 
 def summary(job_id):
-    """Per label across the job's finished requests, the original first as the baseline. No winner is picked.
-    avg_fit_rate: the share of a candidate's runs the judge placed among the original's own answers, averaged over
-    requests; avg_consistency (the original's row): how often the original's own answers agree."""
+    """Per label over the job's finished requests, the original first as the baseline; no winner is picked.
+    avg_fit_rate: share of a candidate's runs judged among the original's answers; avg_consistency: the original's."""
     return summaries([job_id]).get(job_id, [])
 
 

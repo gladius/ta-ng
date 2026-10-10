@@ -1,16 +1,9 @@
-"""Upgrade an existing validation database to the current schema. Idempotent: run it as often as you like.
+"""Upgrade a Postgres validation database from bfa695b to the current schema, before new code takes traffic. Idempotent.
 
     DATABASE_URL=postgresql+psycopg://... .venv/bin/python tools/migrate_validation_schema.py
 
-Needed once on a Postgres database that ran an earlier version (bfa695b), before the new code takes traffic:
-  - validation_jobs.max_budget_usd may be NULL (a job without a budget runs to the end): without this, every job
-    submitted without max_budget_usd fails
-  - validation_jobs.judge_model becomes TEXT (it was VARCHAR(120))
-  - validation_cells / validation_callbacks are created if missing (the app also creates missing tables itself)
-  - requests finished before validation_cells existed get their grid rows, so old jobs' pages, filters and
-    summaries show them
-A new database needs none of this: the app creates every table on first use. Postgres only; a dev SQLite database
-is simplest to delete (.data/audit_store.db) and let the app recreate."""
+Makes max_budget_usd nullable (else jobs without a budget fail), judge_model TEXT, creates missing tables and backfills
+validation_cells for finished requests. A new database needs none of this; for SQLite, delete .data/audit_store.db."""
 import json
 import os
 import sys
@@ -26,7 +19,7 @@ BATCH = 200                 # finished requests read per round: each result hold
 
 
 def main():
-    eng = db.ready()                                   # creates the tables that are missing
+    eng = db.ready()
     if eng.dialect.name != "postgresql":
         sys.exit("Postgres only (this is %s); see the docstring for SQLite." % eng.dialect.name)
     with eng.begin() as c:

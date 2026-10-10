@@ -58,7 +58,7 @@ export default function Profile() {
         </div>
       </div>
       {d?.summary ? <section className="summary"><Markdown text={d.summary} /></section>
-        : <p className="meta">Measured facts below. <Link to={page(a, 'analyze', `?snap=${snap}`)}>Run the per-node analysis</Link> to add what each node does and a deployment summary (one model call per call-site).</p>}
+        : <p className="meta"><Link to={page(a, 'analyze', `?snap=${snap}`)}>Describe each call-site</Link> (one model call each).</p>}
 
       <div className="kpis">
         <Kpi label={`Cost / ${basis}`} value={money(h.total_cost_basis, 2)} />
@@ -83,7 +83,6 @@ export default function Profile() {
           {s.nodes.map((n) => <Node key={n.node + (n.model ?? '')} n={n} basis={basis} />)}
         </section>
       ))}
-      <p className="muted small">Measured over {h.traces} traces in this snapshot; cost = tokens × catalog price. What each node does is an advisory read of its prompts: descriptive only, no saving is claimed here.</p>
     </Page>
   )
 }

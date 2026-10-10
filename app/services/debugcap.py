@@ -1,12 +1,5 @@
-"""ONE dedicated in-memory debug-capture store (AUDIT_DEBUG only), so debug capture isn't scattered across modules.
-
-Low-level + dependency-free (stdlib only), so llm_client / snapdump / prove can all touch it without import cycles.
-
-Scope: the store is reset at the START of an audit and drained by the dumper — SINGLE-INSTANCE / SERIAL-audit scoped
-(audits are triggered one at a time). It is NOT keyed per snap, because the events
-originate deep inside nested thread pools (prove -> audit -> judge) where the snap id isn't available; the PER-SNAP
-boundary is the disk dump under .audit_debug/<snap>/. If this ever needs to be concurrent-safe per snap, carry the
-snap via a contextvar propagated into the worker pools — deliberately not done for a dev-only flag."""
+"""In-memory debug capture (AUDIT_DEBUG only); stdlib-only so any module can use it without import cycles.
+Process-wide: reset at audit start and drained by snapdump, so one audit at a time (a contextvar would fix that)."""
 import os
 import threading
 
@@ -20,7 +13,7 @@ def enabled():
 
 
 def record_call(rec):
-    """Record ONE eval/judge model call's cache + token + latency stats (no-op unless AUDIT_DEBUG)."""
+    """Record one model call's cache, token and latency stats (no-op unless AUDIT_DEBUG)."""
     if not enabled():
         return
     with _lock:
@@ -28,9 +21,7 @@ def record_call(rec):
 
 
 def record_judge(rec):
-    """Record ONE fit-judge call's RAW reply + what we parsed from it (no-op unless AUDIT_DEBUG) — so a canned
-    'differs from the set' can be diagnosed: blank reply / bare verdict (model gave no reason) vs. a real reason
-    we mis-parsed."""
+    """Record one fit-judge call's raw reply and what was parsed from it (no-op unless AUDIT_DEBUG)."""
     if not enabled():
         return
     with _lock:

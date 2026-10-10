@@ -76,8 +76,7 @@ export default function Batch() {
         <div>
           <div className="title"><h1>{j.id}</h1><Status status={j.status} /></div>
           <p className="meta">
-            {j.items_done} of {j.items_total} requests · original re-run {j.spec.reference_runs}×, {j.spec.candidate_runs} answers per candidate, {j.spec.votes} judge votes each · judge {j.judge_model} · {when(j.created_at)}
-            {live && ' · refreshing every 5 s'}
+            {j.items_done} of {j.items_total} requests · judge {j.judge_model} · {when(j.created_at)}{live && ' · live'}
           </p>
         </div>
         <div className="row">
@@ -100,7 +99,7 @@ export default function Batch() {
 
       {sentences.length > 0 && (
         <section className="summary" aria-label="Summary">
-          <div className="summary-head"><span className="dot" aria-hidden="true" />Summary<span className="muted">written from this batch's numbers</span></div>
+          <div className="summary-head"><span className="dot" aria-hidden="true" />Summary</div>
           <p>{sentences.join(' ')}</p>
         </section>
       )}
@@ -115,7 +114,7 @@ export default function Batch() {
 
       {cands.length > 0 && (
         <section className="panel">
-          <div className="panel-head"><h2>By label</h2><span className="muted">against the original on the same requests · no winner is picked</span></div>
+          <div className="panel-head"><h2>By label</h2></div>
           <div className="scroll">
             <table className="grid">
               <thead><tr><th>Label</th><th>Answers</th><th>Requests</th><th>Cost / call</th><th>Latency</th></tr></thead>
@@ -151,7 +150,7 @@ export default function Batch() {
 
       {j.routing.length > 0 && (
         <section className="panel">
-          <div className="panel-head"><h2>Where routers sent requests</h2><span className="muted">per model that answered, as named in its responses</span></div>
+          <div className="panel-head"><h2>Where routers sent requests</h2></div>
           <div className="scroll">
             <table className="grid">
               <thead><tr><th>Label</th><th>Answered by</th><th className="num">Requests</th><th className="num">Pass</th><th className="num">Drift</th><th className="num">Not verified</th></tr></thead>

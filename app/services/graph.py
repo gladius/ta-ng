@@ -1,31 +1,14 @@
-"""Graph VIEW — the app-facing call-site + flow shape, from the ONE grouping brain (connectors/graph.py).
-
-There is a single graph builder: the connector's tree-folder (`source.pull_graph`), which resolves node
-identity from the run tree, splits a node by prompt shape (ReAct pre/post-tool are different call-sites),
-and computes real node->node edges. This module does NOT re-group; it just reshapes that builder's output
-into the neutral dict the app services (funnel, downgrade, audit) render — so no connector type leaks
-upward and every consumer keeps one stable shape.
-
-  nodes = LLM call-sites with core stats (model, calls, avg tokens, graph_path, out_type)
-  edges = observed node->node flow (most-travelled path)
-  graphs = distinct subgraph paths (select / rollup by graph for multi-agent)
-"""
+"""Graph view: the connector's graph (`source.pull_graph`) reshaped into the neutral dict the app services use, so no
+connector type leaks upward. Nodes are LLM call-sites with stats, edges the observed flow, graphs the subgraph paths."""
 from collections import OrderedDict
 
 from connectors.datasource import get_source
 
 
 def build(source_id, ws_id, project, limit=150):
-    """Fold an agent's traces into {agent, nodes, edges, graphs, buckets} via the one rich builder. Read-only, no LLM.
-    `limit` = the number of COMPLETE traces to pull — the connector fetches whole trace trees (roots, then all their
-    runs), NOT a run-window, so N here means N traces, not N spans (a fat agent is ~10-40 runs per trace).
-
-    Call-site identity is STABLE and sample-independent: `agent / subgraph-path / node-label` (all metadata-derived).
-    NOT the connector's content-variant key (`...~<frame>`), which is derived by clustering the fetched traces and
-    therefore DRIFTS when the live sample changes between a page load and the prove call — the selected keys would go
-    stale, nothing would prove, and every $ would reset to 0. A stable key also disambiguates same-named nodes across
-    subgraphs (two 'supervisor's in different graphs) without depending on content. Connector variants that map to the
-    same stable key (e.g. a ReAct node's pre/post-tool split) are merged, sample-weighted."""
+    """Fold an agent's last `limit` complete traces (not spans) into {agent, nodes, edges, graphs, buckets}. No LLM.
+    The call-site key is `agent/subgraph-path/node`: the connector's content-variant key drifts with the sample, so
+    selected keys would go stale before the proof. Variants sharing a key are merged, sample-weighted."""
     g, skipped = get_source(source_id).pull_graph(ws_id, project, limit=limit)
 
     def _skey(n):
@@ -43,9 +26,7 @@ def build(source_id, ws_id, project, limit=150):
                           "models": n.get("models_list") or [{"name": n["model"], "calls": s}],
                           "mixed": n.get("mixed_model", False), "graph_path": n.get("graph_path", ""),
                           "out_type": n.get("out_type"), "untagged": n.get("untagged", False),
-                          # MEASURED facts — surfaced for
-                          # the profile. Summed/weighted across content-variants below; the profile computes $
-                          # from tokens x price (app.catalog), not from cost_ls (kept only as a cross-check).
+                          # measured facts for the profile; its $ comes from tokens x price, cost_ls is a cross-check
                           "cost_ls": n.get("cost_ls", 0) or 0, "errors_excluded": n.get("errors_excluded", 0) or 0,
                           "out_p50": n.get("out_p50", 0), "out_p95": n.get("out_p95", 0),
                           "_in": ai * s, "_out": ao * s, "_tsum": n["traces"], "_maxvar": s,
@@ -55,7 +36,7 @@ def build(source_id, ws_id, project, limit=150):
                           "_ttft_n": s if n.get("ttft_ms") is not None else 0,
                           "_fb_s": (n["feedback_score"] * s) if n.get("feedback_score") is not None else 0,
                           "_fb_n": s if n.get("feedback_score") is not None else 0}
-        else:                                               # merge a content-variant into the stable call-site
+        else:
             m = merged[sk]
             m["calls"] += s; m["_in"] += ai * s; m["_out"] += ao * s; m["_tsum"] += n["traces"]
             m["avg_in"] = round(m["_in"] / max(1, m["calls"])); m["avg_out"] = round(m["_out"] / max(1, m["calls"]))
@@ -70,9 +51,7 @@ def build(source_id, ws_id, project, limit=150):
                 m["out_p95"] = n.get("out_p95", 0); m["out_type"] = n.get("out_type")
     nodes = list(merged.values())
     for m in nodes:
-        # DISTINCT traces from the merged bucket. Variants of ONE call-site (a ReAct node's pre/post-tool calls)
-        # recur in the SAME traces, so summing per-variant counts double-counts (handler read 22 across only 12
-        # traces). Count distinct trace_ids in the bucket; fall back to the summed count only if traces carry no id.
+        # Distinct trace ids: variants of one call-site recur in the same traces, so summed counts double-count.
         distinct = len({t.get("trace_id") for t in buckets.get(m["key"], []) if t.get("trace_id")})
         m["traces"] = distinct if distinct else m["_tsum"]
         c = max(1, m["calls"])
@@ -89,11 +68,11 @@ def build(source_id, ws_id, project, limit=150):
     nodes.sort(key=lambda x: -x["avg_out"])
     structural = list(getattr(g, "structural_nodes", []))                      # typed non-llm nodes (tool/retriever)
     graphs = sorted({n["graph_path"] for n in nodes if n["graph_path"]}
-                    | {s["graph_path"] for s in structural if s.get("graph_path")})   # subgraphs across ALL node types
+                    | {s["graph_path"] for s in structural if s.get("graph_path")})
     return {"agent": g.agent, "nodes": nodes, "structural_nodes": structural,
             "edges": g.edges, "graphs": graphs, "buckets": buckets,
-            "traces": getattr(g, "trace_count", 0), "skipped": len(skipped),    # sample size = # of traces
+            "traces": getattr(g, "trace_count", 0), "skipped": len(skipped),
             "errors_excluded": getattr(g, "errors_excluded", 0),               # failed runs dropped from the audit
-            "revisions": getattr(g, "revisions", []),                          # agent versions seen (pin/select later)
-            "run_totals": getattr(g, "run_totals", {}),                        # run_type -> count over ALL runs (full)
-            "node_run_types": getattr(g, "node_run_types", {})}                # per-node run_type census over ALL runs
+            "revisions": getattr(g, "revisions", []),
+            "run_totals": getattr(g, "run_totals", {}),
+            "node_run_types": getattr(g, "node_run_types", {})}

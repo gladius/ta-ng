@@ -37,7 +37,7 @@ export default function Select() {
           <div className="title"><h1>Choose what to audit</h1>{f.revision && <span className="chip mono" title="Audited on one version: the latest deployment revision">rev {f.revision.slice(0, 12)}</span>}</div>
           <p className="meta">
             {f.traces === 0 ? 'No traces for this agent yet, so there is nothing to audit.'
-              : <><b>{f.rows.length} call-sites</b> from <b>{f.traces} traces</b>{f.revision && ' (latest revision only)'}, costliest first. The ticked ones are re-run live; only those are proven.</>}
+              : <><b>{f.rows.length} call-sites</b> from <b>{f.traces} traces</b>{f.revision && ' (latest revision only)'}, costliest first.</>}
           </p>
         </div>
         <Link className="btn" to={page(a, 'profile', `?snap=${snap}${modeQuery(dgmode, '&')}`)}>Deployment profile</Link>

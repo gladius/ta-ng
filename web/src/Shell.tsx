@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
-  BookOpen, Braces, Database, LayoutDashboard, Menu, PackageOpen, Route as RouteIcon, ShieldCheck, TrendingDown, X,
+  ArrowUpRight, BookOpen, Braces, Database, LayoutDashboard, Menu, PackageOpen, Route as RouteIcon, ShieldCheck, TrendingDown, X,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -11,7 +11,9 @@ type EntryProps = { icon: LucideIcon; label: string; to?: string; href?: string;
 function Entry({ icon: Icon, label, to, href, end, active, later }: EntryProps) {
   const inner = <><Icon size={18} strokeWidth={1.8} aria-hidden="true" /><span>{label}</span>{later && <span className="chip">later</span>}</>
   if (later) return <span className="item off">{inner}</span>
-  if (href) return <a className="item" href={href}>{inner}</a>
+  if (href) {                                    // outside the app (the API reference): its own tab
+    return <a className="item" href={href} target="_blank" rel="noopener">{inner}<ArrowUpRight className="ext" size={14} aria-label="opens in a new tab" /></a>
+  }
   if (active !== undefined) {
     return <Link className={'item' + (active ? ' active' : '')} to={to!} aria-current={active ? 'page' : undefined}>{inner}</Link>
   }

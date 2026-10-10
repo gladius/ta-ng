@@ -1,11 +1,7 @@
-"""Vendor MIGRATION PATHS — the recommended model to move to, regardless of what an agent runs today.
+"""Vendor migration paths from config/migrations/<provider>.json: the model each vendor recommends moving to.
 
-Loaded from config/migrations/<provider>.json (e.g. Google's "Transition today to 3.7 Flash" deck). Cross-provider
-by design: Claude / GPT / older-Gemini sources all consolidate onto a current Gemini GA target. This is the
-PREFERRED recommendation in the downgrade lever; the same-provider cost-downgrade (catalog.next_cheaper) is the
-fallback. `from[].re` is a REGEX matched against the canonicalized model id, so 'families' (any Opus, any *-mini)
-resolve without listing every id — FIRST match wins. Kept separate from app.catalog on purpose: pricing / tier /
-lifecycle (retire_date) live there; the vendor migration recommendation lives here.
+Cross-provider, and preferred over the same-provider catalog.next_cheaper. `from[].re` is a regex on the canonical
+model id, so one entry covers a family; the first match wins.
 """
 import os
 import re
@@ -39,8 +35,7 @@ _MIGRATION_PATHS = _load_migration_paths()
 
 
 def migration_target(model):
-    """The vendor's recommended migration target for a model (via family/regex match), or None. The audited id is
-    canonicalized, then matched against each path's `from` regexes; FIRST match wins. Cross-provider by design."""
+    """The vendor's recommended migration target for a model, or None."""
     if not model:
         return None
     canon = (canonical_model(model) or model).lower()
@@ -54,5 +49,5 @@ def migration_target(model):
 
 
 def migration_paths():
-    """All loaded migration paths (for the migration_path/<provider>.html view)."""
+    """All loaded migration paths."""
     return _MIGRATION_PATHS

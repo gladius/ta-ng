@@ -1,21 +1,6 @@
-"""Computed-view + proof store — a durable key->value store, backed by SQLAlchemy (SQLite in dev, Postgres in prod;
-chosen by DATABASE_URL — see app.services.db).
-
-Same put/peek/clear interface as an in-memory dict, so every caller (snapshot, prove, comprehend, the routes)
-is backend-agnostic — the state lives in a SHARED database, so the app scales HORIZONTALLY: any Cloud Run instance
-serves any step of a user's flow (page-load -> prove -> the after-prove re-fetch) instead of the whole flow being
-pinned to one process.
-
-  key   -> a tuple like ("snapshot", id) or prove.proof_key(...). Encoded to a stable JSON string, then SHA-256'd to
-           a bounded 64-char primary key (the readable form is kept in `keytext` for debugging).
-  value -> plain data (a graph, a proof dict, a job) stored as gzipped JSON: tuples come back as lists, sets as sorted
-           lists. Not pickle — a pickled row runs code when loaded, so anyone able to write the table could run code
-           in every instance. A row that is not JSON (an old pickled one) reads as missing.
-
-No TTL: a snapshot is pinned per report and a proof is FROZEN — a re-audit mints a NEW key. Retention/pruning of
-un-audited scratch snapshots is a separate concern (a cleanup job), so paid proofs are never silently evicted. The
-ONE backend-specific line is the upsert (ON CONFLICT), isolated in _upsert().
-"""
+"""Durable key->value store on the shared database (app.services.db), so any instance serves any step of a flow.
+Keys are tuples, stored as the SHA-256 of their JSON. Values are plain data as gzipped JSON (tuples come back as lists),
+never pickle: a pickled row runs code on load. No TTL: snapshots are pinned and paid proofs are never evicted."""
 import gzip
 import hashlib
 import json
@@ -25,26 +10,22 @@ from sqlalchemy import Table, Column, String, Text, LargeBinary, DateTime, selec
 
 from app.services import db
 
-# Registered on the shared db.metadata; db.ready() creates it on first use (see _ensure).
 _kv = Table(
     "kv", db.metadata,
-    Column("k", String(64), primary_key=True),          # sha256 hex of the encoded key — bounded, index-safe
-    Column("keytext", Text, nullable=False),            # the readable key, for debugging / inspection
-    Column("v", LargeBinary, nullable=False),           # gzipped JSON value
+    Column("k", String(64), primary_key=True),          # sha256 hex of the JSON key
+    Column("keytext", Text, nullable=False),
+    Column("v", LargeBinary, nullable=False),
     Column("created_at", DateTime, nullable=False),
 )
 
 
 def _ensure():
-    """Return the engine, creating the store's tables on first use if they're missing — create_all is CREATE TABLE IF
-    NOT EXISTS for everything on db.metadata: idempotent, and a no-op once the tables exist. Seamless: the first store
-    call in a process initializes the schema, so there's no migration step and no init endpoint. Re-runs when the
-    engine changes (a test called db.reset())."""
+    """The engine, with the tables created on first use (again after a test's db.reset())."""
     return db.ready()
 
 
 def _keytext(key):
-    return json.dumps(key, default=str, sort_keys=True)     # ("snapshot","id") -> '["snapshot", "id"]', stable
+    return json.dumps(key, default=str, sort_keys=True)
 
 def _keyid(key):
     return hashlib.sha256(_keytext(key).encode("utf-8")).hexdigest()
@@ -60,7 +41,7 @@ def _now():
 
 
 def _upsert(eng, k, keytext, blob, now):
-    """Portable insert-or-replace. The ONE dialect-specific import, isolated here (both dialects speak ON CONFLICT)."""
+    """Portable insert-or-replace: the one dialect-specific spot (both dialects speak ON CONFLICT)."""
     if eng.dialect.name == "postgresql":
         from sqlalchemy.dialects.postgresql import insert
     else:
@@ -71,7 +52,7 @@ def _upsert(eng, k, keytext, blob, now):
 
 
 def put(key, value):
-    """Store `value` under `key` (overwrites). Durable — survives process restart and is visible to every instance."""
+    """Store `value` under `key` (overwrites); durable and visible to every instance."""
     eng = _ensure()
     blob = gzip.compress(json.dumps(value, default=_jsonable).encode("utf-8"))
     with eng.begin() as conn:
@@ -80,7 +61,7 @@ def put(key, value):
 
 
 def peek(key):
-    """The stored value for `key`, or None — never builds (a page GET shows a paid artifact only if already run)."""
+    """The stored value for `key`, or None. Never builds, so a page load can't start a paid run."""
     eng = _ensure()
     with eng.connect() as conn:
         row = conn.execute(select(_kv.c.v).where(_kv.c.k == _keyid(key))).first()
@@ -88,7 +69,7 @@ def peek(key):
         return None
     try:
         return json.loads(gzip.decompress(row[0]))
-    except ValueError:                                  # not JSON (a row written by the pickle-era store): rebuild it
+    except ValueError:                                  # not JSON: reads as missing
         return None
 
 

@@ -1,29 +1,17 @@
-"""The ONE credential-resolution path — read-only, env-first, never logged.
-
-Every secret the auditor needs (LLM keys, connector tokens) resolves through here, so there is exactly
-one auditable place that touches credentials. Precedence:
-
-    1. process environment  (the production path — inject from a secrets manager, never a file)
-    2. a gitignored file at repo root  (DEV CONVENIENCE ONLY)
-
-A value is returned to the caller for the API call and is NEVER logged, printed, or written back to
-disk. `redact()` masks token-shaped strings for any defensive logging.
-"""
+"""The one credential path: process env first, then the gitignored .env at repo root (dev only).
+Values are never logged, printed or written back; `redact()` masks token-shaped strings."""
 
 import os
 import re
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_SEARCH_DIRS = (_HERE,)                                     # repo root — .env here (dev) or the process env (prod)
+_SEARCH_DIRS = (_HERE,)
 
-# token shapes we mask in logs (Anthropic sk-ant-, LangSmith lsv2_/ls__, generic gl_/api key-ish)
 _SECRET_RX = re.compile(r"\b(sk-ant-[A-Za-z0-9_\-]{6,}|lsv2_[A-Za-z0-9_]{6,}|ls__[A-Za-z0-9]{6,}|"
                         r"gl_[A-Za-z0-9_]{6,}|sk-[A-Za-z0-9]{16,})\b")
 
-# --- the ONE .env loader for the whole app -----------------------------------------------------------
 _ENV_FILES = (".env",)
-# real-world env-var aliases: mirror them across the group so every consumer (langsmith SDK, LangChain
-# tracer, connectors) agrees on one value regardless of which name the user saved it under.
+# Aliases are mirrored so the langsmith SDK, LangChain tracer and connectors all see one value.
 _ALIAS_GROUPS = (
     ("LANGSMITH_API_KEY", "LANGCHAIN_API_KEY", "LANGSMITH_KEY"),
     ("LANGSMITH_ENDPOINT", "LANGCHAIN_ENDPOINT"),
@@ -48,14 +36,12 @@ def _parse_env_file(path):
 
 
 def load(*, override=False):
-    """THE single config loader: read the gitignored .env (repo root) into the process env ONCE, then mirror
-    known aliases so every consumer agrees. The real process env wins
-    (override=False). Idempotent + auto-invoked by get_secret/get_config — so ANY config access loads the
-    whole app's .env, and there is exactly one loader. No python-dotenv dependency."""
+    """Load the repo-root .env into the process env once (the real env wins unless `override`), then mirror
+    aliases. Auto-invoked by get_secret/get_config."""
     global _loaded
     if _loaded and not override:
         return
-    for d in _SEARCH_DIRS:                                    # repo root
+    for d in _SEARCH_DIRS:
         for fn in _ENV_FILES:
             for k, v in _parse_env_file(os.path.join(d, fn)).items():
                 if override or k not in os.environ:
@@ -79,10 +65,7 @@ def redact(text):
 
 
 def get_secret(name, *, aliases=(), files=(), search_dirs=_SEARCH_DIRS):
-    """Resolve a secret by env var `name` (or any `aliases`) — auto-loading .env once — else the given
-    gitignored `files`. Returns the value or None. A file may hold `NAME=value` (dotenv style) or the bare
-    token. utf-8-sig tolerates a Windows BOM. Never logs or persists the value.
-    """
+    """Env var `name` (or `aliases`), else the gitignored `files` (`NAME=value` or a bare token), else None."""
     _ensure_loaded()
     for n in (name, *aliases):
         v = os.environ.get(n)
@@ -97,19 +80,17 @@ def get_secret(name, *, aliases=(), files=(), search_dirs=_SEARCH_DIRS):
             m = re.search(re.escape(name) + r"\s*=\s*(\S+)", txt)
             if m:
                 return m.group(1).strip().strip('"').strip("'")
-            if txt and "=" not in txt:                       # a file holding only the bare token
+            if txt and "=" not in txt:
                 return txt.strip().strip('"').strip("'")
     return None
 
 
 def present(name, *, aliases=(), files=()):
-    """True if the secret resolves — WITHOUT exposing it (safe for status/health output)."""
+    """True if the secret resolves, without exposing it."""
     return bool(get_secret(name, aliases=aliases, files=files))
 
 
 def get_config(name, default=None, *, aliases=(), files=(".env",), search_dirs=_SEARCH_DIRS):
-    """Non-secret config (host, endpoint, header name, project id …) with the SAME resolution as a secret:
-    env var `name` (or `aliases`) — auto-loading .env once — else `default`. So host + key + config all come
-    from one place — set them in `.env` (or the process env) and everything picks them up."""
+    """Non-secret config, resolved like a secret (process env, then .env), else `default`."""
     v = get_secret(name, aliases=aliases, files=files, search_dirs=search_dirs)
     return v if v is not None else default

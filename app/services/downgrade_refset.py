@@ -1,8 +1,5 @@
-"""Downgrade = the validation engine with ONE candidate per input, the cheaper model.
-
-This maps the engine's result onto the rows the report renders and rolls the per-input verdicts up to the call-site:
-an input is SAFE when the cheaper model stays within the original's own range ("within"); anything else (outside,
-or unverified) is NOT-SAFE for the purpose of booking dollars. Node: SAFE if >= AUDIT_NODE_SAFE_RATIO of inputs SAFE.
+"""Downgrade on the validation engine, the cheaper model as the one candidate. An input is SAFE only when it stays
+within the original's range (unverified counts as NOT-SAFE); a node is SAFE at AUDIT_NODE_SAFE_RATIO of its inputs.
 """
 import math
 
@@ -14,7 +11,6 @@ from validation import Spec, Item, Candidate, validate_many
 
 
 def spec(k=None):
-    """The app's audit settings as an engine Spec."""
     return Spec(reference_runs=AUDIT_PROFILE_RERUNS, candidate_runs=k or AUDIT_DOWNGRADE_K, votes=AUDIT_JUDGE_VOTES,
                 coherence_floor=AUDIT_COHERENCE_FLOOR, margin=AUDIT_DOWNGRADE_MARGIN, judge_model=JUDGE_MODEL,
                 judge_max_tokens=AUDIT_JUDGE_MAX_TOKENS, ref_chars=AUDIT_JUDGE_REF_CHARS,
@@ -22,7 +18,7 @@ def spec(k=None):
 
 
 def evidence_row(t, r, cap):
-    """One engine result (its only candidate) -> the row the audit report's evidence shows."""
+    """One engine result (its only candidate) -> the report's evidence row."""
     c, ref = r["candidates"][0], r["reference"]
     return {"input": _user_text(t)[:cap], "system": _system_text(t)[:cap],
             "kept": c["kept"], "k": c["of"], "verdict": "SAFE" if c["verdict"] == "within" else "NOT-SAFE",

@@ -1,9 +1,7 @@
-"""Token Auditor — the FastAPI app: the validation API (/api/validations), the suite's own JSON for the web UI
-(/api/suite), and the React web UI built from web/ (served under /app; / opens it).
+"""Token Auditor FastAPI app: the validation API (/api/validations), the UI's JSON (/api/suite), the React UI (/app).
 
-Run:  python -m app.web.server        (http://127.0.0.1:8100, live-reload on)
-      uvicorn app.web.server:app --port 8100
-The UI is built with `npm ci && npm run build` in web/ (`npm run dev` there for instant reload while working on it).
+Run:  python -m app.web.server   (http://127.0.0.1:8100, live reload)
+Build the UI with `npm ci && npm run build` in web/.
 """
 import os
 
@@ -17,8 +15,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 
 @contextlib.asynccontextmanager
 async def _lifespan(app):
-    """Run VALIDATION_INPROCESS_WORKERS validation workers inside the web process: 2 by default (local), 1 on Cloud
-    Run (the Dockerfile sets it), one per instance. `python -m validation.worker` runs one on its own instead."""
+    """Run VALIDATION_INPROCESS_WORKERS validation workers in the web process: 2 by default, 1 on Cloud Run."""
     import credentials
     from validation import worker
     stop = threading.Event()
@@ -36,7 +33,7 @@ app.include_router(suite.api)
 
 
 def _openapi():
-    """/openapi.json and /docs describe the /api calls only: the pages are for people, not for client code."""
+    """/openapi.json and /docs describe the validation API only."""
     if app.openapi_schema is None:
         from fastapi.openapi.utils import get_openapi
         app.openapi_schema = get_openapi(title="Token Auditor validation API", version="1",
@@ -57,7 +54,7 @@ def web_root():
 
 @app.get("/app/{path:path}", include_in_schema=False)
 def web_ui(path: str):
-    """The React UI (web/, built by `npm run build`): its files, and index.html for every page route inside it."""
+    """The built React UI: its files, and index.html for every page route inside it."""
     f = os.path.realpath(os.path.join(_DIST, path))
     if path and f.startswith(os.path.realpath(_DIST) + os.sep) and os.path.isfile(f):
         return FileResponse(f, headers={"Cache-Control": "public, max-age=31536000, immutable"
@@ -71,8 +68,7 @@ def web_ui(path: str):
 
 @app.get("/healthz/db")
 def healthz_db():
-    """Liveness + which store backend is actually in use — 'postgresql' or 'sqlite', plus target host/db (no creds),
-    entry count, and last write. 503 if the DB can't be reached, so uptime monitors catch a broken store."""
+    """Liveness and the store in use ('postgresql' or 'sqlite', host/db without credentials); 503 when unreachable."""
     from app.services import db
     h = db.health()
     return JSONResponse(h, status_code=200 if h.get("ok") else 503)

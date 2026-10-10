@@ -13,12 +13,6 @@ from app.web.validations import require_key
 api = APIRouter(prefix="/api/suite", dependencies=[Depends(require_key)], include_in_schema=False)
 
 
-@api.get("/price-gaps")
-def price_gaps():
-    """Served models priced differently in the catalog than the gateway charges them."""
-    return registry.price_gaps()
-
-
 # ── browse: data sources -> workspaces -> agents, and the model catalog ─────────────────────────────────────────────
 @api.get("/sources")
 def sources():

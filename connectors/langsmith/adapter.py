@@ -1,14 +1,9 @@
-"""LangSmith adapter — recorded runs -> Token Auditor traces.
+"""LangSmith adapter: recorded runs -> Token Auditor traces.
 
-Live:    reads LLM runs via langsmith.Client.list_runs (needs LANGSMITH_API_KEY in env).
-Offline: pass runs=<list of dicts> or a path to exported run JSON — no key, no install.
-         Handy for tests and for replaying an export.
-
-Call-site (agent_id) grouping. A bucket is all samples of ONE call-site, so each node
-becomes its own agent_id. Default: "<agent>/<node>" where
-    agent = metadata.agent_id | metadata.agent | project
-    node  = metadata.langgraph_node | metadata.node | run.name
-Override with group_by: "run_name" | "langgraph_node" | "metadata:<key>".
+Live reads runs with langsmith.Client.list_runs (needs LANGSMITH_API_KEY); offline takes runs=<dicts or a JSON path>.
+Each call-site is its own bucket, "<agent>/<node>": agent = metadata.agent_id | metadata.agent | project, node =
+metadata.langgraph_node | metadata.node | run.name. group_by overrides the node: run_name | langgraph_node |
+metadata:<key>.
 """
 
 import os
@@ -18,12 +13,11 @@ from datetime import datetime, timedelta, timezone
 from connectors.base import Adapter
 from connectors import schema
 
-# Only the fields the connector needs — keeps list_runs payloads small/fast. The tree fields
-# (id / parent_run_id / dotted_order) let the graph layer reconstruct topology + resolve node identity.
+# Only the fields we need, to keep payloads small; id/parent_run_id/dotted_order let the graph rebuild the tree.
 _SELECT = ["id", "name", "run_type", "inputs", "outputs", "extra", "error", "tags",
            "start_time", "end_time", "trace_id", "session_id", "parent_run_id", "dotted_order",
            "prompt_tokens", "completion_tokens", "total_tokens",
-           "feedback_stats", "total_cost", "first_token_time"]     # richer signal: quality, platform $, TTFT
+           "feedback_stats", "total_cost", "first_token_time"]
 
 
 def _run_to_dict(r):
@@ -49,8 +43,7 @@ def _iso(x):
 
 
 def _feedback(fs):
-    """A single 0..1-ish QUALITY score from feedback_stats {key: {avg, n}}, + total feedback count. (None, 0) when
-    no feedback/evals are attached — so the auditor can filter to high-quality traces WHEN that signal exists."""
+    """(mean quality score from feedback_stats {key: {avg, n}}, feedback count), or (None, 0) without feedback."""
     if not isinstance(fs, dict) or not fs:
         return None, 0
     avgs, n = [], 0
@@ -98,12 +91,8 @@ def _runtime_ms(rec):
 
 
 def _graph_path(meta):
-    """The call-site's graph/subgraph nesting as 'outer/inner', or '' for a single-level agent.
-
-    Derived from LangGraph's own metadata — no tree walk, no content: `langgraph_checkpoint_ns` encodes the
-    subgraph namespace (e.g. 'billing:uuid|refund:uuid' -> 'billing/refund'); we keep the node names, drop the
-    per-run uuids. Falls back to an explicit `graph`/`subgraph` hint, else ''. Fully exercised only on a real
-    subgraph export; single-level traces correctly yield ''."""
+    """The call-site's subgraph nesting as 'outer/inner', or '' for a single-level agent.
+    From langgraph_checkpoint_ns ('billing:uuid|refund:uuid' -> 'billing/refund'), else a graph/subgraph hint."""
     ns = meta.get("langgraph_checkpoint_ns") or meta.get("langgraph_path") or ""
     if isinstance(ns, (list, tuple)):
         ns = "|".join(str(x) for x in ns)
@@ -124,9 +113,8 @@ _REV_KEYS = ("revision_id", "revision", "ls_revision_id",
 
 
 def _revision(meta):
-    """The whole-agent version. A LOCAL LangGraph run tags it `revision_id`; a HOSTED LangGraph Platform deployment
-    uses `LANGSMITH_HOST_REVISION_ID` / `LANGSMITH_LANGGRAPH_API_REVISION` instead — check them all so version
-    scoping works on both formats."""
+    """The agent version: `revision_id` on a local LangGraph run, LANGSMITH_HOST_REVISION_ID or
+    LANGSMITH_LANGGRAPH_API_REVISION on a hosted deployment."""
     for k in _REV_KEYS:
         if meta.get(k):
             return str(meta[k])
@@ -138,11 +126,8 @@ def _root_rev(r):
 
 
 def _scope_to_latest(roots, n, revision=None):
-    """Scope roots to ONE revision, newest `n`. Roots arrive newest-first, so the newest root's revision IS the
-    LATEST (whatever is serving now — true even after a rollback, since traffic then stamps the rolled-back-to
-    revision on the newest traces). Every trace not on that revision is DROPPED before anything is built, so the
-    audit's reference set can NEVER mix code versions (a mixed set makes the downgrade judge unsound). `revision`
-    pins a specific one instead of the latest. Returns (scoped_roots, target_revision)."""
+    """-> (the newest `n` roots on one revision, that revision). Roots arrive newest first, so by default that is the
+    revision serving now, even after a rollback; `revision` pins another. Mixed versions make the judge unsound."""
     if not roots:
         return [], None
     target = revision or _root_rev(roots[0])
@@ -150,10 +135,7 @@ def _scope_to_latest(roots, n, revision=None):
 
 
 def _callsite(rec, meta, project, group_by):
-    """Return (agent_id, node_id): agent = the agent, node = the call-site within it.
-
-    group_by overrides how the NODE is chosen; the agent is always the agent identity.
-    """
+    """-> (agent_id, node_id); group_by only changes how the node is chosen."""
     agent = meta.get("agent_id") or meta.get("agent") or project or "agent"
     if group_by == "run_name":
         node = rec.get("name") or "unknown"
@@ -167,8 +149,7 @@ def _callsite(rec, meta, project, group_by):
 
 
 def _out_preview(outputs, cap=240):
-    """A tiny, one-line preview of a run's OUTPUTS — lets us describe what a non-llm FUNCTION node produces
-    (llm nodes carry the full trace instead)."""
+    """A one-line preview of a run's outputs, to describe what a non-llm node produces."""
     if not outputs:
         return ""
     try:
@@ -184,8 +165,7 @@ class LangSmithAdapter(Adapter):
 
     def fetch(self, *, project=None, run_type=None, since_hours=None, limit=None,
               traces=None, revision=None, runs=None, api_key=None, api_url=None, **_):
-        # run_type=None -> fetch the WHOLE tree (chain + llm + tool), which the graph layer needs to
-        # resolve node identity + topology.
+        # run_type=None fetches the whole tree (chain + llm + tool), which the graph layer needs.
         if runs is not None:                                   # -- offline --
             if isinstance(runs, str):
                 runs = json.load(open(runs, encoding="utf-8"))
@@ -199,23 +179,20 @@ class LangSmithAdapter(Adapter):
         except ImportError as e:
             raise RuntimeError("langsmith not installed: `pip install langsmith` "
                                "(or pass runs=<dicts/path> for offline mode)") from e
-        import credentials                                     # the ONE .env loader + alias normalization
+        import credentials
         credentials.load()
         # Client reads LANGSMITH_WORKSPACE_ID from env and sends it as X-Tenant-Id (org-scoped keys need it).
         client = Client(api_key=api_key or credentials.get_secret("LANGSMITH_API_KEY",
                                                                   aliases=("LANGCHAIN_API_KEY", "LANGSMITH_KEY")),
                         api_url=api_url or credentials.get_config("LANGSMITH_ENDPOINT", None,
                                                                   aliases=("LANGCHAIN_ENDPOINT",)))
-        # TRACE-COMPLETE fetch — the default for a whole-tree pull. Get the last N WHOLE traces, never a run-WINDOW
-        # that slices a trace tree at the boundary (which lost nodes/edges + under-counted traces). Two BULK phases,
-        # not one-call-per-trace: (1) the N most-recent ROOT runs = N trace ids; (2) every run whose trace_id is in
-        # that set, batched ~50/query. `traces` (or `limit`, in a whole-tree pull) = the COUNT OF TRACES; `revision`
-        # optionally pins ONE agent version so the audit's reference set is version-coherent.
+        # A whole-tree pull takes the last n whole traces, never a run window that slices a tree at its edge.
+        # `traces` (or `limit`) counts traces.
         n = int(traces) if traces else (int(limit) if limit else None)
         if n and not run_type:
             yield from self._fetch_traces(client, project, n, revision, since_hours)
             return
-        # legacy RUN-WINDOW — only when a caller scopes by run_type (e.g. llm-only): stop after `limit` runs.
+        # A run window, only when scoped by run_type (e.g. llm only): stop after `limit` runs.
         kw = {"project_name": project, "select": _SELECT, "run_type": run_type}
         if since_hours:
             kw["start_time"] = datetime.now(timezone.utc) - timedelta(hours=since_hours)
@@ -227,23 +204,18 @@ class LangSmithAdapter(Adapter):
                 break
 
     def _fetch_traces(self, client, project, n, revision, since_hours):
-        """Last `n` COMPLETE traces (every run in each tree) of ONE agent version. LATEST-ONLY by default: the newest
-        root's revision is the target and every trace not on it is DROPPED before anything is built, so the audit's
-        reference set can never mix code versions (a mixed set makes the downgrade judge unsound). An explicit
-        `revision` pins a specific one. TWO bulk list_runs queries (+ batching), never per-trace: roots first (cheap
-        — id/trace_id/revision only), then every run whose trace_id is in the scoped set."""
+        """The last `n` whole traces of one agent version, in bulk: the roots first, then every run of those traces."""
         rkw = {"project_name": project, "is_root": True, "select": ["id", "trace_id", "start_time", "extra"]}
         if since_hours:
             rkw["start_time"] = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-        # over-fetch roots so the hard filter still reaches n; the latest revision's traces are the NEWEST, so a modest
-        # over-scan finds them all — a pinned older revision sits deeper, so scan wider for that.
+        # Over-fetch roots so the revision filter still reaches n; a pinned older revision sits deeper.
         cap = max(n * 4, n + 100) if revision else max(n * 2, n + 100)
         roots = []
         for r in client.list_runs(**rkw):
             roots.append(r)
             if len(roots) >= cap:
                 break
-        roots, _target = _scope_to_latest(roots, n, revision)  # HARD filter -> exactly one revision, never a mix
+        roots, _target = _scope_to_latest(roots, n, revision)
         tids = [str(r.trace_id) for r in roots if getattr(r, "trace_id", None)]
         if not tids:
             return
@@ -254,8 +226,7 @@ class LangSmithAdapter(Adapter):
                 yield _run_to_dict(r)
 
     def available_traces(self, project, cap=500, api_key=None, api_url=None):
-        """Best-effort count of how many traces (root runs) EXIST in the project — so the debug capture can say
-        'available vs fetched'. Cheap (ids only) and CAPPED so a huge project can't run away. Returns (count, capped)."""
+        """-> (how many traces the project has, capped at `cap`, whether capped), for the debug capture."""
         try:
             from langsmith import Client
         except ImportError:
@@ -283,19 +254,16 @@ class LangSmithAdapter(Adapter):
         model = inv.get("model") or inv.get("model_name") or meta.get("ls_model_name")
         pt, ct = rec.get("prompt_tokens"), rec.get("completion_tokens")
         um = ((rec.get("outputs") or {}).get("llm_output") or {}).get("token_usage") or {}
-        # already-cached prompt tokens, if the platform reports them (Anthropic cache_read via LangChain). 0 when unreported.
+        # Cache reads and writes (Anthropic's, via LangChain); 0 when unreported.
         cached = (um.get("cache_read_input_tokens") or um.get("cache_read")
                   or (um.get("input_token_details") or {}).get("cache_read")
                   or (rec.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-        # cache WRITES (Anthropic cache_creation). 0 when unreported.
         written = (um.get("cache_creation_input_tokens") or um.get("cache_creation")
                    or (um.get("input_token_details") or {}).get("cache_creation") or 0)
         usage = {"input_tokens": pt if pt is not None else um.get("prompt_tokens", 0),
                  "output_tokens": ct if ct is not None else um.get("completion_tokens", 0),
                  "cached_tokens": int(cached or 0), "cache_write_tokens": int(written or 0)}
-        # THINKING / extended-reasoning detection — multi-signal so it works native AND through a litellm gateway
-        # (litellm normalizes usage to the OpenAI shape, where reasoning shows up as reasoning_tokens). The token
-        # COUNT is the strongest signal: >0 means the model actually reasoned, regardless of provider.
+        # Reasoning, native or through litellm (OpenAI shape: reasoning_tokens); a token count > 0 is the surest sign.
         det = (um.get("completion_tokens_details") or rec.get("completion_tokens_details")
                or ((rec.get("outputs") or {}).get("llm_output") or {}).get("completion_tokens_details") or {})
         reasoning_tok = int((det.get("reasoning_tokens") if isinstance(det, dict) else 0)
@@ -303,10 +271,8 @@ class LangSmithAdapter(Adapter):
         thinking_enabled = bool(reasoning_tok) or bool(
             inv.get("reasoning_effort") or inv.get("thinking") or inv.get("thinking_budget")
             or inv.get("reasoning") or (inv.get("extra_body") or {}).get("thinking"))
-        # the OUTPUT BUDGET the original ran under — a faithful re-run must give the cheaper model the SAME room, or
-        # a thinking model (Gemini 2.5 thinks by default, and thinking tokens count AGAINST this budget) truncates.
-        # Check every shape litellm might normalize to: Gemini (max_output_tokens), OpenAI (max_tokens /
-        # max_completion_tokens), LangSmith (ls_max_tokens); look in invocation_params AND metadata.
+        # The original's output budget: a re-run needs the same room, or a thinking model truncates (thinking counts
+        # against it). Every shape litellm may normalize to, in invocation_params and metadata.
         max_out = int(inv.get("max_output_tokens") or inv.get("max_tokens") or inv.get("max_completion_tokens")
                       or meta.get("max_output_tokens") or meta.get("ls_max_tokens") or 0)
         agent_id, node_id = _callsite(rec, meta, project, group_by)
@@ -317,30 +283,28 @@ class LangSmithAdapter(Adapter):
             task_type=meta.get("task_type") or meta.get("ls_task") or "unknown",
             owner=meta.get("owner") or meta.get("team") or "n/a",
             input_messages=schema.norm_messages(rec.get("inputs")),
-            output=schema.render_behavior(rec.get("outputs")),   # text + the original's tool call(with args) — the audit reference
+            output=schema.render_behavior(rec.get("outputs")),
             tools_defined=schema.norm_tools(inv.get("tools") or inv.get("functions")),
             tools_called=schema.tool_calls_from_output(rec.get("outputs")),
-            tool_choice=inv.get("tool_choice"),          # replayed so a FORCED tool call is reproduced, not lost
-            thinking_enabled=thinking_enabled,           # so replay reproduces extended reasoning (native or via litellm)
+            tool_choice=inv.get("tool_choice"),          # replayed so a forced tool call is reproduced
+            thinking_enabled=thinking_enabled,
             usage=usage,
             error=rec.get("error") or "",
             runtime_ms=_runtime_ms(rec),
             source="langsmith:%s" % (project or meta.get("ls_project") or ""),
         )
-        _st = rec.get("start_time")                            # a datetime or ISO string, per the SDK
+        _st = rec.get("start_time")
         t["start_time"] = _st.isoformat() if hasattr(_st, "isoformat") else (str(_st) if _st else "")
-        t["max_output_tokens"] = max_out                       # the original's output budget -> faithful re-run budget
-        _c = rec.get("total_cost")                             # LangSmith's own $ (cross-check our token×price)
-        t["cost_ls"] = float(_c) if _c is not None else None   # Decimal -> float so it stays JSON/arith-safe
-        t["feedback_score"], t["feedback_n"] = _feedback(rec.get("feedback_stats"))   # quality, when evals exist
-        t["ttft_ms"] = _ttft_ms(rec)                           # time-to-first-token (streaming latency)
-        t["revision"] = _revision(meta)                          # git SHA (local) or LANGSMITH_HOST_REVISION_ID (hosted)
+        t["max_output_tokens"] = max_out
+        _c = rec.get("total_cost")                             # LangSmith's own $, to cross-check ours
+        t["cost_ls"] = float(_c) if _c is not None else None   # Decimal -> float, JSON-safe
+        t["feedback_score"], t["feedback_n"] = _feedback(rec.get("feedback_stats"))
+        t["ttft_ms"] = _ttft_ms(rec)
+        t["revision"] = _revision(meta)
         return t
 
     def to_record(self, rec, *, project=None, group_by=None, **_):
-        """A neutral run-record for EVERY run in the tree (chain / llm / tool), carrying the structure the
-        graph layer needs: parent_run_id + dotted_order for topology, and the metadata node/agent hints.
-        A contract trace is built only for llm runs (the profileable unit)."""
+        """A neutral record for every run in the tree (chain, llm, tool) with its topology; a trace for llm runs."""
         rec = _run_to_dict(rec)
         meta = (rec.get("extra") or {}).get("metadata") or {}
         rt = rec.get("run_type")
@@ -353,10 +317,9 @@ class LangSmithAdapter(Adapter):
                 "start_time": _iso(rec.get("start_time")), "end_time": _iso(rec.get("end_time")),
                 "agent_hint": meta.get("agent_id") or meta.get("agent"),
                 "node_hint": meta.get("langgraph_node") or meta.get("node"),
-                # carried for NON-llm nodes too (tool/retriever have no trace): subgraph, failure, latency
+                # also for non-llm nodes (tool, retriever), which have no trace
                 "graph_path": _graph_path(meta), "error": rec.get("error") or "",
                 "runtime_ms": _runtime_ms(rec),
-                # small output preview for NON-llm nodes — describes what a function node PRODUCES
                 "out_sample": _out_preview(rec.get("outputs")) if rt not in (None, "llm") else "",
                 "trace": trace}
 

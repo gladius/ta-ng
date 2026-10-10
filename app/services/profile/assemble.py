@@ -1,18 +1,11 @@
-"""Assemble a DEPLOYMENT PROFILE from the pinned graph — deterministic, $0, measured facts only.
+"""Deployment profile from the pinned graph: deterministic, free, measured facts only.
 
-Cost is computed from measured tokens x the ONE catalog price map (app.catalog / config/models.json),
-the SAME source the downgrade lever uses — so profile and downgrade reconcile by construction. LangSmith's
-own `cost_ls` is used only as a fallback for a model the catalog doesn't price (self-hosted / custom);
-if neither has a price we say so ("price unknown — add it to models.json") rather than invent a number.
-
-Scope note (honest): the graph carries LLM call-sites (kind "llm") AND non-llm nodes — tool/retriever plus
-FUNCTION nodes (a langgraph_node that runs code but never calls an llm: fetch_x / send_email / write_log).
-Non-llm nodes get deterministic facts + a one-liner (no prompt to comprehend, no $ to optimize); the advisory
-LLM `role` (op + summary) is a separate optional pass, filled per llm node once `comp` is provided.
+Cost is measured tokens x the catalog price, the same source as the downgrade, so the two reconcile. LangSmith's
+`cost_ls` is the fallback for an unpriced model; with neither, the price is reported unknown, never invented.
 """
 from app.config import CALLS_BASIS
 from app.catalog import PRICE, usd, canonical_model, tier, cache_mode
-from app.services.profile.facts import fact_pack     # the deterministic $0 fact-pack (Phase 1)
+from app.services.profile.facts import fact_pack
 
 
 def _node_cost(n):
@@ -27,14 +20,12 @@ def _node_cost(n):
         per_call = n["cost_ls"] / max(1, n["calls"])
         return {"per_call": per_call, "per_basis": round(per_call * CALLS_BASIS, 2),
                 "total_measured": round(n["cost_ls"], 4), "source": "langsmith", "known": True}
-    return {"per_call": None, "per_basis": None, "total_measured": None,   # no price anywhere -> say so
+    return {"per_call": None, "per_basis": None, "total_measured": None,
             "source": "unknown", "known": False}
 
 
 def _shape(n):
-    """A COARSE operation hint from MEASURED signals (tool usage + output type/size + input size) — a
-    fact-derived shape, NOT the semantic role (that's the advisory LLM read, still None). Conservative;
-    always yields at least the output descriptor. Kept to the two most operation-relevant signals."""
+    """A coarse operation hint from measured signals (tools, output type and size, input size); not the role."""
     ot = n.get("out_type")
     out = n.get("avg_out") or 0
     tin = n.get("tool_input_rate") or 0
@@ -56,7 +47,7 @@ def _shape(n):
 
 
 def _struct_summary(s):
-    """A deterministic one-liner for a non-llm node (there's no prompt to read) — just its measured behavior."""
+    """A one-liner for a non-llm node from its measured behaviour."""
     bits = ["%d call%s" % (s["calls"], "" if s["calls"] == 1 else "s")]
     if s.get("error_rate"):
         bits.append("%.0f%% error" % (s["error_rate"] * 100))
@@ -66,7 +57,7 @@ def _struct_summary(s):
 
 
 def _facts_line(f):
-    """Compact human-facing deterministic facts (supporting context, NOT the headline) from the fact-pack."""
+    """Compact facts from the fact-pack (supporting context, not the headline)."""
     if not f:
         return []
     bits = []
@@ -101,12 +92,11 @@ def _opp_of(r):
 
 
 def build_profile(g, comp=None):
-    """graph dict (pinned snapshot) [+ optional per-node comprehension] -> a one-page deployment report:
-    {header, sections (grouped by subgraph), hotspots, edges}. Facts are deterministic/measured; `comp` adds
-    the advisory op (one word) + summary per llm node once the LLM pass has run (else those fields are empty)."""
+    """Pinned graph [+ per-node comprehension `comp`] -> {header, sections (by subgraph), hotspots, edges, ...}.
+    Facts are measured; `comp` adds the advisory op and summary per llm node once the LLM pass has run."""
     comp = comp or {}
-    fp = fact_pack(g)                                    # deterministic $0 facts per node (Phase 1)
-    try:                                                 # the $0 OPTIMIZATION MAP — reuse the funnel's detector
+    fp = fact_pack(g)
+    try:                                                 # the free optimization map, from the funnel
         from app.services import funnel
         _opp = {r["key"]: r for r in funnel.build("", "", g.get("agent", "agent"), g=g)["rows"]}
     except Exception:
@@ -130,12 +120,12 @@ def build_profile(g, comp=None):
             "feedback_score": n.get("feedback_score"),
             "cache_mode": cache_mode(canon) if canon else None,
             "cost": cost, "shape": _shape(n),
-            # advisory comprehension (present only after the LLM pass): op = ONE word, summary = what it does
+            # advisory comprehension, filled only after the LLM pass
             "op": c.get("op", ""), "summary": c.get("summary", ""),
             "coherence": c.get("coherence") or {}, "confidence": c.get("confidence", ""),
             "unavailable": c.get("unavailable", ""),
             "facts": _facts_line(fp.get(n["key"])), "flow": _flow_str(fp.get(n["key"])),
-            "opp": _opp_of(_opp.get(n["key"])),          # optimization candidacy + $ (the "where's the money")
+            "opp": _opp_of(_opp.get(n["key"])),
         })
         total_in += n["avg_in"] * n["calls"]
         total_out += n["avg_out"] * n["calls"]
@@ -144,7 +134,7 @@ def build_profile(g, comp=None):
         any_unknown = any_unknown or not cost["known"]
     nodes.sort(key=lambda x: (x["cost"]["per_basis"] is None, -(x["cost"]["per_basis"] or 0)))
 
-    # typed non-llm nodes (tool / retriever) — deterministic summary (no prompt to comprehend)
+    # non-llm nodes (tool / retriever / function): a deterministic summary, no prompt to comprehend
     structural = []
     for s in g.get("structural_nodes", []):
         structural.append({
@@ -168,14 +158,13 @@ def build_profile(g, comp=None):
         "cost_basis": CALLS_BASIS, "total_cost_basis": round(total_basis, 2),
         "error_rate": round(total_err / max(1, total_calls + total_err), 3),
         "price_incomplete": any_unknown, "has_comprehension": bool(comp),
-        # the OPTIMIZATION MAP totals ($0, deterministic) — the "where's the money" headline
         "opportunity_total": round(sum((r.get("opportunity") or 0) for r in _opp.values()), 2),
         "downgrade_total": round(sum((r.get("downgrade_usd") or 0) for r in _opp.values()), 2),
         "opp_wins": sum(1 for r in _opp.values() if (r.get("opportunity") or 0) > 0),
     }
 
     hotspots = None
-    if nodes:                                                        # measured superlatives — no judgment
+    if nodes:
         busiest = max(nodes, key=lambda x: x["calls"])
         costliest = next((n for n in nodes if n["cost"]["per_basis"] is not None), None)  # sorted costliest-first
         slowest = max(structural, key=lambda s: s.get("avg_ms") or 0) if structural else None
@@ -188,7 +177,7 @@ def build_profile(g, comp=None):
             "errors_excluded": header["errors_excluded"],
         }
 
-    # SECTIONS — group every node (llm + non-llm) by subgraph; top level first, then subgraphs alpha, llm first.
+    # Sections: every node grouped by subgraph, top level first, then subgraphs A-Z; llm nodes first in each.
     by_gp = {}
     for x in nodes + structural:
         by_gp.setdefault(x.get("graph_path") or "", []).append(x)

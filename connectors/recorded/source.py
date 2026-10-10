@@ -1,8 +1,5 @@
-"""Offline DataSource — serves the shipped `fixtures/*.json` as a real, KEYLESS data source, so the whole
-pipeline (graph -> snapshot -> profile / report) runs end-to-end with no LangSmith credentials. The fixtures
-are contract traces (see build_fixture.py); this exposes them as a source the web layer selects as
-`recorded`. Flat: it inherits the base `pull_graph` (no run tree — fixture traces are already resolved to a
-`node_id`), so a tagged fixture yields clean call-sites.
+"""Offline DataSource `recorded`: the shipped fixtures/*.json contract traces, so the whole pipeline runs without keys.
+Fixture traces already carry a node_id, so they use the base pull_graph; the built-in tree corpus folds its run tree.
 """
 import os
 import json
@@ -11,7 +8,7 @@ import glob
 from connectors.datasource import DataSource
 
 _DIR = os.path.join(os.path.dirname(__file__), "fixtures")
-_TREE = "support-agent"                      # id of the built-in tree-corpus agent (connectors.langsmith.sample_tree)
+_TREE = "support-agent"                      # the built-in tree corpus (connectors.langsmith.sample_tree)
 
 
 def _fixtures():
@@ -42,9 +39,8 @@ class RecordedSource(DataSource):
     name = "recorded"
 
     def configured(self):
-        """DEV/DEMO source — visible only in non-prod. Gated on AUDIT_DEBUG (same truthiness as app's debugcap /
-        snapdump), so with no AUDIT_DEBUG set (production) it drops off the home-page picker entirely. Read from the
-        env directly to keep the connector layer self-contained (no dependency on app.*)."""
+        """Dev and demo only: shown when AUDIT_DEBUG is set (unset in production). Read from the env directly so the
+        connector layer doesn't depend on app.*."""
         return os.environ.get("AUDIT_DEBUG") not in (None, "", "0", "false", "False")
 
     def workspaces(self):
@@ -59,15 +55,14 @@ class RecordedSource(DataSource):
                 continue
             out.append({"id": d.get("agent", name), "name": d.get("agent", name),
                         "runs": len(d.get("traces", []))})
-        # built-in TREE corpus — a rich multi-subgraph LangGraph deployment (tool/retriever nodes, subgraphs,
-        # ReAct cycles + the failure cases). Folded through the SAME real pipeline as live, just keyless.
+        # The built-in tree corpus: a multi-subgraph deployment folded through the same pipeline as live data.
         from connectors.langsmith import sample_tree
         out.append({"id": _TREE, "name": "support-agent (deployment demo)",
                     "runs": len({r.get("trace_id") for r in sample_tree.runs()})})
         return out
 
     def pull_graph(self, ws_id, project, limit=None, since_hours=None):
-        """The tree corpus folds the REAL run tree (topology + typed non-llm nodes); flat fixtures use the base."""
+        """The tree corpus folds its run tree (topology and non-llm nodes); flat fixtures use the base."""
         if project == _TREE:
             from connectors import get_adapter, pull_graph
             from connectors.langsmith import sample_tree
@@ -75,8 +70,8 @@ class RecordedSource(DataSource):
         return super().pull_graph(ws_id, project, limit=limit, since_hours=since_hours)
 
     def pull(self, ws_id, project, limit=None, since_hours=None):
-        """Raw contract traces for one fixture, bucketed by node_id. (buckets, skipped[])."""
-        if project == _TREE:                                # tree corpus -> the folded graph's call-site buckets
+        """(buckets by node_id, skipped): raw contract traces of one fixture."""
+        if project == _TREE:
             g, skipped = self.pull_graph(ws_id, project)
             return g.buckets, skipped
         path = _path_for(project)

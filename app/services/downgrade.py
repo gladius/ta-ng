@@ -1,41 +1,26 @@
-"""Downgrade detection — which single-model call-sites run on an expensive tier that a cheaper tier in the
-SAME provider might replace, and roughly how much that would save. Deterministic, $0.
-
-Scope on purpose: MIXED / routed nodes are skipped (already tiered → that's a routing audit, deferred). The
-re-run PROOF (run the cheaper model on diverse inputs + judge drift) is a SEPARATE, paid step — not here.
-"""
+"""Downgrade detection: single-model call-sites a cheaper model might replace, and roughly what that saves.
+Deterministic and free; mixed (routed) nodes are skipped, and the paid proof is prove.py."""
 from app.catalog import PRICE, next_cheaper, open_weight_target, canonical_model
 from app.migration import migration_target
 from app.registry import is_available
 
 
 def candidates(nodes, per_calls=1000, mode="commercial"):
-    """From graph nodes -> ranked change candidates. `per_calls` = the volume basis for the $ figure.
-
-    `mode` selects the TARGET UNIVERSE (the opt-in lane chosen on the selection page):
-      'commercial' (default): PREFER the vendor migration path (config/migrations/) when one matches the node's
-        model — the recommended move regardless of provider (e.g. Claude/GPT/older-Gemini -> a Gemini GA target);
-        the same-provider cost-downgrade (next_cheaper, node-aware) is the FALLBACK. reason = 'migration' |
-        'cost-downgrade'.
-      'open-weight': target the strongest net-SAVING open-weight model (catalog.open_weight_target) — a governance
-        choice, isolated from the commercial ladder, gated on price confidence + availability. reason = 'open-weight'.
-        STRICT: no fallback to a commercial target — a node with no saving open-weight option is simply dropped.
-
-    Only net-SAVING candidates are emitted; a migration that is quality-only (equal/higher cost) is surfaced by the
-    migration advisory, not as a saving."""
+    """Graph nodes -> net-saving candidates, ranked by $ saved per `per_calls` calls. 'commercial' prefers the vendor
+    migration path, else the next cheaper same-provider model; 'open-weight' has no commercial fallback."""
     out = []
     for n in nodes:
         if n.get("mixed"):
-            continue                                          # routed/mixed -> routing audit, deferred
+            continue
         model = canonical_model(n["model"]) or n["model"]
-        if mode == "open-weight":                             # opt-in open-weight lane — strict, no commercial fallback
+        if mode == "open-weight":
             cheaper = open_weight_target(model, n["avg_in"], n["avg_out"], avail=is_available)
             reason, value = "open-weight", None
         else:
-            mt = migration_target(model)                      # vendor migration path is the PREFERRED target
-            if mt and is_available(mt["to"]):                 # ...but only if the gateway actually serves it
+            mt = migration_target(model)
+            if mt and is_available(mt["to"]):                 # only if the gateway serves it
                 cheaper, reason, value = mt["to"], "migration", mt.get("value")
-            else:                                             # fallback: node-aware same-provider drop, also gated
+            else:
                 cheaper = next_cheaper(model, n["avg_in"], n["avg_out"], avail=is_available)
                 reason, value = "cost-downgrade", None
         p, cp = PRICE.get(model), (PRICE.get(cheaper) if cheaper else None)

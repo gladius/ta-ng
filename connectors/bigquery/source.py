@@ -1,24 +1,14 @@
-"""BigQuery DataSource — LLM calls logged one row per request/response in a single table or view, e.g. LiteLLM's
-logs (trust_router's `litellm.v_requests`). Three .env settings; everything else is read out of the two JSON columns:
+"""BigQuery DataSource: LLM calls logged one row per request/response in a table or view, e.g. LiteLLM's logs.
 
     BQ_TABLE            project.dataset.table_or_view
-    BQ_REQUEST_COLUMN   the request: an OpenAI messages array, or a request body holding "messages" (+ "tools",
-                        "tool_choice", "max_tokens")
-    BQ_RESPONSE_COLUMN  the response: an OpenAI chat completion (id, model, choices, usage) — LiteLLM's logged shape
-    BQ_ID_COLUMN        (optional, default request_id) the call's id, for validations submitted by request_id
-    BQ_PARAMS_COLUMN    (optional) a JSON column with max_tokens / tools / tool_choice, when the request column holds
-                        only the messages (as trust_router's view does: model_parameters)
-    BQ_MODEL_COLUMN     (optional) the model that answered; set it when a router is in front, whose responses name
-                        the router (e.g. jev-router) instead (trust_router's view: model). Else the response's model
-    BQ_AGENT_COLUMN     (optional) the agent / service name: one agent per value instead of one for the whole table
-    BQ_NODE_COLUMN      (optional) the call-site name; rows where it is NULL fall back to the system-prompt hash
-    BQ_TIME_COLUMN      (optional) a DATE or TIMESTAMP partition column: pulls read only the last BQ_DAYS days
-                        (default 7) instead of scanning the whole table
-
-Without BQ_AGENT_COLUMN the table is ONE agent, and without BQ_NODE_COLUMN a call-site is its system prompt (numbers
-masked, so a date in the prompt doesn't split it). Auth is Google Application Default Credentials, else the gcloud
-login. Machine-specific auth or network setup goes in connectors/bigquery/_local.py, which git ignores and which is
-imported first when present.
+    BQ_REQUEST_COLUMN   OpenAI messages, or a request body with messages (+ tools, tool_choice, max_tokens)
+    BQ_RESPONSE_COLUMN  an OpenAI chat completion (id, model, choices, usage)
+    BQ_ID_COLUMN        optional, default request_id: the id validations are sent by
+    BQ_PARAMS_COLUMN    optional JSON max_tokens / tools / tool_choice, when the request column holds only messages
+    BQ_MODEL_COLUMN     optional: the model that answered, when the response names a router (e.g. jev-router)
+    BQ_AGENT_COLUMN     optional: one agent per value, else the whole table is one agent
+    BQ_NODE_COLUMN      optional call-site name, else the call-site is the system prompt
+    BQ_TIME_COLUMN      optional DATE/TIMESTAMP partition column: pulls read only the last BQ_DAYS days (default 7)
 """
 import hashlib
 import json
@@ -30,7 +20,7 @@ import credentials
 from connectors import schema
 from connectors.datasource import DataSource
 
-try:                                       # machine-specific overrides (corporate auth, proxies), never in git
+try:                                       # machine-specific auth or proxies, git-ignored
     import connectors.bigquery._local  # noqa: F401
 except ModuleNotFoundError as e:
     if e.name != "connectors.bigquery._local":
@@ -47,13 +37,11 @@ def _cfg():
 
 
 def _days(since_hours=None):
-    """The lookback in whole days: since_hours rounded up, else BQ_DAYS (default 7)."""
     return math.ceil(since_hours / 24) if since_hours else int(credentials.get_config("BQ_DAYS", "7"))
 
 
 def _window(params, days):
-    """SQL keeping only the last `days` days of BQ_TIME_COLUMN (BigQuery then skips older partitions; DATE() works
-    for a DATE or a TIMESTAMP column, and still prunes), or TRUE without one. Adds its query parameter to `params`."""
+    """SQL keeping the last `days` days of BQ_TIME_COLUMN (DATE() still prunes), or TRUE; adds @days to `params`."""
     from google.cloud import bigquery
     col = credentials.get_config("BQ_TIME_COLUMN")
     if not col:
@@ -76,7 +64,7 @@ def _json(v):
 
 
 def _callsite(messages):
-    """'<first words of the system prompt>-<hash>' — the same call-site even when a date or id in the prompt changes."""
+    """'<first words of the system prompt>-<hash>', numbers masked so a date or id in the prompt doesn't split it."""
     system = "\n".join(m["content"] for m in messages if m["role"] == "system").strip()
     if not system:
         return "no-system-prompt"
@@ -85,8 +73,7 @@ def _callsite(messages):
 
 
 def _client(project):
-    """Google Application Default Credentials when set (always, on Cloud Run); otherwise the `gcloud` CLI login a
-    dev machine already has — the same one `bq` uses."""
+    """Application Default Credentials when set (always on Cloud Run), else the dev machine's `gcloud` login."""
     from google.cloud import bigquery                      # lazy: the source lists before the library is installed
     from google.auth.exceptions import DefaultCredentialsError
     try:
@@ -98,16 +85,14 @@ def _client(project):
         return bigquery.Client(project=project, credentials=Credentials(token))
 
 
-# the fields of a logged OpenAI request a re-run sends as they were (model and max_tokens are set per run; stream,
-# n, metadata, user etc. are not part of the behaviour)
+# The logged request fields a re-run sends as they were (model and max_tokens are set per run).
 SENT = ("messages", "tools", "tool_choice", "parallel_tool_calls", "response_format", "temperature", "top_p", "seed",
         "stop", "reasoning_effort", "frequency_penalty", "presence_penalty")
 _ROLES = {"system", "developer", "user", "assistant", "tool", "function"}
 
 
 def _as_sent(body):
-    """The request's SENT fields, or None when its messages aren't OpenAI chat messages (the re-run then rebuilds the
-    request from the trace)."""
+    """The request's SENT fields, or None when its messages aren't OpenAI chat messages (rebuilt from the trace)."""
     msgs = body.get("messages")
     if not (isinstance(msgs, list) and msgs and all(isinstance(m, dict) and m.get("role") in _ROLES for m in msgs)):
         return None
@@ -121,7 +106,7 @@ def to_trace(request, response, agent):
     msgs = schema.norm_messages(body.get("messages"))
     message = ((resp.get("choices") or [{}])[0] or {}).get("message") or {}
     out = {"generations": [[{"message": message}]]}     # the shape schema's output readers already take
-    from app.services.llm_client import usage as read_usage    # THE usage reader: OpenAI- or Anthropic-shaped
+    from app.services.llm_client import usage as read_usage
     u = read_usage(resp.get("usage") or {})
     t = schema.build_trace(
         trace_id=resp.get("id"), agent_id=agent, node_id=_callsite(msgs),
@@ -136,12 +121,8 @@ def to_trace(request, response, agent):
 
 
 def lookup(request_ids):
-    """{request_id: (request body, response or None)} for the logged calls among `request_ids`, in one query. The body
-    is OpenAI-format: messages, max_tokens and the other SENT fields when logged, and as `model` the model that
-    answered (BQ_MODEL_COLUMN, else the response's). BQ_ID_COLUMN (default request_id) holds the id; BQ_PARAMS_COLUMN,
-    when set, a JSON column holding max_tokens, tools, temperature etc. (the request column then being only the
-    messages). Unknown ids
-    are simply absent.
+    """{request_id: (OpenAI-format request body, response or None)} for the logged ids, in one query; unknown ids are
+    absent. The body's `model` is the one that answered (BQ_MODEL_COLUMN, else the response's).
     ponytail: scans the whole table per call; filter on its partition column once it gets large."""
     from google.cloud import bigquery
     table, req_col, resp_col = _cfg()
@@ -190,8 +171,8 @@ class BigQuerySource(DataSource):
         return [{"id": r["name"], "name": r["name"]} for r in rows]
 
     def pull(self, ws_id, project, limit=None, since_hours=None):
-        """(buckets, skipped): contract traces from the table, bucketed by call-site. `project` is the agent when
-        BQ_AGENT_COLUMN is set. ponytail: `limit` (whole traces, for LangSmith) is not used; _ROWS calls are read."""
+        """(buckets, skipped): traces bucketed by call-site; `project` is the agent when BQ_AGENT_COLUMN is set.
+        ponytail: `limit` (whole traces, for LangSmith) is not used; _ROWS calls are read."""
         from google.cloud import bigquery
         table, req_col, resp_col = _cfg()
         agent_col, node_col = credentials.get_config("BQ_AGENT_COLUMN"), credentials.get_config("BQ_NODE_COLUMN")

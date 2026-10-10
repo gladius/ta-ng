@@ -1,9 +1,7 @@
 """Run validation jobs.  python -m validation.worker [--threads N]
 
-Run any number of these, on any machines that share DATABASE_URL. Each thread repeatedly claims the next group of
-unfinished requests from any job, validates it and records it, so every free worker helps with every batch. The web
-app runs VALIDATION_INPROCESS_WORKERS of these threads itself (default 2), so one process is enough locally; in
-production set it to 0 and scale workers separately. On shutdown, groups still in progress are handed back at once.
+Run any number, on any machines sharing DATABASE_URL: each thread claims the next group of any job, so every free
+worker helps with every batch. The web app runs VALIDATION_INPROCESS_WORKERS threads itself (default 2).
 """
 import argparse
 import signal
@@ -14,9 +12,9 @@ from app.services.llm_client import Unreachable
 from validation import jobs
 
 POLL_S = 2.0
-UNREACHABLE_WAIT_S = 30     # the model endpoint is down: its group went back to the queue; try again after this
-ERROR_WAIT_S = 10           # anything else unexpected (e.g. the database dropped): logged, then the thread carries on
-_held = {}                  # thread's worker id -> token of the group it is running
+UNREACHABLE_WAIT_S = 30     # the model endpoint is down (its group went back to the queue): retry after this
+ERROR_WAIT_S = 10           # anything else (e.g. the database dropped): logged, then the thread carries on
+_held = {}                  # worker id -> token of the group it is running, handed back on shutdown
 
 
 def loop(worker, stop):
@@ -43,14 +41,14 @@ def loop(worker, stop):
 
 
 def start(n, stop):
-    """Start n worker threads in this process; they stop claiming when `stop` is set."""
+    """Start n worker threads; they stop claiming when `stop` is set."""
     for i in range(n):
         threading.Thread(target=loop, args=("%s-t%d" % (jobs.WORKER, i), stop), daemon=True,
                          name="validation-worker-%d" % i).start()
 
 
 def release_all():
-    """Hand back every group this process is still working on, so other workers take them over immediately."""
+    """Hand back every group this process still holds, so other workers take them over at once."""
     for token in list(_held.values()):
         jobs.release(token)
 

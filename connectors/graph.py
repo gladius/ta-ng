@@ -1,34 +1,15 @@
-"""The execution-graph layer — the spine the auditor reasons over.
+"""Execution graph: folds one agent's run trees into one graph and derives the audited call-sites from structure.
 
-A recorded trace is a TREE of runs (chain -> chain -> llm/tool). This module folds N such trees (the
-recent runs of ONE agent) into a single agent execution graph, and derives the CALL-SITES the profiler
-audits from that structure — rather than a flat "group llm runs by a metadata label" heuristic.
-
-Why structural, not label-based (both proven to matter on real LangGraph traces):
-  - A ReAct node emits >1 llm call under the SAME node (reason-call vs post-tool-call). They are
-    DIFFERENT prompts / different optimization targets, so they must be different call-sites. We split
-    them by an input-SHAPE signature (does the prompt already contain a tool result? how many turns?).
-  - An untagged / plain-LangChain call has no node label; grouping by run.name collapses every step into
-    one "ChatAnthropic" bucket. We instead resolve the node from the run TREE (nearest named parent
-    chain run), and only fall back to run.name as a last resort (flagged `untagged`).
-
-Input:  an iterable of RUN RECORDS (neutral shape, produced by each adapter's to_record):
-    {id, trace_id, parent_run_id, dotted_order, run_type, name, start_time, end_time,
-     agent_hint, node_hint, trace}          # `trace` = a contract trace for llm runs, else None
-Output: a Graph with
-    .buckets  OrderedDict[call_site_key -> list[contract trace]]   (what profiler/audit consume)
-    .nodes    [{key, node, variant, samples, traces, untagged, avg_in, avg_out, avg_ms, model, first, last}]
-    .edges    [{src, dst, count}]                                  (observed node->node transitions)
-Timing + volume are captured now (avg_ms, traces, first/last) so analytics + a richer visual view can be
-built on top later without another schema change.
+A ReAct node's reason call and post-tool call are different prompts, so they become different call-sites. An untagged
+call takes its node from the nearest named parent chain; run.name would lump every step into one "ChatAnthropic" bucket.
 """
 
 import re
 from collections import Counter, OrderedDict
 
-from contract import eligible                          # error-free filter: a failed run is not a valid decision path
+from contract import eligible
 
-# chain-run names that are structural scaffolding, NOT a meaningful node identity
+# Chain-run names that are scaffolding, not node identities.
 _GENERIC = {"", "langgraph", "runnablesequence", "runnableparallel", "runnablelambda",
             "runnableassign", "__start__", "__end__", "channelwrite", "_write", "_route"}
 
@@ -38,7 +19,7 @@ def _is_generic(name):
 
 
 def _pct(values, q):
-    """The q-quantile of a list (nearest-rank), 0 if empty — for the output-length distribution (p50/p95)."""
+    """The q-quantile of a list (nearest rank), 0 if empty."""
     if not values:
         return 0
     xs = sorted(values)
@@ -46,7 +27,7 @@ def _pct(values, q):
 
 
 def _is_json(text):
-    """Does the recorded output parse as JSON (fence-tolerant)? A deterministic 'structured output' signal — no LLM."""
+    """Does the recorded output parse as JSON (fence-tolerant)?"""
     import json
     s = (text or "").strip()
     if s.startswith("```"):
@@ -61,28 +42,19 @@ def _is_json(text):
 
 
 def _shape_sig(trace):
-    """A compact signature of the prompt's STRUCTURE — the role sequence — so structurally different calls
-    at the same node (pre-tool vs post-tool) don't merge. Content is irrelevant here; shape is."""
+    """The prompt's role sequence, so pre-tool and post-tool calls at one node don't merge."""
     return tuple(m["role"] for m in trace.get("input_messages", []))
 
 
 def _frame_variants(items, min_prefix=6, min_frac=0.2, min_cooccur=0.5):
-    """Split a node's NO-TOOL calls into distinct call-sites ONLY when they carry genuinely different
-    authored call-TYPES (e.g. a 'Plan ...' call and a 'Critique ...' call). Two guards, BOTH required, so a
-    map / fan-out node is never fragmented:
-
-      (a) RE-SENT frame — a cluster counts only if its shared long prefix recurs across >= min_frac of the
-          node's calls. A unique input (a distinct RAG question graded once) is a singleton, NOT a call-type.
-      (b) CO-OCCURRENCE — >= 2 such real clusters appear together WITHIN one trace (plan+critique in the same
-          run). Variable content that merely differs across traces (a reformulated question re-graded, a new
-          topic each run) never co-occurs, so it stays ONE call-site.
-
-    Returns {id: frame_slug or ''}. items = [(id, trace_id, user_text)]."""
+    """Split a node's no-tool calls into call-sites only for distinct authored call types ('Plan ...' vs
+    'Critique ...'), so a map/fan-out node is never fragmented. A frame counts only if its long shared prefix recurs
+    in >= min_frac of calls, and >= 2 such frames must co-occur within one trace.
+    items = [(id, trace_id, user_text)]; returns {id: frame_slug or ''}."""
     n = len(items)
     if n < 2:
         return {i: "" for i, _, _ in items}
-    # 1) cluster by shared leading WORD-prefix (sorting brings same-frame calls adjacent; the running prefix
-    #    shrinks to the shared authored frame — a distinct frame breaks the prefix and starts a new cluster).
+    # Sorting puts same-frame calls side by side; the running word prefix shrinks to their shared frame.
     clusters, cluster_of = [], {}
     for k in sorted(range(len(items)), key=lambda x: items[x][2] or ""):
         cid, _tid, text = items[k]
@@ -97,11 +69,9 @@ def _frame_variants(items, min_prefix=6, min_frac=0.2, min_cooccur=0.5):
                 cluster_of[cid] = clusters[-1]["idx"]; continue
         cluster_of[cid] = len(clusters)
         clusters.append({"idx": len(clusters), "prefix": list(w), "members": [cid]})
-    # 2) (a) keep only RE-SENT frames — a real call-type recurs; a one-off input is not one.
     real = {c["idx"] for c in clusters if len(c["members"]) >= max(2, min_frac * n) and len(c["prefix"]) >= min_prefix}
     if len(real) < 2:
         return {i: "" for i, _, _ in items}
-    # 3) (b) co-occurrence of REAL clusters within one trace (plan+critique) vs one-cluster-per-trace (map/fan-out).
     per_trace, calls_per_trace = {}, {}
     for cid, tid, _ in items:
         calls_per_trace[tid] = calls_per_trace.get(tid, 0) + 1
@@ -111,7 +81,6 @@ def _frame_variants(items, min_prefix=6, min_frac=0.2, min_cooccur=0.5):
     cooccur = [t for t in multi_call if len(per_trace.get(t, ())) >= 2]
     if not multi_call or len(cooccur) < min_cooccur * len(multi_call):
         return {i: "" for i, _, _ in items}
-    # 4) label ONLY real clusters by their frame slug; one-off calls fall back to the base bucket ('').
     slug = {}
     for c in clusters:
         if c["idx"] in real:
@@ -120,14 +89,10 @@ def _frame_variants(items, min_prefix=6, min_frac=0.2, min_cooccur=0.5):
 
 
 def _resolve_node(rec, by_id):
-    """(node_label, tagged) for an llm run: metadata node -> nearest named parent chain -> run.name.
-
-    Returns tagged=False only when we had to fall back to the model class name (run.name) — that call-site
-    is 'untagged' and the graph flags it so the UI can warn instead of silently collapsing.
-    """
+    """(node_label, tagged) for an llm run: metadata node, else nearest named parent chain, else run.name
+    with tagged=False so the UI can warn."""
     if rec.get("node_hint"):
         return str(rec["node_hint"]), True
-    # walk up the parent chain to the nearest chain run with a real name
     seen, cur = set(), rec.get("parent_run_id")
     while cur and cur not in seen:
         seen.add(cur)
@@ -139,17 +104,12 @@ def _resolve_node(rec, by_id):
         if p.get("run_type") == "chain" and not _is_generic(p.get("name")):
             return str(p["name"]), True
         cur = p.get("parent_run_id")
-    return str(rec.get("name") or "llm"), False          # last resort: the model class name (untagged)
+    return str(rec.get("name") or "llm"), False
 
 
 def _resolve_path(rec, by_id, exclude=None):
-    """The graph/subgraph nesting for a run — the chain of NAMED ancestor nodes (outer -> inner), EXCLUDING the
-    run's OWN node (`exclude` = its container chain, which in LangGraph shares the node's name). '' at top level.
-    Derived from the run TREE, so multiagent subgraphs group even when LangGraph's checkpoint_ns is absent; a
-    fallback used only when the trace doesn't already carry a graph_path.
-
-    The exclude is load-bearing: a top-level 'supervisor' llm sits under its own 'supervisor' chain, so without
-    dropping that container EVERY tagged node was mis-nested under itself ('agent/supervisor/supervisor')."""
+    """Named ancestor nodes of a run, outer -> inner ('' at top level); the fallback when a trace has no graph_path.
+    `exclude` drops the run's own container chain, which shares its name (else 'agent/supervisor/supervisor')."""
     path, seen, cur = [], set(), rec.get("parent_run_id")
     while cur and str(cur) not in seen:
         seen.add(str(cur))
@@ -167,15 +127,15 @@ class Graph:
     def __init__(self, agent, buckets, nodes, edges, trace_count, errors_excluded=0, revisions=None,
                  structural_nodes=None, run_totals=None, node_run_types=None):
         self.agent = agent
-        self.buckets = buckets                           # OrderedDict[key -> list[trace]]  (downstream API)
-        self.nodes = nodes                               # llm call-sites (tokens/cost/deep facts)
-        self.edges = edges                               # subgraph-qualified node->node flow (all run types)
+        self.buckets = buckets                           # OrderedDict[key -> list[trace]]
+        self.nodes = nodes
+        self.edges = edges
         self.trace_count = trace_count
-        self.errors_excluded = errors_excluded           # failed samples dropped from ALL buckets (honesty count)
-        self.revisions = revisions or []                 # distinct agent versions seen (latest-pin / selector later)
-        self.structural_nodes = structural_nodes or []   # typed NON-llm nodes (tool/retriever): the whole deployment
-        self.run_totals = run_totals or {}               # run_type -> count over ALL fetched runs (the FULL picture)
-        self.node_run_types = node_run_types or {}        # langgraph_node -> {run_type: count} over ALL runs (census)
+        self.errors_excluded = errors_excluded           # failed samples kept out of every bucket
+        self.revisions = revisions or []
+        self.structural_nodes = structural_nodes or []   # tool, retriever and function nodes
+        self.run_totals = run_totals or {}               # run_type -> count over all fetched runs
+        self.node_run_types = node_run_types or {}        # langgraph_node -> {run_type: count}
 
 
 def build_graph(records, agent_default="agent"):
@@ -183,26 +143,21 @@ def build_graph(records, agent_default="agent"):
     records = [r for r in records if r]
     agent = next((r["agent_hint"] for r in records if r.get("agent_hint")), None) or agent_default
 
-    # group by trace so tree-walks + per-trace node ordering stay within one execution
     by_trace = OrderedDict()
     for r in records:
         by_trace.setdefault(str(r.get("trace_id") or ""), []).append(r)
 
-    # PASS 1 — resolve every llm run to (node_label, tagged, shape_sig) + its subgraph path. Topology (edges)
-    # is built separately below over ALL run types, so this pass only needs the llm samples (for stats).
+    # Pass 1: resolve each profileable llm sample to its node, shape and subgraph path.
     resolved = []                                        # (rec, node_label, tagged, sig)
-    paths = {}                                           # rec id -> tree-derived graph/subgraph path (fallback)
+    paths = {}
     for tid, runs in by_trace.items():
         by_id = {str(r["id"]): r for r in runs if r.get("id")}
         for rec in sorted(runs, key=lambda r: (r.get("dotted_order") or "", r.get("start_time") or "")):
-            if rec.get("trace") is not None and not rec.get("skip"):      # a profileable llm sample
+            if rec.get("trace") is not None and not rec.get("skip"):
                 nl, tagged = _resolve_node(rec, by_id)
-                paths[str(rec.get("id"))] = _resolve_path(rec, by_id, exclude=nl)  # subgraph nesting (OWN node excluded)
-                resolved.append((rec, nl, tagged, _shape_sig(rec["trace"])))  # kept for stats + error_rate (all samples)
+                paths[str(rec.get("id"))] = _resolve_path(rec, by_id, exclude=nl)
+                resolved.append((rec, nl, tagged, _shape_sig(rec["trace"])))
 
-    # FRAME SUB-SPLIT — a node's NO-TOOL calls that carry DISTINCT authored frames co-occurring in one trace
-    # (plan+critique) are DIFFERENT call-sites; the binary tool/no-tool variant alone merges them, polluting
-    # the bucket's static/dynamic + output signals. Map/fan-out nodes (one frame, variable fill) are untouched.
     no_tool_items = {}
     for rec, nl, tagged, sig in resolved:
         if "tool" not in sig:
@@ -213,36 +168,32 @@ def build_graph(records, agent_default="agent"):
         frame_label.update(_frame_variants(items))
 
     def _full_variant(rec, sig):
-        """The call-site variant: ReAct tool split (after-tool) OR the frame slug for a distinct no-tool
-        call-type; '' (base bucket) for a plain single-frame node."""
+        """'after-tool' for a ReAct post-tool call, else the frame slug, else 'initial'."""
         if "tool" in sig:
             return "after-tool"
         return frame_label.get(rec.get("id"), "") or "initial"
 
     def _gp(rec):
-        """The structural subgraph PATH of a sample (node names only; run-uuids dropped): the trace's own graph_path
-        (LangGraph checkpoint_ns) else the tree-derived fallback. Part of the call-site key so two same-named nodes in
-        DIFFERENT subgraphs ('billing/worker' vs 'refund/worker') stay distinct call-sites, not one blended bucket."""
+        """A sample's subgraph path (its graph_path, else tree-derived). Part of the call-site key, so 'billing/worker'
+        and 'refund/worker' never merge."""
         return (rec["trace"].get("graph_path") or paths.get(str(rec.get("id")), "")).strip("/")
 
-    variants_per_node = {}                               # (path, node_label) -> set(full variant) — scoped PER call-site
-    for rec, nl, tagged, sig in resolved:                # so a variant in one subgraph can't force a '~variant' on another
+    variants_per_node = {}                               # per (path, node): one subgraph's variants never split another
+    for rec, nl, tagged, sig in resolved:
         variants_per_node.setdefault((_gp(rec), nl), set()).add(_full_variant(rec, sig))
 
-    # PASS 2 — assign each sample a call-site key: 'agent/[path/]node', + '~variant' only where that call-site has >1.
-    # The subgraph PATH is part of the key so same-named nodes in different subgraphs never merge (see _gp).
-    # A FAILED sample (errored with no output / empty output, per contract.eligible) is COUNTED against the
-    # call-site but kept OUT of the audited bucket + stats — we never optimize or prove against a non-decision.
+    # Pass 2: key 'agent/[path/]node[~variant]', with a variant only where a call-site has several. A failed sample
+    # (contract.eligible) counts against its call-site but stays out of the audited bucket and stats.
     buckets = OrderedDict()
-    stats = OrderedDict()                                # key -> accumulator (SUCCESSFUL samples only)
-    excluded = OrderedDict()                             # key -> # failed samples kept out of the audited bucket
-    revs = set()                                         # distinct agent versions (revision_id) seen — pin/select later
+    stats = OrderedDict()
+    excluded = OrderedDict()
+    revs = set()
     for rec, nl, tagged, sig in resolved:
         gp = _gp(rec)
         multi = len(variants_per_node.get((gp, nl), ())) > 1
         variant = _full_variant(rec, sig) if multi else ""
-        key = "%s/%s%s%s" % (agent, (gp + "/") if gp else "", nl, ("~" + variant) if variant else "")   # agent/[path/]node[~variant]
-        if not eligible(rec["trace"])[0]:               # failed / empty output -> noise for a cost audit; count, skip
+        key = "%s/%s%s%s" % (agent, (gp + "/") if gp else "", nl, ("~" + variant) if variant else "")
+        if not eligible(rec["trace"])[0]:
             excluded[key] = excluded.get(key, 0) + 1
             continue
         if rec["trace"].get("revision"):
@@ -255,21 +206,21 @@ def build_graph(records, agent_default="agent"):
                                    "model": rec["trace"].get("model", ""), "first": "", "last": ""})
         tr = rec["trace"]
         u = tr.get("usage", {})
-        s["models"][tr.get("model", "")] += 1                                 # full model DISTRIBUTION, not just first
-        s["gpaths"][_gp(rec)] += 1                                                     # trace field, else tree-derived (stripped)
-        s["out_list"].append(u.get("output_tokens", 0))                       # for the output-length DISTRIBUTION
-        s["out_json"] += 1 if _is_json(tr.get("output")) else 0                # deterministic output-structure signal
+        s["models"][tr.get("model", "")] += 1
+        s["gpaths"][_gp(rec)] += 1
+        s["out_list"].append(u.get("output_tokens", 0))
+        s["out_json"] += 1 if _is_json(tr.get("output")) else 0
         s["tool_in"] += 1 if any(m.get("role") == "tool" for m in tr.get("input_messages", []) or []) else 0
         s["in"] += u.get("input_tokens", 0)
         s["out"] += u.get("output_tokens", 0)
         s["ms"] += tr.get("runtime_ms", 0)
         s["n"] += 1
-        s["cost_ls"] += tr.get("cost_ls") or 0                # LangSmith's own $ (authoritative when present)
-        s["tools"] += len(tr.get("tools_called") or [])       # tool-calling behaviour (captured)
+        s["cost_ls"] += tr.get("cost_ls") or 0                # LangSmith's own $ cost, authoritative when present
+        s["tools"] += len(tr.get("tools_called") or [])
         if tr.get("feedback_score") is not None:
-            s["fb"].append(tr["feedback_score"])              # quality (only when evals are attached)
+            s["fb"].append(tr["feedback_score"])
         if tr.get("ttft_ms") is not None:
-            s["ttft"].append(tr["ttft_ms"])                   # time-to-first-token (only when streamed)
+            s["ttft"].append(tr["ttft_ms"])
         s["traces"].add(str(rec.get("trace_id") or ""))
         st = rec.get("start_time") or ""
         if st:
@@ -282,10 +233,10 @@ def build_graph(records, agent_default="agent"):
         _mm = s["models"].most_common()
         nodes.append({"key": key, "node": s["node"], "variant": s["variant"], "untagged": s["untagged"],
                       "samples": s["n"], "traces": len(s["traces"]),
-                      "graph_path": s["gpaths"].most_common(1)[0][0] if s["gpaths"] else "",  # subgraph nesting
-                      "model": (_mm[0][0] if _mm else s["model"]),          # DOMINANT model (mode), not the first sample
+                      "graph_path": s["gpaths"].most_common(1)[0][0] if s["gpaths"] else "",
+                      "model": (_mm[0][0] if _mm else s["model"]),          # most common model, not the first sample
                       "models": ", ".join("%s x%d" % (m or "?", c) for m, c in _mm),
-                      "models_list": [{"name": m or "?", "calls": c} for m, c in _mm],   # distribution (app view)
+                      "models_list": [{"name": m or "?", "calls": c} for m, c in _mm],
                       "mixed_model": len(s["models"]) > 1,
                       "avg_in": round(s["in"] / n), "avg_out": round(s["out"] / n),
                       "avg_ms": round(s["ms"] / n), "errors_excluded": excluded.get(key, 0),
@@ -293,24 +244,20 @@ def build_graph(records, agent_default="agent"):
                       "cost_ls": round(s["cost_ls"], 5), "avg_tools": round(s["tools"] / n, 1),
                       "feedback_score": (round(sum(s["fb"]) / len(s["fb"]), 3) if s["fb"] else None),
                       "ttft_ms": (round(sum(s["ttft"]) / len(s["ttft"])) if s["ttft"] else None),
-                      "out_type": ("json" if s["out_json"] > n * 0.5 else            # deterministic output structure
+                      "out_type": ("json" if s["out_json"] > n * 0.5 else
                                    ("short" if round(s["out"] / n) < 25 else "free-form")),
                       "tool_input_rate": round(s["tool_in"] / n, 2),
-                      "out_p50": _pct(s["out_list"], 0.50), "out_p95": _pct(s["out_list"], 0.95),  # output distribution
+                      "out_p50": _pct(s["out_list"], 0.50), "out_p95": _pct(s["out_list"], 0.95),
                       "first": s["first"], "last": s["last"]})
 
-    # ── whole-DEPLOYMENT topology ────────────────────────────────────────────────────────────────────
-    # Node identity here is the STABLE, subgraph-qualified key 'agent/[path/]label' — the SAME key the llm
-    # nodes use (PASS 2, sans ~variant) — so edges JOIN to nodes, and same-named nodes in different subgraphs
-    # ('billing/worker' vs 'refund/worker') stay distinct instead of blending into one ambiguous 'worker'.
+    # Deployment topology over all run types; keys match the llm nodes' (minus ~variant) so edges join to nodes.
     def _skey(gp, label):
         gp = (gp or "").strip("/")
         return "%s/%s%s" % (agent, (gp + "/") if gp else "", label)
 
     def _run_key(rec, by_id):
-        """Stable topology key for a run that participates in the flow — an llm's resolved node, a named graph
-        node (chain), or a tool/retriever operation — else None (generic scaffolding, or a FAILED llm, which is
-        not a decision edge). The container chain + its llm resolve to the SAME key, so they collapse to 1 node."""
+        """Topology key for an llm node, named chain, tool or retriever run, else None (a failed llm is no edge).
+        A container chain and its llm share one key."""
         rt = rec.get("run_type")
         if rt in (None, "llm") and rec.get("trace") is not None and not rec.get("skip"):
             if not eligible(rec["trace"])[0]:
@@ -330,14 +277,13 @@ def build_graph(records, agent_default="agent"):
         seq = []
         for rec in sorted(runs, key=lambda r: (r.get("dotted_order") or "", r.get("start_time") or "")):
             k = _run_key(rec, by_id)
-            if k and (not seq or seq[-1] != k):          # collapse a container chain + its own llm into one node
+            if k and (not seq or seq[-1] != k):
                 seq.append(k)
-        for a, b in zip(seq, seq[1:]):                    # A->B->A (ReAct: node -> tool -> node) is a real cycle
+        for a, b in zip(seq, seq[1:]):                    # A->B->A cycles (ReAct) are real
             edge_ct[(a, b)] = edge_ct.get((a, b), 0) + 1
     edges = [{"src": a, "dst": b, "count": c} for (a, b), c in sorted(edge_ct.items(), key=lambda kv: -kv[1])]
 
-    # typed NON-llm nodes (tool / retriever) — structural facts only (no tokens/cost): the deployment beyond llm.
-    # A tool that ERRORED is surfaced here (error_rate); latency comes from the run's own wall-clock.
+    # Tool and retriever nodes: calls, errors and latency only, no tokens or cost.
     struct = OrderedDict()
     for tid, runs in by_trace.items():
         for rec in runs:
@@ -360,12 +306,9 @@ def build_graph(records, agent_default="agent"):
                          "avg_ms": round(a["ms"] / max(1, a["calls"]))}
                         for a in struct.values()]
 
-    # FUNCTION nodes — a named langgraph_node that RUNS but never calls an llm and isn't a tool/retriever: a pure
-    # code/logic node (fetch_x, send_email, write_log). LangGraph traces these as `chain`, so the tool/retriever
-    # pass above misses them — yet they're real deployment nodes. Surface them (facts + an output sample) so the
-    # map + deployment summary see the WHOLE agent, not just the llm call-sites.
-    run_totals = Counter()                                # run_type -> count over ALL fetched runs (full picture)
-    node_rt = {}                                          # langgraph_node -> {run_type: count} over ALL runs (census)
+    # Function nodes: a named langgraph_node with no llm, tool or retriever runs (pure code, traced as a chain).
+    run_totals = Counter()
+    node_rt = {}
     for tid, runs in by_trace.items():
         for rec in runs:
             run_totals[rec.get("run_type")] += 1
@@ -380,7 +323,7 @@ def build_graph(records, agent_default="agent"):
                 continue
             c = node_rt.get(nl) or {}
             if c.get("llm") or c.get(None) or c.get("tool") or c.get("retriever"):
-                continue                                  # has an llm (=call-site) or a tool -> not a pure function node
+                continue
             gp = (rec.get("graph_path") or "").strip("/")
             a = fn.setdefault(_skey(gp, nl), {"key": _skey(gp, nl), "type": "function", "node": nl,
                                               "graph_path": gp, "calls": 0, "errors": 0, "ms": 0,

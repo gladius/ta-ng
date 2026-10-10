@@ -39,7 +39,7 @@ export default function Report() {
       {failed != null && <Failed error={failed} />}
       {errored.length > 0 && (
         <div className="error" role="alert">
-          The live re-run failed for {errored.length} of {count(audited, 'call-site')}; those weren't counted. Usually the model API is unavailable or out of credit.{' '}
+          The live re-run failed for {errored.length} of {count(audited, 'call-site')}; those weren't counted.{' '}
           <button type="button" className="link" onClick={again}>Audit again</button>
           <details><summary>Show the error</summary><pre className="small">{errored[0].error}</pre></details>
         </div>
@@ -55,7 +55,7 @@ export default function Report() {
 
       {!allFailed && (
         <div className="kpis">
-          <Kpi label="Current cost" value={money(cost, 0)} note={`${per}, audited call-sites`} />
+          <Kpi label="Current cost" value={money(cost, 0)} note={per} />
           <Kpi label="Verified savings" value={money(save, 0)} note={per} best={save > 0 && cost > 0 && `${Math.round((save / cost) * 100)}% off`} />
           <Kpi label="Safe to change" value={<>{safe} <span className="muted small">of {audited}</span></>} />
           <Kpi label="Sampled" value={f.traces} note="traces" />
@@ -91,7 +91,7 @@ export default function Report() {
         <a className="btn primary" href={download(a, 'report', snap)}>Download report (.zip)</a>
         <button type="button" className="btn" onClick={again}>Audit again from fresh traces</button>
       </div>
-      <p className="muted small">Audited {audited} of {count(f.rows.length, 'call-site')}{f.revision && ` on the latest revision (${f.revision.slice(0, 12)})`}. Only live-proven savings count; figures are {per}.</p>
+      <p className="muted small">Audited {audited} of {count(f.rows.length, 'call-site')}{f.revision && ` on the latest revision (${f.revision.slice(0, 12)})`}.</p>
     </Page>
   )
 }

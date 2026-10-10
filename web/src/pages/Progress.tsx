@@ -6,8 +6,8 @@ import { api, crumbs, modeQuery, page, useAgent } from '../agent'
 import { Page } from '../ui'
 
 /** A long step in progress: what it is doing now, how far along, and what went wrong if it failed. */
-function Progress({ eyebrow, title, stage, pct, note, error, children }: {
-  eyebrow: string; title: ReactNode; stage: string; pct: number; note?: string; error?: ReactNode; children?: ReactNode
+function Progress({ eyebrow, title, stage, pct, error, children }: {
+  eyebrow: string; title: ReactNode; stage: string; pct: number; error?: ReactNode; children?: ReactNode
 }) {
   return (
     <section className="progress" aria-live="polite">
@@ -17,7 +17,6 @@ function Progress({ eyebrow, title, stage, pct, note, error, children }: {
       <p className="stage">{stage}</p>
       <div className="bar"><div style={{ width: Math.max(4, pct) + '%' }} /></div>
       {children}
-      {note && !error && <p className="muted">{note}</p>}
       {error && <div className="error" role="alert">{error}</div>}
     </section>
   )
@@ -45,7 +44,6 @@ export function Build() {
   return (
     <Page crumbs={crumbs(a, 'building', dgmode)}>
       <Progress eyebrow="Agent audit · read-only" title={<>Building <span className="accent">{a.project}</span></>} stage={error ? 'Could not build it.' : stage} pct={pct}
-        note="Pulling recorded traces and grouping the agent's call-sites. A few seconds; longer for large agents."
         error={error && <>{error} · <a href={location.href}>retry</a></>} />
     </Page>
   )
@@ -71,7 +69,6 @@ export function Analyze() {
   return (
     <Page crumbs={crumbs(a, 'analysing', dgmode)}>
       <Progress eyebrow="Deployment profile · per-node analysis" title={<>Analysing <span className="accent">{a.project}</span></>} stage={error ? 'Could not analyse it.' : stage} pct={pct}
-        note="Reading each call-site once (system prompt and user frame) to describe what it does, plus a deployment summary."
         error={error && <>{error} · <a href={location.href}>retry</a> · <Link to={page(a, 'profile', `?snap=${snap}&skip=1`)}>view the profile without it</Link></>} />
     </Page>
   )

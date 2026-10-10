@@ -1,14 +1,6 @@
-"""The CONSOLIDATED model registry: config/models.json (reference) × the gateway's DEPLOYED set (availability —
-the source of truth for what can actually be called). The downgrade gates its target on is_available(): recommending
-a model the gateway does not serve is useless.
-
-Availability comes ONLY from the live gateway, never fabricated:
-  • gateway configured (LLM_GATEWAY_URL / *_BASE_URL set — i.e. prod) -> GET {base}/model/info ONCE, cached.
-  • no gateway (dev / Anthropic-direct) -> availability is UNKNOWN: is_available() returns True for everything, so
-    the downgrade lever behaves exactly as it does offline and the models page shows 'availability: unknown'.
-No hardcoded deployment. NO public-catalog fallback — the public LiteLLM catalog is 'all models', NOT this
-gateway's deployed set, so it must never decide availability. The gateway switch is LLM_GATEWAY_URL, falling back to the
-ANTHROPIC_BASE_URL / LITELLM_BASE_URL / LLM_BASE_URL that llm_client uses for transport.
+"""Model registry: config/models.json for reference, the gateway's deployed set (GET /model/info, cached once) for what
+can be called. Without a reachable gateway availability is unknown and nothing is gated. Never the public LiteLLM
+catalog: it lists every model, not this gateway's.
 """
 import json
 import urllib.request
@@ -18,13 +10,12 @@ import credentials
 from app.catalog import (PRICE, resolve_deployed, canonical_model, canonical_exact,
                          is_callable, provider_of, tier, meta, max_output as _cat_max_output)
 
-_cache = {}   # lazy one-shot: {'loaded', 'deployment' (list|None), 'source', 'available' (set), 'serving', ...}
+_cache = {}
 
 
 class ModelNotServable(Exception):
-    """Requested for a live call, but the configured gateway neither serves this model nor recognizes it as a catalog
-    id — raised instead of silently sending a name the gateway can't route (which would 404 opaquely). Off-gateway this
-    never fires (the canonical name IS the callable id). Set the model to a catalog id, or the exact deployment name."""
+    """The gateway neither serves this model nor knows it as a catalog id; raised instead of an opaque 404.
+    Never raised off-gateway."""
     def __init__(self, model, served):
         self.model, self.served = model, served
         shown = ", ".join(served[:12]) + (" …" if len(served) > 12 else "")
@@ -75,7 +66,7 @@ def _load(force=False):
         return
     base, key = _gateway()
     deployment, source = None, "unknown — no gateway configured (dev / Anthropic-direct)"
-    if base:                                               # a gateway is configured -> availability is REAL
+    if base:
         deployment = _fetch_model_info(base, key)
         source = ("gateway %s" % base) if deployment is not None else ("gateway %s — UNREACHABLE (not gating)" % base)
     served, flavours, gwmeta = set(), {}, {}
@@ -87,90 +78,74 @@ def _load(force=False):
             c = resolve_deployed(m["underlying"])
             if c:
                 served.add(c)
-                flavours.setdefault(c, []).append(m["model_name"])   # every gateway flavour of this catalog model
-                gwmeta.setdefault(c, {"context_window": mi.get("max_input_tokens"),   # the gateway's OWN limits/mode —
-                                      "max_output": mi.get("max_output_tokens"),        # truth for THIS deployment, used
-                                      "mode": mi.get("mode"),                           # over models.json; first wins
-                                      "input_cost": mi.get("input_cost_per_token"),     # what it charges, per token
-                                      "output_cost": mi.get("output_cost_per_token")})
-    serving = {c: _pick_flavour(c, names) for c, names in flavours.items()}     # ONE deterministic name we CALL / model
-    names = {n for lst in flavours.values() for n in lst}                        # all wire names (idempotent passthrough)
+                flavours.setdefault(c, []).append(m["model_name"])
+                # The gateway's own limits and mode beat models.json for this deployment.
+                gwmeta.setdefault(c, {"context_window": mi.get("max_input_tokens"),
+                                      "max_output": mi.get("max_output_tokens"),
+                                      "mode": mi.get("mode")})
+    serving = {c: _pick_flavour(c, names) for c, names in flavours.items()}
+    names = {n for lst in flavours.values() for n in lst}
     _cache.update(loaded=True, deployment=deployment, source=source, available=served,
                   serving=serving, serving_names=names, flavours=flavours, gwmeta=gwmeta)
 
 
 def refresh():
-    """Re-fetch on next use (e.g. after config change)."""
+    """Re-fetch on next use."""
     _cache.clear()
 
 
 def has_gateway():
-    """True if availability is REAL (a reachable gateway); False if UNKNOWN (dev / unreachable)."""
+    """True if a reachable gateway gives real availability; False when it is unknown."""
     _load()
     return _cache["deployment"] is not None
 
 
 def is_available(model):
-    """Can the gateway actually serve this model? UNKNOWN (no/unreachable gateway) -> True, so dev behaves exactly
-    as offline and we never gate on data we don't have. With a gateway -> real deployed-set membership."""
+    """Whether the gateway serves this model; True when availability is unknown, so we never gate on missing data."""
     _load()
     if _cache["deployment"] is None:
-        return True                                        # availability unknown -> do NOT gate
+        return True
     return (canonical_model(model) or model) in _cache["available"]
 
 
 def _pick_flavour(canonical, names):
-    """Deterministic pick among a model's gateway deployment flavours (claude-sonnet-5-us / -1234 / bedrock-…): the
-    plain canonical name if the gateway exposes it, else the SHORTEST name (lexicographic tiebreak) — the least-suffixed
-    one, stable regardless of /model/info order. A specific flavour is always forceable by naming it exactly, since
-    serving_name passes a known wire name straight through."""
+    """The plain canonical name if the gateway exposes it, else the shortest flavour (stable order)."""
     if canonical in names:
         return canonical
     return min(names, key=lambda n: (len(n), n))
 
 
 def serving_name(model):
-    """Canonical catalog id -> the exact name to SEND on the wire. THE single outbound seam; the app reasons in catalog
-    ids everywhere and only this converts to a gateway deployment name, so identity and address can never be mixed up.
-
-    Resolution order:
-      1. already a known gateway wire name -> pass through unchanged (idempotent; lets a specific flavour be forced).
-      2. resolves (longest boundary-delimited catalog id) to a served catalog id -> the gateway's own deployment name for it.
-      3. a gateway is configured but it's neither of the above -> raise ModelNotServable (LOUD, not a silent wrong send).
-      4. no gateway (dev / Anthropic-direct) -> the name unchanged (canonical already IS the real callable id).
-    canonical_exact never reverse-guesses, so a lookalike can't be silently mapped to the wrong model."""
+    """Catalog id -> the exact name to send to the gateway; the one outbound seam, so ids and wire names never mix.
+    A known wire name passes through, which lets a specific flavour be forced."""
     _load()
-    if model in _cache.get("serving_names", set()):          # (1) already the gateway's own name -> send as-is
+    if model in _cache.get("serving_names", set()):
         return model
     serving = _cache.get("serving", {})
-    hit = canonical_exact(model)                              # (2) longest catalog id in the name (boundary-delimited)
+    hit = canonical_exact(model)
     if hit and hit in serving:
         return serving[hit]
-    if _cache.get("deployment") is not None:                 # (3) gateway up but unplaceable -> fail loudly with options
+    if _cache.get("deployment") is not None:
         raise ModelNotServable(model, sorted(_cache.get("serving_names", set())))
-    return model                                             # (4) no gateway -> canonical == the real id
+    return model                                             # no gateway: the catalog id is the real id
 
 
 def gateway_map():
-    """The resolved gateway mapping, for one-glance verification (the model catalog page shows it). Per catalog id the app
-    can call: the flavour we CHOSE and every flavour the gateway advertised — so a wrong pick or an unresolved name is
-    caught by looking, not by trusting the resolver. Empty off-gateway."""
+    """Per served catalog id, the chosen flavour and every advertised one, so a wrong pick shows. Empty off-gateway."""
     _load()
     serving, flavours = _cache.get("serving", {}), _cache.get("flavours", {})
     return [{"id": c, "chosen": serving[c], "flavours": sorted(flavours.get(c, []))} for c in sorted(serving)]
 
 
 def _gwmeta(model, field):
-    """One field of the gateway's own metadata for `model` (its max limits / mode), or None when the gateway doesn't
-    serve it or omits the field. 0 / null / '' count as omitted, so the models.json fallback kicks in."""
+    """One field of the gateway's metadata for `model`, or None; 0 / null / '' count as missing."""
     _load()
     c = canonical_model(model) or model
     return (_cache.get("gwmeta", {}).get(c) or {}).get(field) or None
 
 
 def max_output(model):
-    """Max OUTPUT tokens: the GATEWAY's max_output_tokens if it serves this model (the truth for what the deployment
-    actually allows), else the catalog value. A replay never asks for more than the served model can return."""
+    """Max output tokens: the gateway's max_output_tokens if it serves this model, else the catalog value."""
     v = _gwmeta(model, "max_output")
     return int(v) if v else _cat_max_output(model)
 
@@ -181,24 +156,8 @@ def context_window(model):
     return int(v) if v else (meta(model) or {}).get("context_window")
 
 
-def price_gaps():
-    """Served models whose catalog price differs from what the gateway charges, in USD per million tokens. Costs are
-    computed from the catalog (config/models.json), so a gap makes them wrong until the catalog is corrected."""
-    _load()
-    out = []
-    for c, g in sorted(_cache.get("gwmeta", {}).items()):
-        p = PRICE.get(c)
-        if not p or g.get("input_cost") is None or g.get("output_cost") is None:
-            continue
-        gw = {"input": round(g["input_cost"] * 1e6, 4), "output": round(g["output_cost"] * 1e6, 4)}
-        if any(abs(gw[k] - p[k]) > 0.01 * p[k] for k in ("input", "output")):
-            out.append({"model": c, "catalog": {"input": p["input"], "output": p["output"]}, "gateway": gw})
-    return out
-
-
 def report():
-    """Consolidated view for the models page: every reference model with its availability (True/False, or None =
-    unknown when there is no gateway), plus deployed-but-uncatalogued models. No fetch happens without a gateway."""
+    """Models page view: every catalog model with its availability (None = unknown), plus uncatalogued deployments."""
     _load()
     dep, served = _cache["deployment"], _cache["available"]
     models = []
@@ -211,7 +170,7 @@ def report():
                        "open_weight": info.get("open_weight", False), "family": info.get("family"),
                        "host": info.get("host"), "confidence": info.get("confidence"),
                        "purpose": info.get("purpose"), "note": info.get("note"),
-                       "available": (None if dep is None else (name in served))})   # None = unknown (no gateway)
+                       "available": (None if dep is None else (name in served))})
     uncatalogued = []
     if dep is not None:
         for m in dep:

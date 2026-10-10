@@ -1,23 +1,12 @@
-"""Report export — a downloadable ZIP of exactly TWO markdown files, built ONLY from the frozen proof (no LLM in the
-loop, so the deliverable is reproducible):
-
-  report.md    the APPLY GUIDE — one block per proven fix (what / where / how / why / verify / caveat, artifacts
-               INLINE and paste-ready) + a machine-readable index + the honest rejections. Self-contained *for
-               action*: a human or a coding assistant can apply every fix from this file alone.
-  evidence.md  the PROOF APPENDIX — the raw runs behind every verdict: per call-site, the reference set (the current
-               model's own outputs) vs the re-runs, each tagged, with the rate. Read this to *verify* a
-               recommendation; you never need it to apply one.
-
-The split is deliberate: applying a fix needs the guide, not the receipts (evidence is pure noise to an agent
-applying a change, and balloons for a large agent); verifying a fix needs the receipts, on demand. stdlib zipfile
-only — zero dependencies.
+"""Report export: a ZIP of two markdown files built only from the frozen proof (no LLM, so it is reproducible).
+report.md is the self-contained apply guide; evidence.md holds the raw runs behind each verdict, for verifying.
 """
 import io
 import json
 import re
 import zipfile
 
-# per-INPUT rollup verdict, shown with the system's own words.
+# per-input verdict labels
 _IV = {"SAFE": "safe", "NOT-SAFE": "not safe", "BORDERLINE": "borderline", "LOW-EVIDENCE": "low evidence"}
 
 def _fmt(n):
@@ -25,15 +14,14 @@ def _fmt(n):
 
 
 def _sys_first_line(detail):
-    """A greppable fingerprint of the call-site's system prompt — its first non-blank line — so a human or coding
-    assistant can locate the exact prompt in their source. From the first input's captured system prompt."""
+    """The first non-blank line of the call-site's system prompt: a greppable way to find it in the source."""
     inps = detail.get("inputs") or []
     sysm = (inps[0].get("system") if inps else "") or ""
     return next((ln.strip() for ln in sysm.splitlines() if ln.strip()), "")[:140]
 
 
 def _drift(detail):
-    """Why a lever was rejected: the first NOT-SAFE input's judge reason, else the finding's own reason."""
+    """Why a downgrade was rejected: the first NOT-SAFE input's judge reason, else the finding's own reason."""
     for r in detail.get("inputs") or []:
         if r.get("verdict") == "NOT-SAFE":
             return r.get("note") or r.get("reason") or ""
@@ -41,23 +29,19 @@ def _drift(detail):
 
 
 def _rate(inp):
-    """The per-input rate line: the cheaper's fit against the reference set · the original's own self-consistency."""
+    """Per-input rate: the cheaper model's fit to the reference set · the original's self-consistency."""
     return "cheaper %d/%d · original %s" % (inp.get("kept", 0), inp.get("k", 0), inp.get("self_rate", "?"))
 
 
 # ─────────────────────────────────────────── report.md — the apply guide ───────────────────────────────────────────
 
 def _report_md(f, proof):
-    """The deliverable: an APPLY GUIDE, built ONLY from the frozen proof. One block per
-    recommended fix (what / where / how / why / verify / caveat, artifacts INLINE and paste-ready), a machine-readable
-    index for a coding assistant, and an honest list of what was tested and rejected. The raw runs live in
-    evidence.md; nothing here is invented — every figure is measured."""
+    """report.md: one apply block per recommended fix, a machine-readable index, and what was tested and rejected."""
     calls = f["calls"]
     unit = "%s calls" % _fmt(calls)
     results = proof["results"] if proof else []
     total = (proof.get("total", 0) if proof else 0)
 
-    # ONE pass over the proof: split every result into a RECOMMENDED fix or an honest REJECTION.
     fixes, rejects = [], []                     # fixes: (x, detail, usd)   rejects: (call_site, verdict, reason)
     for x in results:
         key = x.get("key") or x["node"]
@@ -83,7 +67,7 @@ def _report_md(f, proof):
              % (len(results), f.get("traces", 0), len(fixes), unit))
     L.append("")
 
-    # ── machine-readable index — a coding assistant can parse THIS instead of the prose ──
+    # ── machine-readable index, for a coding assistant ──
     idx = []
     for n, (x, det, usd) in enumerate(fixes, 1):
         idx.append({"fix": n, "lever": "downgrade", "call_site": (x.get("key") or x["node"]), "node": x["node"],
@@ -91,7 +75,7 @@ def _report_md(f, proof):
                     "from_model": det.get("model"), "to_model": det.get("cheaper")})
     L += ["## Fixes — machine-readable index", "```json", json.dumps(idx, indent=2), "```", ""]
 
-    # ── one APPLY BLOCK per recommended fix — what / where / how / why / verify / caveat, artifacts inline ──
+    # ── one apply block per fix ──
     if fixes:
         L += ["## Fixes to apply", ""]
     for n, (x, det, usd) in enumerate(fixes, 1):
@@ -119,7 +103,7 @@ def _report_md(f, proof):
               "- After applying, re-audit this call-site (or re-run these inputs and diff behaviour). Full proof: "
               "**`evidence.md`** → `%s` (model downgrade)." % key, "", "---", ""]
 
-    # ── the honest 'no' — tested and rejected, so nothing is silently touched ──
+    # ── tested and rejected, so nothing is silently touched ──
     if rejects:
         L += ["## Tested and not recommended (keep current)",
               "We tried these and the proof said no — listed so you know what was tested and *not* to touch. The runs "
@@ -148,8 +132,7 @@ def _ev_headline(det, x):
 
 
 def _runs_block(L, title, runs, tag_true, tag_false):
-    """A labelled list of outputs, each tagged (+ votes / reason), one fenced block per output. Full text — this is
-    the proof; truncating it defeats the purpose."""
+    """Outputs as a tagged list (votes, reason), one fenced block each, untruncated: this is the proof."""
     if not runs:
         return
     L += ["", "**%s**" % title]
@@ -172,8 +155,7 @@ def _evidence_input(L, i, inp, cheaper):
 
 
 def _evidence_md(f, proof):
-    """The raw runs behind every verdict — for verification, not application. Every audited call-site with
-    per-input data is shown (fixes AND rejections), so a skeptic can reproduce any verdict."""
+    """evidence.md: the raw runs behind every verdict, fixes and rejections alike, so any verdict can be checked."""
     results = proof["results"] if proof else []
     L = ["# Token Audit — %s · Evidence" % f["agent"], "",
          "> The raw runs behind every verdict in `report.md` — read this to **verify** a recommendation; `report.md` "
@@ -200,8 +182,7 @@ def _evidence_md(f, proof):
 
 
 def build_zip(f, proof):
-    """Return the audit record as ZIP bytes: report.md (the deliverable) and evidence.md (the proof appendix, only
-    when there is per-input evidence to show). The web UI's report page is the styled view; it prints to PDF."""
+    """The audit record as ZIP bytes: report.md, plus evidence.md when there is per-input evidence."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("report.md", _report_md(f, proof))

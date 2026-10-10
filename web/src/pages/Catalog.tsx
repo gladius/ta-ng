@@ -22,12 +22,12 @@ export function Models() {
       <div className="head">
         <div>
           <h1>Model catalog</h1>
-          <p className="meta">The reference catalog (<span className="mono">config/models.json</span>) consolidated with what the gateway serves. Availability source: {q.data?.source ?? '…'}.</p>
+          <p className="meta">Availability: {q.data?.source ?? '…'}</p>
         </div>
         <Link className="btn" to="/models/migrations/google">Google migration paths</Link>
       </div>
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : <>
-        {!q.data.has_gateway && <div className="note">No gateway is configured here, so availability is unknown and nothing is gated on it.</div>}
+        {!q.data.has_gateway && <div className="note">No gateway configured: availability is unknown.</div>}
         <section className="panel">
           <div className="scroll">
             <table className="grid">
@@ -53,7 +53,7 @@ export function Models() {
         </section>
         {q.data.gateway_map.length > 0 && (
           <section className="panel">
-            <div className="panel-head"><h2>Gateway call names</h2><span className="muted">catalog id → the deployment name called on this gateway</span></div>
+            <div className="panel-head"><h2>Gateway call names</h2></div>
             <div className="scroll">
               <table className="grid">
                 <thead><tr><th>Catalog id</th><th>Calls</th><th>Names seen</th></tr></thead>
@@ -64,7 +64,7 @@ export function Models() {
         )}
         {q.data.uncatalogued.length > 0 && (
           <section className="panel">
-            <div className="panel-head"><h2>Served but not in the catalog</h2><span className="muted">add them to config/models.json to price and audit them</span></div>
+            <div className="panel-head"><h2>Served but not in the catalog</h2><span className="muted">add them to config/models.json</span></div>
             <div className="scroll">
               <table className="grid">
                 <thead><tr><th>Underlying model</th><th>Deployed as</th></tr></thead>
@@ -85,10 +85,7 @@ export function Migrations() {
   const name = provider.charAt(0).toUpperCase() + provider.slice(1)
   return (
     <Page crumbs={[{ label: 'Model catalog', to: '/models' }, { label: `${name} migration paths` }]}>
-      <div className="head"><div>
-        <h1>{name} recommended migration paths</h1>
-        <p className="meta">Whatever model an agent runs today, {name} recommends consolidating onto a current GA target. This is the preferred recommendation in the tier downgrade; the same-provider step down is the fallback.</p>
-      </div></div>
+      <div className="head"><h1>{name} recommended migration paths</h1></div>
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? (
         <p className="empty">No migration paths configured for {provider} (<span className="mono">config/migrations/{provider}.json</span>).</p>
       ) : q.data.map((p) => (

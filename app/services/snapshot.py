@@ -1,15 +1,5 @@
-"""Immutable per-report SNAPSHOT — the ONE honest source of a report's data for its whole lifecycle.
-
-Problem it solves: an agent's traces are fetched LIVE from the platform. If we re-fetch/rebuild between rendering
-the report and proving it, the call-site set and their keys drift under the user (new traces arrive, the fetch
-window shifts), the selected keys go stale, the proof matches nothing, and every $ resets to 0. So we capture the
-graph ONCE, pin it under a snapshot id that the report URL carries, and every step — view, prove, reprove, download
-— reads THAT snapshot by id. Nothing re-derives from the platform mid-flow, so identity can't move under the user.
-A NEW snapshot (fresh data) is minted only on an explicit re-audit.
-
-Held in the durable `store`. No TTL — an immutable snapshot
-can't go stale.
-"""
+"""Immutable per-report snapshot: the graph is fetched once and pinned under an id the report URL carries, so every
+step reads the same data (a live re-fetch would drift the keys and zero every $). Held in `store`, no TTL."""
 import secrets
 
 
@@ -18,19 +8,16 @@ def new_id():
 
 
 def build_into(sid, source, ws, project):
-    """Fetch + build the graph ONCE and pin it under the GIVEN snapshot id; returns the graph. Splitting the
-    id from the build lets the web layer mint an id, render a progress page immediately, then run this in the
-    background under that same id (see server.build_stream) — so the multi-second fetch isn't a frozen page."""
+    """Fetch and build the graph once and pin it under `sid` (minted first, so the page can show progress)."""
     from app.services import graph, store, snapdump
     g = graph.build(source, ws, project)
     store.put(("snapshot", sid), {"source": source, "ws": ws, "project": project, "graph": g})
-    snapdump.dump_graph(sid, g)                               # dev-only (AUDIT_DEBUG): traces/ + graph/ for this snap
+    snapdump.dump_graph(sid, g)
     return g
 
 
 def get(snap_id, source=None, ws=None, project=None):
-    """The pinned graph for `snap_id`, or None (unknown/evicted). If source/ws/project are given they must match —
-    guards a stale or cross-agent id pasted from a bookmarked URL."""
+    """The pinned graph for `snap_id`, or None. Given source/ws/project must match (rejects a cross-agent id)."""
     from app.services import store
     s = store.peek(("snapshot", snap_id))
     if not s:

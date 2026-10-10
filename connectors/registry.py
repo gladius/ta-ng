@@ -1,9 +1,4 @@
-"""Connector registry — auto-discovers adapters.
-
-Every connector is a SUBPACKAGE of connectors/ that exports `ADAPTER = <Adapter subclass>()` from its
-__init__.py (e.g. connectors/langsmith/). Dropping a folder here registers a platform; no dispatch to
-edit. Plain modules (base, schema) are skipped — only packages are adapters.
-"""
+"""Connector registry: each connectors/ subpackage exporting `ADAPTER = <Adapter subclass>()` is a platform."""
 
 import importlib
 import pkgutil
