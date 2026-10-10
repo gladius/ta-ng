@@ -136,7 +136,7 @@ def build(_args):
         runs = {pid: list(pool.map(lambda _: replay(t, ORIGINAL)["output"], range(6))) for pid, t in traces.items()}
         jobs = []
         for pid, open_ended, *_ in PROMPTS:
-            req, refs = request_text(traces[pid], sp), runs[pid][:5]
+            req, refs = request_text(traces[pid]), runs[pid][:5]
             cases.append({"id": "%s/same-model" % pid, "kind": "same-model", "expected": "within", "request": req,
                           "references": refs, "candidate": runs[pid][5]})
             for kind in ("benign", "alternative" if open_ended else "decision", "value", "invented"):

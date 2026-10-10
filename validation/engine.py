@@ -2,15 +2,18 @@
 
 The original's recorded answer plus `reference_runs` fresh re-runs form the reference set, the range of behaviour the
 original itself shows; one coherence judgement says how consistent it is. Each of `candidate_runs` candidate outputs
-is judged, by majority of `votes`, on whether it belongs to the set. Verdict, relative to the original's consistency:
+is judged on whether it belongs to the set: an exact copy of a reference matches with no judge call; otherwise one
+judge vote, and when it isn't a pass `votes` - 1 more, the majority deciding. The judge reads the whole request and
+every output, never a cut. Verdict, relative to the original's consistency:
 
-    unverified  a call failed, an output is too long to judge whole, the coherence reply was unreadable, or the
+    unverified  a call failed (one too large for the judge included), the coherence reply was unreadable, or the
                 original agrees with itself less than `coherence_floor` of the time (nothing stable to certify against)
     within      fit rate >= original's consistency - margin
     outside     otherwise
 
 No winner is picked: every run is reported with latency, tokens, served model and cost for the caller to rank.
 """
+import json
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -39,13 +42,35 @@ def _pmap_warm(fn, items, key, width):
     return out
 
 
-def _text(trace, role, sep="\n"):
-    return sep.join((m.get("content") or "") for m in trace.get("input_messages", []) if m.get("role") == role)
+def _said(content):
+    """A message's content as text: parts joined, a part with no text named by its type."""
+    if isinstance(content, list):
+        return "\n".join(p.get("text") or "[%s]" % p.get("type", "part") if isinstance(p, dict) else str(p)
+                         for p in content)
+    return content if isinstance(content, str) else "" if content is None else json.dumps(content)
 
 
-def request_text(trace, spec):
-    """The judge's view of the request (system + user text); the same in all of an item's judge calls, so cached."""
-    return ("SYSTEM:\n%s\n\nUSER:\n%s" % (_text(trace, "system"), _text(trace, "user", " ")))[:spec.cap_chars]
+_ROLE = {"system": "SYSTEM", "developer": "SYSTEM", "user": "USER", "assistant": "ASSISTANT", "tool": "TOOL RESULT",
+         "function": "TOOL RESULT"}
+
+
+def request_text(trace):
+    """The judge's view of the request, whole: every turn in order with its tool calls and results, the tool
+    definitions after the instructions. The same in all of an item's judge calls, so cached."""
+    sent = trace.get("logged_request") or {}
+    msgs = sent.get("messages") or trace.get("input_messages") or []
+    tools = ([json.dumps(t.get("function", t), ensure_ascii=False) for t in sent.get("tools") or []] if sent else
+             [schema for _, schema in trace.get("tools_defined") or []])
+    parts = []
+    for m in msgs:
+        calls = "".join("\n[calls %s(%s)]" % (c.get("function", {}).get("name"), c.get("function", {}).get("arguments"))
+                        for c in m.get("tool_calls") or [])
+        parts.append("%s:\n%s%s" % (_ROLE.get(m.get("role"), str(m.get("role")).upper()), _said(m.get("content")),
+                                     calls))
+    if tools:
+        lead = next((n for n, m in enumerate(msgs) if m.get("role") not in ("system", "developer")), len(msgs))
+        parts.insert(lead, "TOOLS the model could call:\n" + "\n".join(tools))
+    return "\n\n".join(parts)
 
 
 def _default_run(trace, model):
@@ -69,6 +94,8 @@ def _call(run, trace, model):
 
 
 ANSWERS = ("match", "acceptable", "drift", "unclear")       # what each candidate answer was judged
+_TOO_LARGE = ("context length", "context_length", "context window", "maximum context", "prompt is too long",
+              "input is too long", "too many tokens")               # a judge call's error when the prompt doesn't fit
 
 
 def _recorded_run(item):
@@ -80,12 +107,9 @@ def _recorded_run(item):
             "latency_ms": item.request.get("runtime_ms") or None, "cost_usd": cost_of(item.model, usage)}
 
 
-def _verdict(kept, nruns, failed, oversize, coh, spec):
+def _verdict(kept, nruns, failed, coh, spec):
     if failed:
         return "unverified", "%d of %d candidate calls failed" % (failed, nruns)
-    if oversize:
-        return "unverified", ("an output exceeds the judge's %dk-char budget, so it can't be compared whole"
-                              % (spec.ref_chars // 1000))
     if coh["agree"] is None:
         return "unverified", "the original's consistency could not be read from the judge's reply"
     orig_rate, fit_rate = coh["agree"] / coh["of"], kept / nruns
@@ -111,12 +135,15 @@ def validate_many(items, spec, run=None):
                                                 lambda x: (x[0], x[2]), spec.max_parallel)):
         runs[(i, who)].append(r)
     reference = {i: ([_recorded_run(it)] if it.recorded else []) + runs[(i, "ref")] for i, it in enumerate(items)}
-    reqs = {i: request_text(it.request, spec) for i, it in enumerate(items)}
+    reqs = {i: request_text(it.request) for i, it in enumerate(items)}
     ref_ok = {i: not any(r.get("error") for r in reference[i]) for i in range(len(items))}
+    copies = {(i, c, j) for i, it in enumerate(items) for c in range(len(it.candidates))
+              for j, r in enumerate(runs[(i, c)]) if not r.get("error")
+              and (r["output"] or "").strip() in {(x["output"] or "").strip() for x in reference[i]}}
 
     jobs = [("coh", i, None, None) for i in range(len(items)) if ref_ok[i]]
     jobs += [("fit", i, c, j) for i, it in enumerate(items) if ref_ok[i] for c in range(len(it.candidates))
-             for j in range(spec.candidate_runs) if not runs[(i, c)][j].get("error") for _ in range(spec.votes)]
+             for j in range(spec.candidate_runs) if not runs[(i, c)][j].get("error") and (i, c, j) not in copies]
 
     def judge(job):
         from app.services.llm_client import Refused, Unreachable
@@ -129,35 +156,41 @@ def validate_many(items, spec, run=None):
         except (Unreachable, Refused):
             raise
         except Exception as e:                                  # e.g. a content filter on this one request
-            why = "a judge call failed: %s" % str(e)[:200]
+            big = any(w in str(e).lower() for w in _TOO_LARGE)
+            why = ("the request and its answers are too large for the judge (%s)" % spec.judge_model if big else
+                   "a judge call failed: %s" % str(e)[:200])
             if kind == "coh":
                 return {"agree": None, "of": len(ref_out), "divergent": set(), "reasons": {}, "cost_usd": 0.0,
                         "error": why}
             return None, why, 0.0                               # no vote: the run counts as not judged
-    verdicts = defaultdict(list)
+    verdicts = defaultdict(list)                                # job -> its votes (coherence: its one reply)
     for job, v in zip(jobs, _pmap_warm(judge, jobs, lambda j: j[:2], spec.max_parallel)):     # one prefix per item
-        verdicts[job[:3]].append(v)
+        verdicts[job].append(v)
+    more = [job for job in jobs if job[0] == "fit" and verdicts[job][0][0] is not True for _ in range(spec.votes - 1)]
+    for job, v in zip(more, _pmap(judge, more, spec.max_parallel)):        # not a pass: more votes, majority decides
+        verdicts[job].append(v)
 
     out = []
     for i, it in enumerate(items):
         ref = reference[i]
-        coh = (verdicts[("coh", i, None)] or [{"agree": None, "of": len(ref), "divergent": set(), "reasons": {},
+        coh = (verdicts[("coh", i, None, None)] or [{"agree": None, "of": len(ref), "divergent": set(), "reasons": {},
                                                 "cost_usd": 0.0}])[0]
         spend = sum((r["cost_usd"] or 0) for r in ref if not r.get("recorded")) + coh["cost_usd"]
-        ref_over = any(len(r["output"] or "") > spec.ref_chars for r in ref)
         cands = []
         for c, cand in enumerate(it.candidates):
             cruns, rows, kept = runs[(i, c)], [], 0
             unjudged = None
             for j, r in enumerate(cruns):
-                votes = verdicts[("fit", i, c)][j * spec.votes:(j + 1) * spec.votes] if not r.get("error") else []
+                copy = (i, c, j) in copies
+                votes = verdicts[("fit", i, c, j)]
                 decided = [k for k, _, _ in votes if k is not None]      # unsure or failed votes abstain
                 if votes and len(decided) * 2 <= len(votes):            # most abstained: this run isn't judged
                     unjudged = unjudged or next(w for k, w, _ in votes if k is None)
                 yes = sum(1 for k in decided if k)
-                ok = len(decided) * 2 > len(votes) and yes * 2 > len(decided)
+                ok = copy or (len(decided) * 2 > len(votes) and yes * 2 > len(decided))
                 loose = sum(1 for k, w, _ in votes if k and w.startswith("acceptable:"))
-                category = ("unclear" if r.get("error") or not votes or len(decided) * 2 <= len(votes) else
+                category = ("match" if copy else
+                            "unclear" if r.get("error") or not votes or len(decided) * 2 <= len(votes) else
                             ("acceptable" if loose * 2 > yes else "match") if ok else "drift")
                 kept += ok
                 spend += (r["cost_usd"] or 0) + sum(cost for _, _, cost in votes)
@@ -165,12 +198,12 @@ def validate_many(items, spec, run=None):
                                                        "degraded", "stop_reason")},
                              "kept": ok, "category": category,
                              "votes": "%d/%d" % (yes if ok else len(decided) - yes, len(decided)) if votes else "",
-                             "reason": next((w for k, w, _ in votes if k == ok), votes[0][1] if votes else
+                             "reason": "identical to one of the original's answers" if copy else
+                                       next((w for k, w, _ in votes if k == ok), votes[0][1] if votes else
                                             (r.get("error") or "")),
                              "judges": [{"kept": k, "reason": w} for k, w, _ in votes]})
             failed = sum(1 for r in cruns if r.get("error")) + (0 if ref_ok[i] else len(cruns))
-            over = ref_over or any(len(r["output"] or "") > spec.cap_chars for r in cruns)
-            verdict, reason = _verdict(kept, len(cruns), failed, over, coh, spec)
+            verdict, reason = _verdict(kept, len(cruns), failed, coh, spec)
             if ref_ok[i] and (coh.get("error") or unjudged):           # a judge call failed: nothing to certify
                 verdict, reason = "unverified", coh.get("error") or unjudged
             if not ref_ok[i]:

@@ -1,7 +1,8 @@
 """The two LLM judges, and the strict readers of their replies.
 
 fit        does ONE candidate output belong to the reference set: equivalent, a variation the original allows, or
-           drift? Majority of `votes` calls decides (engine); an unsure vote abstains.
+           drift? One call, and when it isn't a pass `votes` in all, the majority deciding (engine); an unsure vote
+           abstains.
 coherence  how many of the reference outputs agree with each other — the bar a candidate is held to.
 
 A verdict is the first line that STARTS with the verdict word, case-sensitive; prose that merely contains one is not a
@@ -61,15 +62,6 @@ COHERENCE_TEMPLATE = (
 )
 
 
-def cap(s, n):
-    """Cut for a judge prompt, never silently: the judge is told its view is partial (and the engine marks the item
-    unverified rather than certifying on a clipped view)."""
-    s = s or ""
-    if len(s) <= n:
-        return s
-    return s[:n] + "\n…[TRUNCATED %d chars — output exceeds the judge's %dk-char budget]" % (len(s) - n, n // 1000)
-
-
 _CATEGORY = {"EQUIVALENT": True, "VARIATION": True, "KEPT": True, "DRIFT": False, "BROKE": False, "UNSURE": None}
 
 
@@ -114,10 +106,10 @@ def _complete(spec, system, messages):
 def fit(reference, candidate, request, spec):
     """-> (kept, reason, judge_cost_usd): does `candidate` belong to the `reference` outputs for `request`?"""
     from app.services import llm_client
-    ref = "\n\n".join("--- acceptable %d ---\n%s" % (i + 1, cap(o, spec.ref_chars)) for i, o in enumerate(reference))
-    prefix = FIT_PREFIX % (request[:spec.cap_chars], len(reference), ref)
+    ref = "\n\n".join("--- acceptable %d ---\n%s" % (i + 1, o or "") for i, o in enumerate(reference))
+    prefix = FIT_PREFIX % (request, len(reference), ref)
     raw, cost = _complete(spec, FIT_SYSTEM, [{"role": "user", "content": [
-        llm_client.cache_block(prefix), {"type": "text", "text": "CANDIDATE:\n%s" % cap(candidate, spec.cap_chars)}]}])
+        llm_client.cache_block(prefix), {"type": "text", "text": "CANDIDATE:\n%s" % (candidate or "")}]}])
     kept, reason = parse_fit(raw)
     from app.services import debugcap                           # AUDIT_DEBUG: keep the raw reply so it can be inspected
     if debugcap.enabled():
@@ -129,10 +121,10 @@ def fit(reference, candidate, request, spec):
 
 def coherence(request, outputs, spec):
     """-> {agree, of, divergent, reasons, cost_usd}; `agree` is None when the reply could not be read."""
-    ref = "\n\n".join("--- output %d ---\n%s" % (i + 1, cap(o, spec.ref_chars)) for i, o in enumerate(outputs))
+    ref = "\n\n".join("--- output %d ---\n%s" % (i + 1, o or "") for i, o in enumerate(outputs))
     total = len(outputs)
     raw, cost = _complete(spec, COHERENCE_SYSTEM,
-                          [{"role": "user", "content": COHERENCE_TEMPLATE % (request[:spec.cap_chars], total, ref, total)}])
+                          [{"role": "user", "content": COHERENCE_TEMPLATE % (request, total, ref, total)}])
     parsed = parse_coherence(raw, total)
     if parsed is None:
         return {"agree": None, "of": total, "divergent": set(), "reasons": {}, "cost_usd": cost}

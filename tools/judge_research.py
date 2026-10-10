@@ -1,8 +1,9 @@
-"""Where is the fit judge wrong? Cases whose right answer is known by construction, judged by prompt variants.
-Every model call is cached in .data/judge_research/calls.jsonl, so a rerun costs nothing.
+"""Where is the fit judge wrong? Cases whose right answer is known by construction, judged as the engine judges.
+Every model call is cached in .data/judge_research/calls.jsonl, so a rerun costs nothing. Rerun before changing the
+judge's prompt, its view of the request or its model: only the changed calls are paid.
 
     .venv/bin/python tools/judge_research.py cases                    # about $0.2 -> .data/judge_research/cases.jsonl
-    .venv/bin/python tools/judge_research.py run J0 J0v --max-usd 3
+    .venv/bin/python tools/judge_research.py run --max-usd 3
 
 Two families of cases, each with edits whose label is certain:
   eval        judge_eval's set (12 prompts, 5 sampled references each)
@@ -14,20 +15,20 @@ Two families of cases, each with edits whose label is certain:
     must fail   number (a number taken from the request changed), dropkey (a JSON field removed), enum (a field set
                 to another option the request lists), dropfact (a date or amount every reference states, removed
                 from a free-text field), plus judge_eval's decision / value / invented
-Each edit is also judged against a FROZEN reference set: the first reference 5 times, as an original answering word
-for word the same every time does (temperature 0, a tight prompt).
+Each edit is also judged against a FROZEN reference set (the first reference 5 times, as an original answering word
+for word the same every time does), and every case of a prompt with tools again with its tools among 40 unrelated
+ones (+40tools). The judge reads each case as the engine sends it: engine.request_text, an exact copy of a reference
+is a match with no call, one vote and two more when it isn't a pass.
 
-Variants: J0 the judge's prompt and its view of the request; J0v the same prompt with the full view (tool
-definitions, tool calls and results, every turn). Rerun both before changing the judge's prompt or model: answers
-already judged come from the cache, so only the changed calls are paid.
-Measured on 2026-10-10 (Sonnet 5, 233 cases): the earlier prompt passed 7 must-fail cases; with the four rules
-now in judges.FIT_SYSTEM and the full view, 1 (a ticket summary leaving out an amount, judged acceptable), and no
-new false drift. A "wording is never fixed" prompt did worse and was dropped.
+Measured on 2026-10-10 (Sonnet 5, 233 cases): the earlier prompt passed 7 must-fail cases; with the four rules now in
+judges.FIT_SYSTEM and the whole request in view, 1 (a ticket summary leaving out an amount, judged acceptable), and
+no new false drift. A "wording is never fixed" prompt did worse and was dropped.
 """
 import argparse
 import collections
 import concurrent.futures
 import dataclasses
+import datetime
 import difflib
 import hashlib
 import json
@@ -290,24 +291,26 @@ def _editor(request, answer, change=TENSE):
 
 
 # --- cases -------------------------------------------------------------------------------------------------------
-def full_view(messages, tools):
-    """The whole request as a judge could see it: instructions, tool definitions, every turn in order."""
-    parts = []
-    for m in messages:
-        calls = "".join("\n[calls %s(%s)]" % (c["function"]["name"], c["function"]["arguments"])
-                        for c in m.get("tool_calls") or [])
-        parts.append("%s:\n%s%s" % ({"system": "SYSTEM", "user": "USER", "assistant": "ASSISTANT",
-                                      "tool": "TOOL RESULT"}[m["role"]], m.get("content") or "", calls))
-        if m["role"] == "system" and tools:
-            parts.append("TOOLS the model could call:\n" + "\n".join(json.dumps(t["function"]) for t in tools))
-    return "\n\n".join(parts)
+def filler_tools():
+    """40 unrelated tools put around the real ones: does a long tool list distract the judge?"""
+    verbs, nouns = ("get", "list", "create", "update", "archive"), ("invoice", "customer", "shipment", "contract",
+                                                                    "user", "report", "alert", "asset")
+    return [_tool("%s_%s" % (v, o), "%s a %s record in the back office." % (v.capitalize(), o),
+                  {o + "_id": "string", "limit": "integer", "include_archived": "boolean", "note": "string"},
+                  [o + "_id"]) for v in verbs for o in nouns]
 
 
-def _originals(pool, sp):
-    """STRUCTURED -> {id: (prod view, full view, 6 answers of the original)}."""
+def _views(trace_of, tools):
+    """-> (the judge's view of the request, the same with 40 unrelated tools around the real ones, or None)."""
+    from validation.engine import request_text
+    fill = filler_tools()
+    return request_text(trace_of(tools)), request_text(trace_of(fill[:20] + tools + fill[20:])) if tools else None
+
+
+def _originals(pool):
+    """STRUCTURED -> {id: (the request as the editor saw it, views, 6 answers of the original)}."""
     from app.services.audit import replay
     from connectors.bigquery.source import to_trace
-    from validation.engine import request_text
     from validation.pricing import cost_of
     built = {}
     for pid, system, user, turns, tools, is_json in STRUCTURED:
@@ -324,14 +327,15 @@ def _originals(pool, sp):
                 r = replay(trace, ORIGINAL)
                 return r["output"], cost_of(ORIGINAL, r.get("usage")) or 0.0
             return cached([ORIGINAL, body, n], call)[0]
-        built[pid] = (request_text(trace, sp), full_view(msgs, tools), list(pool.map(once, range(6))))
+        views = _views(lambda t, body=body: to_trace({**body, **({"tools": t} if t else {})}, {}, "x"), tools)
+        built[pid] = ("SYSTEM:\n%s\n\nUSER:\n%s" % (system, user), views, list(pool.map(once, range(6))))
     return built
 
 
-def _edits(family, pid, request, full, refs):
-    """-> (code-made cases, LLM edit jobs) on the first reference."""
+def _edits(family, pid, request, view, refs):
+    """-> (code-made cases, LLM edit jobs) on the first reference. `request` is what edits read; `view` the judge."""
     base, out, jobs = refs[0], [], []
-    case = {"family": family, "request": request, "request_full": full, "references": refs, "refs": "sampled"}
+    case = {"family": family, "request": request, "view": view, "references": refs, "refs": "sampled"}
     for kind, (expected, fn) in CODE_EDITS.items():
         edited = fn(base, request)
         if edited and edited.strip() != base.strip():
@@ -348,27 +352,26 @@ def _edits(family, pid, request, full, refs):
 def cases(_args):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import judge_eval
-    sp = _spec()
     os.makedirs(OUT, exist_ok=True)
-    full_of = {p[0]: full_view([{"role": "system", "content": p[2]}, {"role": "user", "content": p[3]}], p[4])
-               for p in judge_eval.PROMPTS}
+    views = {p[0]: _views(lambda t, p=p: judge_eval._trace(p[2], p[3], t, p[5]), p[4]) for p in judge_eval.PROMPTS}
     out, jobs = [], []
     for c in (json.loads(line) for line in open(EVAL_CASES) if line.strip()):
         pid = c["id"].split("/")[0]
-        out.append({**c, "family": "eval", "request_full": full_of[pid], "refs": "sampled",
+        out.append({**c, "family": "eval", "view": views[pid][0], "refs": "sampled",
                     "expected": RELABEL.get(c["id"], c["expected"])})
         if c["kind"] == "same-model":
-            more, todo = _edits("eval", pid, c["request"], full_of[pid], c["references"])
+            more, todo = _edits("eval", pid, c["request"], views[pid][0], c["references"])
             out, jobs = out + more, jobs + todo
     with concurrent.futures.ThreadPoolExecutor(POOL) as pool:
-        for pid, (request, full, runs) in _originals(pool, sp).items():
-            case = {"family": "structured", "request": request, "request_full": full, "references": runs[:5],
+        for pid, (request, v, runs) in _originals(pool).items():
+            views[pid] = v
+            case = {"family": "structured", "request": request, "view": v[0], "references": runs[:5],
                     "refs": "sampled"}
             out.append({**case, "id": pid + "/same-model", "kind": "same-model", "expected": "within",
                         "candidate": runs[5]})
             out += [{**case, "id": "%s/%s" % (pid, kind), "kind": kind, "expected": exp, "candidate": text}
                     for kind, exp, text in REAL.get(pid, [])]
-            more, todo = _edits("structured", pid, request, full, runs[:5])
+            more, todo = _edits("structured", pid, request, v[0], runs[:5])
             out, jobs = out + more, jobs + todo
         edited = list(pool.map(lambda j: _editor(j[0]["request"], j[1], j[2]), jobs))
     dropped = []
@@ -386,6 +389,9 @@ def cases(_args):
     # how the sampled references vary, so they stay sampled only
     out += [{**c, "id": c["id"] + "@frozen", "refs": "frozen", "references": [c["references"][0]] * 5}
             for c in out if c["kind"] not in ("same-model", "alternative")]
+    # every case of a prompt with tools again, its real tools among 40 unrelated ones
+    out += [{**c, "id": c["id"] + "@manytools", "family": c["family"] + "+40tools",
+             "view": views[c["id"].split("/")[0]][1]} for c in out if views[c["id"].split("/")[0]][1]]
     with open(os.path.join(OUT, "cases.jsonl"), "w") as f:
         for c in out:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
@@ -394,24 +400,17 @@ def cases(_args):
     print(collections.Counter((c["family"], c["refs"], c["expected"]) for c in out))
 
 
-# --- run ---------------------------------------------------------------------------------------------------------
-def variant(name):
-    """-> (judge system prompt, which view of the request)."""
-    from validation import judges
-    return {"J0": (judges.FIT_SYSTEM, "request"), "J0v": (judges.FIT_SYSTEM, "request_full")}[name]
-
-
-def judge_vote(name, c, vote, sp, max_usd):
+# --- run: as the engine judges one answer ------------------------------------------------------------------------
+def judge_vote(c, vote, sp, max_usd):
     from app.services import llm_client
     from validation import judges
-    system, view = variant(name)
-    ref = "\n\n".join("--- acceptable %d ---\n%s" % (i + 1, judges.cap(o, sp.ref_chars))
-                      for i, o in enumerate(c["references"]))
-    prefix = judges.FIT_PREFIX % (c[view][:sp.cap_chars], len(c["references"]), ref)
+    ref = "\n\n".join("--- acceptable %d ---\n%s" % (i + 1, o) for i, o in enumerate(c["references"]))
+    prefix = judges.FIT_PREFIX % (c["view"], len(c["references"]), ref)
     msgs = [{"role": "user", "content": [llm_client.cache_block(prefix), {
-        "type": "text", "text": "CANDIDATE:\n%s" % judges.cap(c["candidate"], sp.cap_chars)}]}]
+        "type": "text", "text": "CANDIDATE:\n%s" % c["candidate"]}]}]
+    system = judges.FIT_SYSTEM
     raw, cost = cached([sp.judge_model, system, msgs, vote], lambda: judges._complete(sp, system, msgs), max_usd)
-    return (None, "budget spent", cost) if raw is None else (*judges.parse_fit(raw), cost)
+    return (None, "budget spent") if raw is None else judges.parse_fit(raw)
 
 
 def verdict(votes):
@@ -425,44 +424,37 @@ def verdict(votes):
 def run(args):
     sp = _spec()
     all_cases = [json.loads(line) for line in open(os.path.join(OUT, "cases.jsonl")) if line.strip()]
-    jobs = [(v, i, n) for v in args.variants for i in range(len(all_cases)) for n in range(sp.votes)]
-    with concurrent.futures.ThreadPoolExecutor(POOL) as pool:
-        got = list(pool.map(lambda j: judge_vote(j[0], all_cases[j[1]], j[2], sp, args.max_usd), jobs))
+    copy = {i for i, c in enumerate(all_cases) if c["candidate"].strip() in {r.strip() for r in c["references"]}}
     votes = collections.defaultdict(list)
-    for (v, i, _), (kept, reason, _) in zip(jobs, got):
-        votes[(v, i)].append((kept, reason))
-    print("judge %s; paid this run $%.3f\n" % (sp.judge_model, _spent[0]))
-    results = []
-    for v in args.variants:
-        rows = []
-        for i, c in enumerate(all_cases):
-            vs = votes[(v, i)]
-            rows.append({**c, "variant": v, "judged": verdict(vs), "votes": [k for k, _ in vs],
-                         "reasons": [w for _, w in vs], "split": len({k for k, _ in vs}) > 1})
-        results += rows
-        print("== %s" % v)
-        for fam, refs, exp in sorted({(r["family"], r["refs"], r["expected"]) for r in rows},
-                                     key=lambda k: (k[0], k[1] != "sampled", k[2] != "within")):
-            g = [r for r in rows if (r["family"], r["refs"], r["expected"]) == (fam, refs, exp)]
-            wrong = sum(1 for r in g if r["judged"] not in (exp, "unverified"))
-            unv = sum(1 for r in g if r["judged"] == "unverified")
-            print("  %-10s %-7s refs, must %-4s %3d cases: %2d wrong (%s), %d unclear, %d split votes"
-                  % (fam, refs, "pass" if exp == "within" else "fail", len(g), wrong,
-                     "false drift" if exp == "within" else "false pass", unv, sum(r["split"] for r in g)))
-        kinds = collections.defaultdict(lambda: [0, 0])
-        for r in rows:
-            kinds[(r["kind"], r["refs"])][0] += r["judged"] == r["expected"]
-            kinds[(r["kind"], r["refs"])][1] += 1
-        print("  by kind: " + ", ".join("%s%s %d/%d" % (k, "@frozen" if f == "frozen" else "", a, n)
-                                        for (k, f), (a, n) in sorted(kinds.items())))
-        for r in rows:
-            if r["judged"] != r["expected"]:
-                print("    x %-26s expected %-7s judged %-10s %s" % (r["id"], r["expected"], r["judged"],
-                                                                     r["reasons"][0][:110]))
-        print()
-    path = os.path.join(OUT, "run-%s.json" % "-".join(args.variants))
-    json.dump(results, open(path, "w"), indent=1, ensure_ascii=False)
-    print("full results -> %s" % path)
+    todo = [(i, 0) for i in range(len(all_cases)) if i not in copy]       # the engine: one vote first, then
+    with concurrent.futures.ThreadPoolExecutor(POOL) as pool:
+        for _ in range(2):                                               # more only when it isn't a pass
+            for (i, _n), v in zip(todo, pool.map(lambda j: judge_vote(all_cases[j[0]], j[1], sp, args.max_usd),
+                                                 todo)):
+                votes[i].append(v)
+            todo = [(i, n) for i in {i for i, _n in todo} if votes[i][0][0] is not True for n in range(1, sp.votes)]
+    print("judge %s; paid this run $%.3f; %d judge calls, %d exact copies with none\n"
+          % (sp.judge_model, _spent[0], sum(len(v) for v in votes.values()), len(copy)))
+    rows = []
+    for i, c in enumerate(all_cases):
+        vs = [(True, "identical to one of the original's answers")] if i in copy else votes[i]
+        rows.append({**c, "judged": verdict(vs), "votes": [k for k, _ in vs], "reasons": [w for _, w in vs],
+                     "split": len({k for k, _ in vs}) > 1})
+    for fam, refs, exp in sorted({(r["family"], r["refs"], r["expected"]) for r in rows},
+                                 key=lambda k: (k[0], k[1] != "sampled", k[2] != "within")):
+        g = [r for r in rows if (r["family"], r["refs"], r["expected"]) == (fam, refs, exp)]
+        wrong = sum(1 for r in g if r["judged"] not in (exp, "unverified"))
+        unv = sum(1 for r in g if r["judged"] == "unverified")
+        print("  %-18s %-7s refs, must %-4s %3d cases: %2d wrong (%s), %d unclear, %d split votes"
+              % (fam, refs, "pass" if exp == "within" else "fail", len(g), wrong,
+                 "false drift" if exp == "within" else "false pass", unv, sum(r["split"] for r in g)))
+    for r in rows:
+        if r["judged"] != r["expected"]:
+            print("    x %-34s expected %-7s judged %-10s %s" % (r["id"], r["expected"], r["judged"],
+                                                                 r["reasons"][0][:100]))
+    path = os.path.join(OUT, "run-%s.json" % datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    json.dump(rows, open(path, "w"), indent=1, ensure_ascii=False)
+    print("\nfull results -> %s" % path)
 
 
 def main():
@@ -470,7 +462,6 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("cases")
     r = sub.add_parser("run")
-    r.add_argument("variants", nargs="+", choices=["J0", "J0v"])
     r.add_argument("--max-usd", type=float, required=True, help="stop paying for new calls past this")
     args = p.parse_args()
     import credentials

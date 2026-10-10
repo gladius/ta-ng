@@ -139,7 +139,8 @@ def _brief(row, workers):
             "updated_at": _iso(j["updated_at"]), "items_total": j["items_total"], "items_done": j["items_done"],
             "spend_usd": round(j["spend_usd"], 6), "max_budget_usd": j["max_budget_usd"],
             "judge_model": j["judge_model"], "stop_reason": j["stop_reason"], "error": j["error"],
-            "workers": workers, "unpriced_calls": j["unpriced_calls"], "spec": json.loads(j["spec"])}
+            "workers": workers, "unpriced_calls": j["unpriced_calls"], "spec": {k: v for k, v in json.loads(j["spec"]).items()
+                                                             if k in Spec.__dataclass_fields__}}
 
 
 def _workers(c, job_ids):

@@ -7,13 +7,11 @@ class Spec:
     """How hard to look. The bars are fractions, not counts, so run counts can change without moving them."""
     reference_runs: int = 4        # fresh re-runs of the original; with its recorded answer, the reference set
     candidate_runs: int = 5
-    votes: int = 3                 # judge calls per candidate run; majority wins
+    votes: int = 3                 # judge calls per candidate run when the first isn't a pass; majority wins
     coherence_floor: float = 0.6   # the original must agree with itself at least this often, else nothing is certified
     margin: float = 0.2            # a candidate may trail the original's self-consistency by this much and still fit
     judge_model: str = "claude-sonnet-5"
     judge_max_tokens: int = 5000
-    ref_chars: int = 16000         # per reference output inside a judge prompt; longer -> the item is unverified
-    cap_chars: int = 120000        # per candidate output / request inside a judge prompt
     max_parallel: int = 8
 
 

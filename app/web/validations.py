@@ -186,14 +186,13 @@ class Submitted(_Out):
 class JobSpec(_Out):
     reference_runs: int = Field(description="Fresh re-runs of the original per request")
     candidate_runs: int = Field(description="Answers per candidate per request")
-    votes: int = Field(description="Judge calls per candidate answer")
+    votes: int = Field(description="Judge calls per candidate answer when the first isn't a pass; an answer "
+                                   "identical to one of the original's needs none")
     coherence_floor: float = Field(description="Below this self-agreement the original has no stable behaviour, so "
                                                "the request is unverified")
     margin: float = Field(description="How far a candidate may trail the original's self-agreement and still pass")
     judge_model: str
     judge_max_tokens: int
-    ref_chars: int
-    cap_chars: int
     max_parallel: int
 
 

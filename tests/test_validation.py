@@ -64,7 +64,7 @@ def test_within_with_measured_runs(monkeypatch):
     c = r["candidates"][0]
     assert (c["verdict"], c["kept"], c["of"], c["fit_rate"]) == ("within", 5, 5, 1.0)
     assert r["reference"]["of"] == 5 and r["reference"]["consistency"] == 1.0 and r["reference"]["runs"][0]["recorded"] is True
-    assert c["runs"][0]["latency_ms"] == 10 and c["runs"][0]["cost_usd"] > 0 and c["runs"][0]["votes"] == "3/3"
+    assert c["runs"][0]["latency_ms"] == 10 and c["runs"][0]["cost_usd"] > 0 and c["runs"][0]["votes"] == "1/1"
     assert c["latency_ms"] == 10 and r["spend_usd"] > 0 and c["judge_reason"] == "why"
 
 
@@ -80,9 +80,12 @@ def test_unverified_cases(monkeypatch):
     _judges(monkeypatch, agree=2)
     c = validate(_item(), Spec(), _run)["candidates"][0]
     assert c["verdict"] == "unverified" and "2/5 consistent" in c["reason"]                  # below the floor
+    def too_large(*a):
+        raise RuntimeError("400 prompt is too long: 1204331 tokens > 1000000 maximum")
+    monkeypatch.setattr(engine.judges, "fit", too_large)
+    c = validate(_item(), Spec(), _run)["candidates"][0]                                    # never judged on a cut
+    assert c["verdict"] == "unverified" and "too large for the judge" in c["reason"]
     _judges(monkeypatch)
-    c = validate(_item(), Spec(cap_chars=5, ref_chars=5), _run)["candidates"][0]
-    assert c["verdict"] == "unverified" and "budget" in c["reason"]                          # too long to judge whole
     c = validate(_item(candidates=("broken-model",)), Spec(), _run)["candidates"][0]
     assert c["verdict"] == "unverified" and "5 of 5 candidate calls failed" in c["reason"]
     assert c["runs"][0]["error"].startswith("404")
@@ -291,23 +294,24 @@ def test_a_failed_judge_call_leaves_the_request_unverified(monkeypatch):
 
 def test_unsure_votes_abstain(monkeypatch):
     _judges(monkeypatch)
-    votes = iter([(True, "same", 0.0), (None, "unsure: truncated", 0.0), (True, "same", 0.0)] * 5)
+    # in order: each answer's first vote, then two more for each answer whose first vote wasn't a pass
+    votes = iter([(None, "unsure: truncated", 0.0)] * 5 + [(True, "same", 0.0)] * 10)
     monkeypatch.setattr(engine.judges, "fit", lambda *a: next(votes))
     one_at_a_time = Spec(max_parallel=1)                         # votes reach runs in order
     c = validate(_item(), one_at_a_time, _run)["candidates"][0]
     assert (c["verdict"], c["kept"]) == ("within", 5)            # 2 of 3 decided, both kept: one unsure vote is fine
-    votes = iter([(None, "unsure: truncated", 0.0), (None, "unsure: truncated", 0.0), (True, "same", 0.0)] * 5)
+    votes = iter([(None, "unsure: truncated", 0.0)] * 5 + [(None, "unsure: truncated", 0.0), (True, "same", 0.0)] * 5)
     c = validate(_item(), one_at_a_time, _run)["candidates"][0]
     assert (c["verdict"], c["reason"]) == ("unverified", "unsure: truncated")   # most abstained: not judged
 
 
 def test_each_answer_is_judged_match_acceptable_drift_or_unclear(monkeypatch):
     _judges(monkeypatch)
-    votes = iter([(True, "same", 0.0)] * 3 +                                                     # match
-                 [(True, "acceptable: another valid option", 0.0)] * 2 + [(True, "same", 0.0)] +  # acceptable
-                 [(False, "changed the amount", 0.0)] * 3 +                                       # drift
-                 [(None, "unclear: truncated", 0.0)] * 2 + [(True, "same", 0.0)] +                # unclear
-                 [(True, "same", 0.0)] * 3)                                                      # match
+    votes = iter([(True, "same", 0.0), (True, "acceptable: another valid option", 0.0),         # first votes: match,
+                  (False, "changed the amount", 0.0), (None, "unclear: truncated", 0.0),          # acceptable, drift,
+                  (True, "same", 0.0)] +                                                         # unclear, match
+                 [(False, "changed the amount", 0.0)] * 2 +                                       # drift: 2 more
+                 [(None, "unclear: truncated", 0.0), (True, "same", 0.0)])                        # unclear: 2 more
     monkeypatch.setattr(engine.judges, "fit", lambda *a: next(votes))
     c = validate(_item(), Spec(max_parallel=1), _run)["candidates"][0]
     assert [r["category"] for r in c["runs"]] == ["match", "acceptable", "drift", "unclear", "match"]
@@ -321,3 +325,43 @@ def test_the_first_call_per_prompt_runs_before_the_rest():
     out = engine._pmap_warm(lambda x: order.append(x) or x[1] * 10, items, lambda x: x[0], 4)
     assert set(order[:2]) == {("a", 1), ("b", 1)}
     assert out == [10, 20, 10, 20, 30]                       # results stay in the input's order
+
+
+def test_a_pass_takes_one_vote_a_drift_three(monkeypatch):
+    calls = []
+    for kept, want in ((True, 5), (False, 15)):
+        calls.clear()
+        _judges(monkeypatch)
+        monkeypatch.setattr(engine.judges, "fit", lambda *a, kept=kept: calls.append(1) or (kept, "why", 0.0))
+        validate(_item(), Spec(), _run)
+        assert len(calls) == want                                # 5 answers: 1 vote each, or 3 when it isn't a pass
+
+
+def test_an_exact_copy_of_the_originals_answer_needs_no_judge(monkeypatch):
+    _judges(monkeypatch)
+    monkeypatch.setattr(engine.judges, "fit", lambda *a: pytest.fail("a copy was sent to the judge"))
+    same = lambda trace, model: {**_run(trace, model), "output": " refunded order 1 \n"}
+    c = validate(_item(recorded="refunded order 1"), Spec(), same)["candidates"][0]
+    assert c["verdict"] == "within" and c["answers"]["match"] == 5
+    assert c["runs"][0]["reason"] == "identical to one of the original's answers" and c["runs"][0]["votes"] == ""
+
+
+def test_the_judge_reads_the_whole_request():
+    long_doc = "clause " * 60000                                  # 420k characters: never cut
+    sent = {"messages": [
+        {"role": "system", "content": "Support agent."},
+        {"role": "user", "content": [{"type": "text", "text": "Where is order 12? " + long_doc}]},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "lookup_order", "arguments": '{"order": 12}'}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "order 12: shipped 2026-10-07"},
+        {"role": "user", "content": "And when does it arrive?"}],
+        "tools": [{"type": "function", "function": {"name": "lookup_order", "parameters": {
+            "type": "object", "properties": {"order": {"type": "integer"}}, "required": ["order"]}}}]}
+    text = engine.request_text({"input_messages": [], "logged_request": sent})
+    assert len(text) > len(long_doc) and text.endswith("USER:\nAnd when does it arrive?")    # the latest turn kept
+    assert text.index("SYSTEM:") < text.index("TOOLS the model could call:") < text.index("USER:")
+    assert '"required": ["order"]' in text and '[calls lookup_order({"order": 12})]' in text
+    assert "TOOL RESULT:\norder 12: shipped 2026-10-07" in text
+    old = engine.request_text({"input_messages": [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}],
+                               "tools_defined": [["t", '{"name": "t"}']]})                # no logged request
+    assert old == 'SYSTEM:\nS\n\nTOOLS the model could call:\n{"name": "t"}\n\nUSER:\nU'

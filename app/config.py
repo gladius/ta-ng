@@ -17,14 +17,12 @@ AUDIT_SAMPLES = int(os.environ.get("AUDIT_SAMPLES", "5"))
 AUDIT_MIN_EVIDENCE = int(os.environ.get("AUDIT_MIN_EVIDENCE", "1"))
 AUDIT_MAX_PARALLEL = int(os.environ.get("AUDIT_MAX_PARALLEL", "8"))
 # Chars of each output the judge reads; a longer output is unverifiable, never judged safe from a partial view.
-AUDIT_JUDGE_MAX_CHARS = int(os.environ.get("AUDIT_JUDGE_MAX_CHARS", "120000"))
 
 # Reference set: the recorded output plus PROFILE_RERUNS fresh original re-runs; DOWNGRADE_K cheaper re-runs are
 # judged against it. REF_CHARS caps each output packed into a judge prompt; a longer one marks the input unverified.
 AUDIT_PROFILE_RERUNS = int(os.environ.get("AUDIT_PROFILE_RERUNS", "4"))
 AUDIT_DOWNGRADE_K = int(os.environ.get("AUDIT_DOWNGRADE_K", "5"))
 AUDIT_JUDGE_MAX_TOKENS = int(os.environ.get("AUDIT_JUDGE_MAX_TOKENS", "5000"))
-AUDIT_JUDGE_REF_CHARS = int(os.environ.get("AUDIT_JUDGE_REF_CHARS", "16000"))
 
 # Verdict math (validation/engine.py), all fractions. Each cheaper output is judged JUDGE_VOTES times, majority wins;
 # it is safe if its fit rate >= original_consistency - MARGIN. Below COHERENCE_FLOOR the original is too inconsistent
