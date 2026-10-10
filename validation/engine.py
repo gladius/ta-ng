@@ -131,8 +131,8 @@ def validate_many(items, spec, run=None):
         for c, cand in enumerate(it.candidates):
             calls += [(i, c, cand.model)] * spec.candidate_runs
     runs = defaultdict(list)
-    for (i, who, _), r in zip(calls, _pmap_warm(lambda x: _call(run, items[x[0]].request, x[2]), calls,
-                                                lambda x: (x[0], x[2]), spec.max_parallel)):
+    # all at once, as production would send them: no order of ours gives one model's re-runs a cache discount
+    for (i, who, _), r in zip(calls, _pmap(lambda x: _call(run, items[x[0]].request, x[2]), calls, spec.max_parallel)):
         runs[(i, who)].append(r)
     reference = {i: ([_recorded_run(it)] if it.recorded else []) + runs[(i, "ref")] for i, it in enumerate(items)}
     reqs = {i: request_text(it.request) for i, it in enumerate(items)}
