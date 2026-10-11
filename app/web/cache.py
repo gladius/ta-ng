@@ -58,7 +58,7 @@ def site(site: str):
 
 
 @api.post("/refresh")
-def start_refresh(days: int = 14):
+def start_refresh(days: int = 30):
     return {"started": refresh.start(days), **refresh.status()}
 
 

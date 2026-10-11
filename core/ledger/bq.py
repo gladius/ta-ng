@@ -27,15 +27,29 @@ def cfg():
             "time": credentials.get_config("BQ_TIME_COLUMN", "created_timestamp_utc")}
 
 
+_clients = {}
+
+
 def client():
-    return _client(cfg()["project"])
+    project = cfg()["project"]
+    if project not in _clients:
+        _clients[project] = _client(project)
+    return _clients[project]
 
 
 def query(sql, params=None, timeout=600):
     from google.cloud import bigquery
-    qp = [bigquery.ScalarQueryParameter(k, "INT64" if isinstance(v, int) else "STRING", v)
-          for k, v in (params or {}).items()]
-    return list(client().query(sql, job_config=bigquery.QueryJobConfig(query_parameters=qp)).result(timeout=timeout))
+    import datetime
+    def kind(v):
+        return "INT64" if isinstance(v, int) else "DATE" if isinstance(v, datetime.date) else "STRING"
+    qp = [bigquery.ArrayQueryParameter(k, kind(v[0]) if v else "STRING", v) if isinstance(v, list)
+          else bigquery.ScalarQueryParameter(k, kind(v), v) for k, v in (params or {}).items()]
+    from google.auth.exceptions import RefreshError
+    try:
+        return list(client().query(sql, job_config=bigquery.QueryJobConfig(query_parameters=qp)).result(timeout=timeout))
+    except RefreshError:                      # the dev machine's gcloud token expired mid-run: a fresh client, once
+        _clients.pop(cfg()["project"], None)
+        return list(client().query(sql, job_config=bigquery.QueryJobConfig(query_parameters=qp)).result(timeout=timeout))
 
 
 def work(name):

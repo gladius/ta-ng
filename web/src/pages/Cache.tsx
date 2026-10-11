@@ -11,7 +11,7 @@ import { count, Failed, Kpi, Loading, money, Page, pct } from '../ui'
 
 const usd = (v: number | null | undefined) => money(v, 2)
 const INK = '#000000', GOLD = '#F7B500', RED = '#EE0000'
-const WINDOWS = [7, 14, 30] as const
+const WINDOWS = [7, 30, 90] as const
 
 /** The last `n` days of a per-day series. */
 const lastDays = (days: Record<string, Totals>, n: number) => Object.keys(days).sort().slice(-n).map((d) => [d, days[d]] as const)
@@ -81,7 +81,7 @@ function BriefRow({ b }: { b: Brief }) {
 /** Org level: how much is reused, is it getting better, where is the money left. */
 export function CacheOverview() {
   const qc = useQueryClient()
-  const [n, setN] = useState<number>(14)
+  const [n, setN] = useState<number>(30)
   const [find, setFind] = useState('')
   const [page, setPage] = useState(0)
   const PER = 25
@@ -189,7 +189,7 @@ function SiteCard({ s }: { s: Site }) {
 /** One usecase: its reuse, trend, and each call-site as a card. */
 export function CacheUsecase() {
   const { usecase = '' } = useParams()
-  const [n, setN] = useState<number>(14)
+  const [n, setN] = useState<number>(30)
   const q = useQuery({ queryKey: ['cache', 'usecase', usecase], queryFn: () => get<UsecasePage>(`/suite/cache/usecases/${encodeURIComponent(usecase)}`) })
   const crumbs = [{ label: 'Cache' }, { label: 'Cache analysis', to: '/cache' }, { label: usecaseName(usecase) }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
@@ -282,7 +282,7 @@ function TtlTable({ t }: { t: Ttl }) {
 /** One call-site: what it is, what happens now, why, what to do; then the evidence. */
 export function CacheSite() {
   const { site = '' } = useParams()
-  const [n, setN] = useState<number>(14)
+  const [n, setN] = useState<number>(30)
   const q = useQuery({ queryKey: ['cache', 'site', site], queryFn: () => get<SitePage>(`/suite/cache/sites/${site}`) })
   const crumbs = [{ label: 'Cache' }, { label: 'Cache analysis', to: '/cache' }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>

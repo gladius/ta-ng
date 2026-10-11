@@ -110,3 +110,16 @@ app/web/cache.py, web/src/pages/Cache.tsx (org / usecase / call-site pages). Now
    unknown (UC-03/04): those are findings, not bugs.
 Known gaps while testing: Gemini cache-read priced at the catalog's 10 % (Vertex: 25 %), so "saved by cache" is
 overstated for Gemini; no profiler yet (what a call-site does); no rewrite/proof, anomalies or forecasts (step 3).
+
+## Core rebuilt in SQL (2026-10-11, after review)
+The first core downloaded prompts and clustered them in Python and rebuilt every table per refresh; replaced:
+- `core/identity/sql.py`: call-site = hash of a prompt's 10 longest STABLE lines (in >= 50 % of the usecase's prompts,
+  40+ chars, numbers masked); a prompt with no stable line uses its TEMPLATE lines (>= 5 %), which separates several
+  templates under one usecase. Version = the template lines present, counting only lines that are stable or live for
+  a limited run of days (a revision), not a repeating slot value. Layout per site (fixed vs per-call characters, how
+  much fixed text sits after the first per-call line, tool sets) from a sample per site, all in SQL. Tables:
+  `site_lines`, `call_sites` (by day, built incrementally), `sites_daily`, `site_layout`. Scored exact on the replica;
+  whole build ~1 min, refresh ~3 min end to end including ledger, gaps, report.
+- Site ids are strings in the API (64-bit hashes lose precision in JavaScript).
+- Still to do from the review: Postgres summary tables fed per day (the stored-JSON report goes away, pages paged from
+  Postgres); profiler as a core module with its own listing page; incremental ledger/gaps per day.

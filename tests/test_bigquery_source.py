@@ -1,6 +1,7 @@
 """BigQuery source: one logged OpenAI-shaped (request, response) row -> a contract trace, grouped by call-site.
 Offline — the BigQuery client is replaced by a fake."""
 import json
+import os
 
 from connectors.bigquery import source as bq
 
@@ -47,6 +48,9 @@ def test_callsite_grouping():
 
 
 def test_pull_buckets_and_skips(monkeypatch):
+    for k in ("BQ_ID_COLUMN", "BQ_AGENT_COLUMN", "BQ_NODE_COLUMN", "BQ_TIME_COLUMN", "BQ_PARAMS_COLUMN", "BQ_MODEL_COLUMN"):
+        monkeypatch.delenv(k, raising=False)        # an earlier test may have loaded the dev .env into the environment
+    monkeypatch.setattr(bq.credentials, "get_config", lambda k, d=None, **kw: os.environ.get(k) or d)   # not the dev .env
     monkeypatch.setenv("BQ_TABLE", "proj.ds.v_requests")
     monkeypatch.setenv("BQ_REQUEST_COLUMN", "messages")
     monkeypatch.setenv("BQ_RESPONSE_COLUMN", "response")
@@ -75,6 +79,9 @@ def test_pull_buckets_and_skips(monkeypatch):
 
 
 def test_no_adc_falls_back_to_gcloud_login(monkeypatch):
+    for k in ("BQ_ID_COLUMN", "BQ_AGENT_COLUMN", "BQ_NODE_COLUMN", "BQ_TIME_COLUMN", "BQ_PARAMS_COLUMN", "BQ_MODEL_COLUMN"):
+        monkeypatch.delenv(k, raising=False)        # an earlier test may have loaded the dev .env into the environment
+    monkeypatch.setattr(bq.credentials, "get_config", lambda k, d=None, **kw: os.environ.get(k) or d)   # not the dev .env
     monkeypatch.setenv("BQ_TABLE", "proj.ds.v_requests")
     monkeypatch.setenv("BQ_REQUEST_COLUMN", "messages")
     monkeypatch.setenv("BQ_RESPONSE_COLUMN", "response")
@@ -98,6 +105,9 @@ def test_no_adc_falls_back_to_gcloud_login(monkeypatch):
 
 
 def test_lookup_by_request_id(monkeypatch):
+    for k in ("BQ_ID_COLUMN", "BQ_AGENT_COLUMN", "BQ_NODE_COLUMN", "BQ_TIME_COLUMN", "BQ_PARAMS_COLUMN", "BQ_MODEL_COLUMN"):
+        monkeypatch.delenv(k, raising=False)        # an earlier test may have loaded the dev .env into the environment
+    monkeypatch.setattr(bq.credentials, "get_config", lambda k, d=None, **kw: os.environ.get(k) or d)   # not the dev .env
     monkeypatch.setenv("BQ_TABLE", "proj.ds.v_requests")
     monkeypatch.setenv("BQ_REQUEST_COLUMN", "messages")
     monkeypatch.setenv("BQ_RESPONSE_COLUMN", "response")

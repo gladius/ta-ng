@@ -1,10 +1,10 @@
 """The cache report: the ledger, gaps and sites joined per usecase and call-site, with each site's diagnosis and TTL
 what-if. Built by core.ledger.refresh and stored; the API serves it as it is."""
-import json
 from collections import defaultdict
 
 from core import profiler
-from core.ledger import bq, daily, gaps
+from core.identity import sql as identity
+from core.ledger import daily, gaps
 from modules.cache import diagnosis, story, ttl
 
 _SUM = ("calls", "prompt_tokens", "cached_tokens", "written_tokens", "completion_tokens", "calls_cached", "cost",
@@ -38,10 +38,17 @@ def trend(days):
 
 
 def build(days=14):
-    sites = {r["site"]: dict(r) for r in bq.query("SELECT * FROM %s" % bq.work("sites"))}
-    for s in sites.values():
-        s["versions"] = json.loads(s.get("versions") or "[]")
+    sites = {}
+    for r in identity.sites(days):
+        s = dict(r)
+        s["anchors"] = (s.pop("signature") or "").split("\n")
+        s["static_chars"] = int(s["static_chars"] or 0)
+        s["dynamic_chars"] = int(s["dynamic_chars"] or 0)
+        s["static_after_dynamic"] = (s.pop("static_after") or 0) / s["static_chars"] if s["static_chars"] else 0.0
+        s["versions"] = [{"version": str(v["version"]), "first": str(v["first"]), "last": str(v["last"])} for v in s["versions"] or []]
+        s["unsure"] = (s["n"] or 0) < 5 or not s["anchors"][0]
         s["profile"] = profiler.get(s["site"])
+        sites[s["site"]] = s
     led = daily.fetch(days)
     gap = gaps.fetch(days)
     by_site_model = defaultdict(list)

@@ -24,16 +24,15 @@ WITH calls AS (
   FROM `{table}` l
   WHERE DATE(l.`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
     AND JSON_QUERY(l.`{req}`, '$.messages') IS NOT NULL)
-SELECT c.day, c.usecase, s.site, c.model, COUNT(*) AS calls,
+SELECT c.day, c.usecase, CAST(s.site AS STRING) AS site, c.model, COUNT(*) AS calls,
        SUM(c.prompt_tokens) AS prompt_tokens, SUM(c.cached) AS cached_tokens, SUM(c.written) AS written_tokens,
        SUM(c.completion_tokens) AS completion_tokens,
        COUNTIF(c.cached > 0) AS calls_cached,
        SUM(c.cost) AS cost,
        SUM(c.cost + c.cached * (p.input - p.cache_read) / 1e6) AS cost_nocache,
-       AVG(c.duration_ms) AS avg_ms, AVG(c.n_messages) AS avg_messages, COUNTIF(c.has_tools) AS calls_with_tools,
-       LOGICAL_OR(s.unsure) AS unsure
+       AVG(c.duration_ms) AS avg_ms, AVG(c.n_messages) AS avg_messages, COUNTIF(c.has_tools) AS calls_with_tools
 FROM calls c
-LEFT JOIN {sites} s ON s.id = c.id
+LEFT JOIN {sites} s ON s.id = c.id AND s.day = c.day
 LEFT JOIN {prices} p ON p.model = c.model
 GROUP BY 1, 2, 3, 4
 """

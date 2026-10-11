@@ -24,9 +24,9 @@ seq AS (
   SELECT c.*, s.site,
          TIMESTAMP_DIFF(c.ts, LAG(c.ts) OVER w, SECOND) AS gap,
          MIN(c.prompt_tokens) OVER (PARTITION BY c.usecase, s.site, c.model, c.prefix_key) AS prefix_tokens
-  FROM calls c LEFT JOIN {sites} s ON s.id = c.id
+  FROM calls c LEFT JOIN {sites} s ON s.id = c.id AND s.day = c.day
   WINDOW w AS (PARTITION BY c.usecase, s.site, c.model, c.prefix_key ORDER BY c.ts))
-SELECT day, usecase, site, model,
+SELECT day, usecase, CAST(site AS STRING) AS site, model,
        CASE WHEN gap IS NULL THEN 'first' {cases} ELSE 'more' END AS bucket,
        COUNT(*) AS calls, SUM(prefix_tokens) AS prefix_tokens, SUM(prompt_tokens) AS prompt_tokens,
        SUM(cached) AS cached, SUM(written) AS written
