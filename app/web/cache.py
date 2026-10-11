@@ -14,16 +14,27 @@ def _report():
     return rep
 
 
+def _brief(u, s):
+    p = s.get("profile") or {}
+    return {"usecase": u["usecase"], "site": s["site"], "name": p.get("name") or (s["anchors"][0][:60] if s["anchors"] else s["site"]),
+            "does": p.get("does", ""), "calls": s["total"]["calls"], "share": s["story"]["share"], "cause": s["story"]["cause"],
+            "action": s["story"]["action"], "worth": s["saving"], "proof": s["story"]["proof"]}
+
+
 @api.get("/overview")
 def overview():
+    """The org level: the reuse share and its trend, the biggest opportunities, what dropped, and every usecase."""
     rep = _report()
+    sites = [(u, s) for u in rep["usecases"].values() for s in u["sites"]]
+    opportunities = [_brief(u, s) for u, s in sorted(sites, key=lambda x: -x[1]["saving"]) if s["saving"] > 0][:10]
+    dropped = [_brief(u, s) | {"trend": s["trend"]} for u, s in sites if s.get("trend") and s["trend"]["delta"] <= -0.05]
     return {"built_at": rep.get("built_at"), "window": rep["days"], "daily": rep.get("daily", {}), "total": rep["total"],
-            "saving": rep["saving"],
-            "usecases": [{"usecase": u["usecase"], "total": u["total"], "saving": u["saving"], "days": u["days"],
-                          "sites": len(u["sites"]),
-                          "causes": sorted({m["diagnosis"]["cause"] for s in u["sites"] for m in s["models"].values()
-                                            if m.get("diagnosis")})}
-                         for u in sorted(rep["usecases"].values(), key=lambda u: -u["total"]["cost"])],
+            "saving": rep["saving"], "trend": rep.get("trend"), "opportunities": opportunities,
+            "dropped": sorted(dropped, key=lambda b: b["trend"]["delta"]),
+            "usecases": [{"usecase": u["usecase"], "total": u["total"], "saving": u["saving"], "trend": u.get("trend"),
+                          "sites": len(u["sites"]), "unsure": any(s["unsure"] for s in u["sites"]),
+                          "causes": sorted({s["story"]["cause"] for s in u["sites"] if s["story"]["cause"]})}
+                         for u in sorted(rep["usecases"].values(), key=lambda u: (-u["saving"], -u["total"]["cost"]))],
             "status": refresh.status()}
 
 

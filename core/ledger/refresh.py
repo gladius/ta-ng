@@ -4,6 +4,7 @@ import datetime
 import threading
 
 from app.services import store
+from core import profiler
 from core.ledger import daily, gaps, sites
 
 KEY = ("cache", "report")
@@ -17,7 +18,8 @@ def run(days=14):
     with _lock:
         _state.update(running=True, error=None)
     try:
-        sites.build(days)
+        for row in sites.build(days):                 # name each call-site once (cached by id)
+            profiler.profile(row["site"], row["sample_prompt"], row["sample_tools"])
         daily.build(days)
         gaps.build(days)
         rep = report.build(days)

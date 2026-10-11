@@ -344,3 +344,15 @@ tr.dim { opacity: 0.45; }
 .diag p { margin: 0; max-width: 80ch; }
 .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); border-top: 1px solid var(--line-soft); }
 .two > div + div { border-left: 1px solid var(--line-soft); }
+.two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+.brief { padding: 12px 20px; border-top: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.brief p { margin: 0; }
+.trend { font-size: 12px; color: var(--ink-2); }
+.trend.down { color: var(--red); font-weight: 600; }
+.trend.up { color: var(--ink); font-weight: 600; }
+.site-card { padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; }
+.site-card p { margin: 0; max-width: 90ch; }
+.lede { margin: 4px 0 8px; font-size: 15px; color: var(--ink-2); max-width: 80ch; }
+.story h2 { margin-bottom: 8px; }
+.story > div + div { border-top: 1px solid var(--line-soft); }
+.story p { max-width: 90ch; }

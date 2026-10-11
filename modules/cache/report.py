@@ -3,8 +3,9 @@ what-if. Built by core.ledger.refresh and stored; the API serves it as it is."""
 import json
 from collections import defaultdict
 
+from core import profiler
 from core.ledger import bq, daily, gaps
-from modules.cache import diagnosis, ttl
+from modules.cache import diagnosis, story, ttl
 
 _SUM = ("calls", "prompt_tokens", "cached_tokens", "written_tokens", "completion_tokens", "calls_cached", "cost",
         "cost_nocache", "calls_with_tools")
@@ -19,10 +20,28 @@ def _sum(rows):
     return out
 
 
+def _share(d):
+    return d["cached_tokens"] / d["prompt_tokens"] if d.get("prompt_tokens") else 0.0
+
+
+def trend(days):
+    """Reuse share over the last 7 days against the 7 before: (recent, before, delta) or None."""
+    keys = sorted(days)
+    if len(keys) < 8:
+        return None
+    recent = _sum([days[k] for k in keys[-7:]])
+    before = _sum([days[k] for k in keys[-14:-7]])
+    if not before["prompt_tokens"]:
+        return None
+    return {"recent": round(_share(recent), 3), "before": round(_share(before), 3),
+            "delta": round(_share(recent) - _share(before), 3)}
+
+
 def build(days=14):
     sites = {r["site"]: dict(r) for r in bq.query("SELECT * FROM %s" % bq.work("sites"))}
     for s in sites.values():
         s["versions"] = json.loads(s.get("versions") or "[]")
+        s["profile"] = profiler.get(s["site"])
     led = daily.fetch(days)
     gap = gaps.fetch(days)
     by_site_model = defaultdict(list)
@@ -44,6 +63,7 @@ def build(days=14):
         s = sites.get(site)
         diag = diagnosis.diagnose(s, tot, t) if s else None
         entry = u["sites"].setdefault(site, {"site": site, "anchors": (s or {}).get("anchors", []),
+                                             "profile": (s or {}).get("profile"),
                                              "unsure": (s or {}).get("unsure", True), "versions": (s or {}).get("versions", []),
                                              "layout": {k: (s or {}).get(k) for k in ("static_chars", "dynamic_chars",
                                                                                       "static_after_dynamic", "tool_sets")},
@@ -59,10 +79,12 @@ def build(days=14):
             s["days"] = dict(s["days"])
             s["total"] = _sum(list(s["models"].values()))
             s["saving"] = round(sum((m["diagnosis"] or {}).get("saving", 0) for m in s["models"].values()), 2)
+            s["story"] = story.tell(s, days)
+            s["trend"] = trend(s["days"])
         tot = _sum([s["total"] for s in u["sites"].values()])
-        out["usecases"][uc] = {"usecase": uc, "total": tot, "days": dict(u["days"]),
+        out["usecases"][uc] = {"usecase": uc, "total": tot, "days": dict(u["days"]), "trend": trend(dict(u["days"])),
                                "saving": round(sum(s["saving"] for s in u["sites"].values()), 2),
-                               "sites": sorted(u["sites"].values(), key=lambda s: -s["total"]["cost"])}
+                               "sites": sorted(u["sites"].values(), key=lambda s: (-s["saving"], -s["total"]["cost"]))}
     out["total"] = _sum([u["total"] for u in out["usecases"].values()])
     by_day = defaultdict(lambda: {k: 0 for k in _SUM})
     for u in out["usecases"].values():
@@ -70,5 +92,6 @@ def build(days=14):
             for k in _SUM:
                 by_day[day][k] += d[k]
     out["daily"] = dict(by_day)
+    out["trend"] = trend(out["daily"])
     out["saving"] = round(sum(u["saving"] for u in out["usecases"].values()), 2)
     return out
