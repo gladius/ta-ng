@@ -22,9 +22,9 @@ export default function Home() {
           ))}
         </section>
         <section className="panel tile">
-          <div className="tile-head"><h2>Agent audits</h2></div>
-          <p className="muted">Whether a cheaper tier or an open-weight model keeps an agent's behaviour.</p>
-          <div className="row"><Link className="btn primary" to="/sources">Audit an agent</Link><Link className="btn" to="/models">Model catalog</Link></div>
+          <div className="tile-head"><h2>Model checks</h2><Link to="/checks">All checks</Link></div>
+          <p className="muted">Would a cheaper, open-weight or newly released model hold on a usecase's call-sites? Sampled from the log, re-run and judged with evidence.</p>
+          <div className="row"><Link className="btn primary" to="/usecases">Pick a usecase</Link><Link className="btn" to="/models">Model catalog</Link></div>
         </section>
         <section className="panel tile">
           <div className="tile-head"><h2>Cache</h2><Link to="/cache">Cache analysis</Link></div>
