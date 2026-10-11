@@ -21,7 +21,10 @@ def run(days=30):
     try:
         identity.build(days)
         for site in identity.sites(days):             # name each new call-site once
-            if not profiler.get(site["site"]):
+            have = profiler.get(site["site"])
+            if have and not have.get("usecase") and site["usecase"]:
+                profiler.put(site["site"], site["usecase"], have)   # profiled before the usecase was stored
+            if not have:
                 req = identity.sample_request(site["site"], days) or {}
                 msgs = req.get("messages") or [{}]
                 c = msgs[0].get("content")
