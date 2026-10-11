@@ -19,11 +19,7 @@ def run(days=30):
     with _lock:
         _state.update(running=True, error=None)
     try:
-        identity.build_lines(days)
-        done = identity.built_days()
-        present = identity.log_days(days)             # every day of the window not built yet, and the latest again
-        identity.assign_days([d for d in present if str(d) not in done or d == max(present)])
-        identity.build_layout(days)
+        identity.build(days)
         for site in identity.sites(days):             # name each new call-site once
             if not profiler.get(site["site"]):
                 req = identity.sample_request(site["site"], days) or {}
@@ -31,7 +27,8 @@ def run(days=30):
                 c = msgs[0].get("content")
                 system = "\n".join(p.get("text", "") for p in c if isinstance(p, dict)) if isinstance(c, list) else (c or "")
                 first_user = next((m.get("content") for m in msgs[1:] if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
-                profiler.profile(site["site"], system, [t.get("function", {}).get("name", "") for t in req.get("tools") or []], first_user)
+                profiler.profile(site["site"], site["usecase"], system,
+                                 [t.get("function", {}).get("name", "") for t in req.get("tools") or []], first_user)
         daily.build(days)
         gaps.build(days)
         rep = report.build(days)

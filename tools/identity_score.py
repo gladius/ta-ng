@@ -3,7 +3,7 @@
     BQ_TABLE=trust-router-sandbox.litellm.llm_log BQ_AGENT_COLUMN=vegas_usecase_name BQ_ID_COLUMN=vegas_common_services_txn_id \\
       .venv/bin/python tools/identity_score.py [--days 14] [--build]
 
---build computes the line shares and assigns every day of the window not built yet. Truth: the orchestrator's roles are distinct
+--build recomputes the identity for the window first. Truth: the orchestrator's roles are distinct
 call-sites; every other usecase is one call-site (its versions are versions of it). Purity = share of a found site's
 rows that belong to its majority true site; completeness = share of a true site's rows in its majority found site.
 """
@@ -32,11 +32,7 @@ GROUP BY 1
 
 def main(days, build):
     if build:
-        import datetime
-        identity.build_lines(days)
-        done = identity.built_days()
-        identity.assign_days([d for d in identity.log_days(days) if str(d) not in done])
-        identity.build_layout(days)
+        identity.build(days)
         print("%d sites" % len(identity.sites(days)))
     c = bq.cfg()
     rows = bq.query(_SQL.format(assign=bq.work("call_sites"), **c))
