@@ -73,7 +73,7 @@ modules/router/  later
 web/             React suite; three entry points on the same data: org, usecase, call-site
 ```
 Rules: modules depend on core, never on each other; our DB holds summaries and verdicts, never log rows; one
-scheduled ledger refresh a day plus on demand; per-call-site numbers carry the grouping's confidence.
+refresh on demand (the Refresh button / POST /api/suite/cache/refresh; a schedule is a deployment decision, later); per-call-site numbers carry the grouping's confidence.
 Audiences: executives (paid / saved / missed, trend, top opportunities), central team (fleet ranking, diagnoses),
 usecase teams (their call-sites, charts, suggestions, proof status, before/after).
 Visuals per call-site: cache timeline (write / read / miss with the TTL window), gap histogram with the cost-vs-TTL
@@ -96,3 +96,17 @@ mix, embeddings, latency vs cost).
 4. Profiler into core; tokenomics views.
 Data needs none of: LangSmith (optional accuracy check only), trajectories beyond what orch/trace ids and message
 history give, Gemini on the gateway (only for validating Vegas usecases later).
+
+## Production test (next, before step 3) — 2026-10-11
+Step 2 DONE on the replica: core/ledger/gaps.py, modules/cache/{rules,ttl,diagnosis,report}.py, core/ledger/refresh.py,
+app/web/cache.py, web/src/pages/Cache.tsx (org / usecase / call-site pages). Now run it on the real log:
+1. Deploy branch `cache-module` to the production environment with `.env`:
+   BQ_TABLE=<project.dataset.vegas_table> BQ_REQUEST_COLUMN=request_payload BQ_RESPONSE_COLUMN=response_payload
+   BQ_ID_COLUMN=vegas_common_services_txn_id BQ_AGENT_COLUMN=vegas_usecase_name BQ_TIME_COLUMN=created_timestamp_utc
+   BQ_WORK_DATASET=<a dataset the service account may create tables in> (unset = the log's dataset)
+2. `POST /api/suite/cache/refresh?days=1` first (sizes the scan: the two JSON columns over ~8M rows/day), then 14.
+3. Read the usecase pages: "grouping unsure" chips, the number of call-sites per usecase against the counts in
+   docs/vegas-common-log.md (UC-01 is the test), the causes. Expect "unexplained" where the provider's behaviour is
+   unknown (UC-03/04): those are findings, not bugs.
+Known gaps while testing: Gemini cache-read priced at the catalog's 10 % (Vertex: 25 %), so "saved by cache" is
+overstated for Gemini; no profiler yet (what a call-site does); no rewrite/proof, anomalies or forecasts (step 3).
