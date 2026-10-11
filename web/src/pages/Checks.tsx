@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { get } from '../api'
+import { get, type JobStatus, type ResultsPage } from '../api'
 import { usecaseName } from '../cache'
-import { count, Failed, Loading, money, Page, pct, when } from '../ui'
+import { AnswersBar, count, Failed, Legend, Loading, money, ms, Page, pct, Squares, verdictWord, VsBar, when } from '../ui'
 
 export type Verdict = { requests: number; within: number; outside: number; unverified: number; pass_rate: number; cost_vs_original_pct: number | null; latency_vs_original_pct: number | null; fit_rate: number | null; verdict: 'passes' | 'drifts' | 'not verified' }
 export type Check = {
@@ -88,42 +88,95 @@ export function Checks() {
   )
 }
 
-/** One check: per call-site and candidate, the verdict with the evidence link. */
+/** One check: per call-site, the same evidence the validation page shows: answers by category, the original's
+    own agreement, cost and latency against it, and every sampled request with why it was picked and how each
+    candidate did, linking to the request's review. */
 export function CheckDetail() {
   const { checkId = '' } = useParams()
   const qc = useQueryClient()
   const q = useQuery({ queryKey: ['checks', checkId], queryFn: () => get<CheckPage>(`/suite/checks/${checkId}`),
     refetchInterval: (query) => (['sampling', 'queued', 'running'].includes(query.state.data?.status ?? '') ? 5000 : false) })
+  const jobId = q.data?.job?.id
+  const job = useQuery({ queryKey: ['job', jobId], queryFn: () => get<JobStatus>(`/validations/${jobId}`), enabled: !!jobId,
+    refetchInterval: (query) => (query.state.data && ['queued', 'running'].includes(query.state.data.status) ? 5000 : false) })
+  const results = useQuery({ queryKey: ['results', jobId, 'check', job.data?.items_done], queryFn: () => get<ResultsPage>(`/validations/${jobId}/results?per_page=200`), enabled: !!jobId })
   const crumbs = [{ label: 'Models' }, { label: 'Checks', to: '/checks' }, { label: checkId }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const c = q.data
-  const sites = Object.keys(c.samples)
+  const j = job.data
+  const rows = results.data?.results ?? []
+  const spec = j?.spec
   return (
     <Page crumbs={crumbs}>
       <div className="head">
         <div><h1>Check {c.id}</h1><span className="muted">{usecaseName(c.usecase)} · {PRESET[c.preset]}{c.candidates.length > 0 && ` (${c.candidates.join(', ')})`} · started {when(c.created_at)} by {c.trigger}</span></div>
-        <div className="row"><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.job && <Link className="btn" to={`/validations/${c.job.id}`}>Evidence (job {c.job.id})</Link>}</div>
+        <div className="row"><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.job && <Link className="btn" to={`/validations/${c.job.id}`}>Validation batch {c.job.id}</Link>}</div>
       </div>
       {c.error && <p className="error" role="alert">{c.error}</p>}
-      {c.job && <p className="muted">{c.job.items_done} of {c.job.items_total} sampled requests done · spent {money(c.job.spend_usd, 2)}{c.max_budget_usd != null && ` of ${money(c.max_budget_usd, 2)}`}{c.job.stop_reason && ` · ${c.job.stop_reason}`}</p>}
-      {sites.map((st) => {
-        const by = c.summary?.[st] ?? {}
+      {j && spec && (
+        <p className="muted">Each sampled request: the original re-run {spec.reference_runs}× beside its logged answer, each candidate {spec.candidate_runs}×; judge {spec.judge_model}, {spec.votes} votes when an answer isn't a pass. {j.items_done} of {j.items_total} done · spent {money(j.spend_usd, 2)}{c.max_budget_usd != null && ` of ${money(c.max_budget_usd, 2)}`}{j.stop_reason && ` · ${j.stop_reason}`}</p>
+      )}
+      {Object.keys(c.samples).map((st) => {
+        const ids = new Set(c.samples[st].map((s) => s.id))
+        const why = Object.fromEntries(c.samples[st].map((s) => [s.id, s.why]))
+        const mine = rows.filter((r) => ids.has(r.id))
+        const labels = [...new Set(mine.flatMap((r) => r.candidates.map((x) => x.label)))]
+        const agg = labels.map((label) => {
+          const cs = mine.map((r) => r.candidates.find((x) => x.label === label)).filter((x): x is NonNullable<typeof x> => !!x)
+          const answers = cs.reduce((a, x) => { for (const k of ['match', 'acceptable', 'drift', 'unclear'] as const) a[k] += x.answers?.[k] ?? 0; return a }, { match: 0, acceptable: 0, drift: 0, unclear: 0 })
+          const avg = (xs: (number | null)[]) => { const v = xs.filter((x): x is number => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null }
+          return { label, requests: cs.length, within: cs.filter((x) => x.verdict === 'within').length, outside: cs.filter((x) => x.verdict === 'outside').length,
+            unverified: cs.filter((x) => x.verdict === 'unverified').length, answers, cost: avg(cs.map((x) => x.cost_usd)), lat: avg(cs.map((x) => x.latency_ms)) }
+        })
+        const baseCost = mine.length ? mine.map((r) => r.reference.runs.filter((x) => !x.recorded && x.cost_usd != null).map((x) => x.cost_usd as number)).flat() : []
+        const baseLat = mine.length ? mine.map((r) => r.reference.runs.filter((x) => !x.recorded && x.latency_ms != null).map((x) => x.latency_ms as number)).flat() : []
+        const bc = baseCost.length ? baseCost.reduce((a, b) => a + b, 0) / baseCost.length : null
+        const bl = baseLat.length ? baseLat.reduce((a, b) => a + b, 0) / baseLat.length : null
+        const cons = mine.filter((r) => r.reference.consistency != null)
+        const consistency = cons.length ? cons.reduce((a, r) => a + (r.reference.consistency as number), 0) / cons.length : null
         return (
           <section key={st} className="panel">
-            <div className="panel-head"><b><Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}/callsites/${st}`}>{c.site_names[st]}</Link></b><span className="muted">{count(c.samples[st].length, 'sampled request')}: {[...new Set(c.samples[st].map((s) => s.why))].join(', ')}</span></div>
-            {Object.keys(by).length ? (
-              <table className="grid">
-                <thead><tr><th>Candidate</th><th>Verdict</th><th className="num">Pass rate</th><th className="num">Fit of answers</th><th className="num">Cost vs original</th><th className="num">Latency vs original</th></tr></thead>
-                <tbody>
-                  {Object.entries(by).map(([cand, v]) => (
-                    <tr key={cand}><td className="mono">{cand}</td><td><VerdictChip v={v} /></td><td className="num mono">{pct(v.pass_rate)}</td><td className="num mono">{v.fit_rate == null ? '—' : pct(v.fit_rate)}</td>
-                      <td className="num mono">{v.cost_vs_original_pct == null ? '—' : (v.cost_vs_original_pct > 0 ? '+' : '') + v.cost_vs_original_pct + '%'}</td>
-                      <td className="num mono">{v.latency_vs_original_pct == null ? '—' : (v.latency_vs_original_pct > 0 ? '+' : '') + v.latency_vs_original_pct + '%'}</td></tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : <p className="muted pad">{c.status === 'done' ? 'No candidate was run for this call-site (no cheaper or open-weight model for its original in the catalog).' : 'Waiting for the job…'}</p>}
+            <div className="panel-head"><b><Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}/callsites/${st}`}>{c.site_names[st]}</Link></b><span className="muted">{count(c.samples[st].length, 'sampled request')}</span></div>
+            {mine.length > 0 && (
+              <>
+                <div className="scroll">
+                  <table className="grid">
+                    <thead><tr><th>Model</th><th>Answers</th><th>Requests</th><th>Cost / call</th><th>Latency</th></tr></thead>
+                    <tbody>
+                      <tr className="base-row"><td><b>original</b></td><td className="muted">baseline · its own answers agree {pct(consistency)}</td><td className="muted">{mine.length}</td>
+                        <td><VsBar value={bc} base={bc} shown={money(bc)} isBase /></td><td><VsBar value={bl} base={bl} shown={ms(bl)} isBase /></td></tr>
+                      {agg.map((s) => (
+                        <tr key={s.label}><td><b>{s.label}</b></td><td><AnswersBar a={s.answers} /></td>
+                          <td className="nowrap"><b>{s.within}</b> pass <span className="muted">of {s.requests}</span>{s.outside > 0 && <div className="muted">{count(s.outside, 'drift')}</div>}{s.unverified > 0 && <div className="muted">{s.unverified} not verified</div>}</td>
+                          <td><VsBar value={s.cost} base={bc} shown={money(s.cost)} /></td><td><VsBar value={s.lat} base={bl} shown={ms(s.lat)} /></td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <Legend />
+                <div className="scroll">
+                  <table className="grid">
+                    <thead><tr><th>Sampled request</th><th>Why picked</th><th>Original agrees</th>{labels.map((l) => <th key={l}>{l}</th>)}</tr></thead>
+                    <tbody>
+                      {mine.map((r) => {
+                        const url = `/validations/${c.job!.id}/requests/${encodeURIComponent(r.id)}`
+                        return (
+                          <tr key={r.id}>
+                            <td className="mono"><Link to={url}>{r.id.slice(0, 18)}</Link></td>
+                            <td className="muted">{why[r.id]}</td>
+                            <td className="mono">{r.reference.agree ?? '?'}/{r.reference.of}</td>
+                            {labels.map((l) => { const x = r.candidates.find((y) => y.label === l); return (
+                              <td key={l}>{x ? <Link className={'cell v-' + x.verdict} to={`${url}?cand=${encodeURIComponent(l)}`} title={x.judge_reason || x.reason}>{verdictWord[x.verdict]} <Squares runs={x.runs} /></Link> : <span className="muted">—</span>}</td>) })}
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+            {!mine.length && <p className="muted pad">{c.status === 'done' ? 'No candidate was run for this call-site (no cheaper or open-weight model for its original in the catalog).' : 'Waiting for the job…'}</p>}
           </section>
         )
       })}
