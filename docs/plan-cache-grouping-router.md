@@ -84,6 +84,13 @@ mix, embeddings, latency vs cost).
 
 ## Build order (branch `cache-module`), review after each
 1. core/identity + core/ledger on the replica, scored against `synthetic` (grouping: over-splits and merges).
+   DONE 2026-10-11: `core/identity/skeleton.py` (masked lines, greedy clustering by character-weighted containment
+   of the cluster core, merge pass, anchors, daily-skeleton versions), `core/ledger/sites.py` (sample -> `sites`
+   table -> SQL assignment of every row into `call_sites` by anchor presence), `core/ledger/daily.py`
+   (`ledger_daily`: usecase x site x model x day; logged cost + cost_nocache from the catalog). Score on the replica
+   via `tools/identity_score.py --build`: 100 % purity and completeness on all 14 usecases, versions exact; known
+   limit: two versions live at once (A/B) read as one. Boundary: nothing in core/ or modules/ knows the test data;
+   "synthetic" exists only in tools/llm_log.py (generator), the `synthetic` column, and tools/identity_score.py.
 2. modules/cache: diagnosis, TTL replay, prefix suggestions; the three page levels with the charts.
 3. Rewrite + proof through the validation engine; monitoring with anomalies and forecasts.
 4. Profiler into core; tokenomics views.
