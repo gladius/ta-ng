@@ -176,7 +176,7 @@ function SiteCard({ s }: { s: Site }) {
   return (
     <section className="panel site-card">
       <div className="spread">
-        <div><Link to={`/cache/sites/${s.site}`}><b>{siteName(s)}</b></Link>{s.profile && <span className="muted"> · {s.profile.does}</span>}</div>
+        <div><Link to={`/cache/sites/${s.site}`}><b>{siteName(s)}</b></Link>{s.profile && <span className="muted"> · {s.profile.does}</span>} <Link className="muted" to={`/callsites/${s.site}`}>identity and profile</Link></div>
         {s.story.worth > 0 && <b className="nowrap">{usd(s.story.worth)}</b>}
       </div>
       <div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} />{s.unsure && <span className="chip warn">grouping unsure</span>}<TrendWord t={s.trend} /></div>
@@ -302,6 +302,7 @@ export function CacheSite() {
             {Object.keys(s.models).map((m) => <span key={m} className="chip mono">{m}</span>)}
             <span className="chip">{count(s.versions.length, 'prompt version')}</span>
             {s.unsure && <span className="chip warn">grouping unsure</span>}
+            <Link to={`/callsites/${s.site}`}>identity and profile</Link>
           </div>
         </div>
         <WindowPick n={n} set={setN} max={s.window} />

@@ -6,6 +6,7 @@ import threading
 from app.services import store
 from core import profiler
 from core.identity import sql as identity
+from core.identity import store as callsite_store
 from core.ledger import daily, gaps
 
 KEY = ("cache", "report")
@@ -20,7 +21,9 @@ def run(days=30):
         _state.update(running=True, error=None)
     try:
         identity.build(days)
-        for site in identity.sites(days):             # name each new call-site once
+        found = identity.sites(days)
+        callsite_store.sync(found, days)              # the pages' call-sites table
+        for site in found:                            # name each new call-site once
             have = profiler.get(site["site"])
             if have and not have.get("usecase") and site["usecase"]:
                 profiler.put(site["site"], site["usecase"], have)   # profiled before the usecase was stored

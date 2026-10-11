@@ -45,7 +45,7 @@ export default function Shell() {
         </div>
         <div className="group">
           <span className="group-name">Call-sites</span>
-          <Entry icon={Fingerprint} label="Profiles" to="/profiles" />
+          <Entry icon={Fingerprint} label="Call-sites" to="/callsites" />
         </div>
         <div className="group">
           <span className="group-name">Models</span>

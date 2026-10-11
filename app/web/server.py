@@ -27,11 +27,12 @@ async def _lifespan(app):
 
 app = FastAPI(title="Token Auditor", lifespan=_lifespan)
 
-from app.web import cache, profiles, suite, validations             # noqa: E402  the APIs and the downloads
+from app.web import cache, callsites, profiles, suite, validations  # noqa: E402  the APIs and the downloads
 app.include_router(validations.api)
 app.include_router(suite.api)
 app.include_router(cache.api)
 app.include_router(profiles.api)
+app.include_router(callsites.api)
 
 
 def _openapi():
