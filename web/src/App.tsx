@@ -31,9 +31,9 @@ export default function App() {
         <Route path="agents/:source/:ws/:project/report" element={<Report />} />
         <Route path="agents/:source/:ws/:project/profile" element={<Profile />} />
         <Route path="agents/:source/:ws/:project/analyze" element={<Analyze />} />
-        <Route path="callsites" element={<CallSiteUsecases />} />
-        <Route path="callsites/usecases/:usecase" element={<CallSiteUsecase />} />
-        <Route path="callsites/:site" element={<CallSite />} />
+        <Route path="usecases" element={<CallSiteUsecases />} />
+        <Route path="usecases/:usecase" element={<CallSiteUsecase />} />
+        <Route path="usecases/:usecase/callsites/:site" element={<CallSite />} />
         <Route path="cache" element={<CacheOverview />} />
         <Route path="cache/usecases/:usecase" element={<CacheUsecase />} />
         <Route path="cache/sites/:site" element={<CacheSite />} />

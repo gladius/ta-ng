@@ -172,11 +172,11 @@ function ShareBar({ share, could }: { share: number; could?: number }) {
 }
 
 /** One call-site as a card: what it is, what happens, what to do. */
-function SiteCard({ s }: { s: Site }) {
+function SiteCard({ s, usecase }: { s: Site; usecase: string | null }) {
   return (
     <section className="panel site-card">
       <div className="spread">
-        <div><Link to={`/cache/sites/${s.site}`}><b>{siteName(s)}</b></Link>{s.profile && <span className="muted"> · {s.profile.does}</span>} <Link className="muted" to={`/callsites/${s.site}`}>identity and profile</Link></div>
+        <div><Link to={`/cache/sites/${s.site}`}><b>{siteName(s)}</b></Link>{s.profile && <span className="muted"> · {s.profile.does}</span>} <Link className="muted" to={`/usecases/${encodeURIComponent(usecase ?? 'None')}/callsites/${s.site}`}>identity and profile</Link></div>
         {s.story.worth > 0 && <b className="nowrap">{usd(s.story.worth)}</b>}
       </div>
       <div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} />{s.unsure && <span className="chip warn">grouping unsure</span>}<TrendWord t={s.trend} /></div>
@@ -207,7 +207,7 @@ export function CacheUsecase() {
       </div>
       <section className="panel"><div className="panel-head"><b>Reused from cache, per day</b></div><ReuseTrend days={u.days} n={n} /></section>
       <h2>{count(u.sites.length, 'call-site')} <span className="muted">a call-site is one prompt template this usecase sends; the ones with something to fix come first</span></h2>
-      {u.sites.map((s) => <SiteCard key={s.site} s={s} />)}
+      {u.sites.map((s) => <SiteCard key={s.site} s={s} usecase={u.usecase} />)}
     </Page>
   )
 }
@@ -302,7 +302,7 @@ export function CacheSite() {
             {Object.keys(s.models).map((m) => <span key={m} className="chip mono">{m}</span>)}
             <span className="chip">{count(s.versions.length, 'prompt version')}</span>
             {s.unsure && <span className="chip warn">grouping unsure</span>}
-            <Link to={`/callsites/${s.site}`}>identity and profile</Link>
+            <Link to={`/usecases/${encodeURIComponent(s.usecase ?? 'None')}/callsites/${s.site}`}>identity and profile</Link>
           </div>
         </div>
         <WindowPick n={n} set={setN} max={s.window} />

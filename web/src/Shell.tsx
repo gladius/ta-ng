@@ -44,8 +44,8 @@ export default function Shell() {
           <Entry icon={LayoutDashboard} label="Overview" to="/" end />
         </div>
         <div className="group">
-          <span className="group-name">Call-sites</span>
-          <Entry icon={Fingerprint} label="Call-sites" to="/callsites" />
+          <span className="group-name">Profiles</span>
+          <Entry icon={Fingerprint} label="Usecases" to="/usecases" />
         </div>
         <div className="group">
           <span className="group-name">Models</span>
