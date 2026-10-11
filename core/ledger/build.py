@@ -8,8 +8,8 @@ to a minority template and uses its template lines. The hash of the signature is
 retrieved passages and short slot lines never reach it, wherever they sit. A version is the set of long template
 lines the prompt holds that are stable or live for a limited run of days (a revision, not a repeating slot value).
 
-Temp tables the script leaves in the session: site_lines, call_sites, sites_daily, site_layout, ledger_daily,
-cache_gaps. The fetch_* functions read them; nothing is written to the customer's dataset.
+Temp tables the script leaves in the session: site_lines, call_rows, sites_daily, site_layout, ledger_daily,
+cache_gaps (per site and model). The fetch_* functions read them; nothing is written to the customer's dataset.
 """
 from core.ledger import bq
 
@@ -122,16 +122,16 @@ SELECT c.day, c.usecase, c.site, c.model, COUNT(*) AS calls,
 FROM call_rows c LEFT JOIN prices p ON p.model = c.model
 GROUP BY 1, 2, 3, 4;
 
--- 5. gaps: time since the previous call sharing the prefix, bucketed
+-- 5. gaps: time since the previous call sharing the prefix, bucketed, per site and model over the window
 CREATE TEMP TABLE cache_gaps AS
 WITH seq AS (
   SELECT c.*, TIMESTAMP_DIFF(c.ts, LAG(c.ts) OVER w, SECOND) AS gap,
          MIN(c.prompt_tokens) OVER (PARTITION BY c.usecase, c.site, c.model, c.prefix_key) AS prefix_tokens
   FROM call_rows c WINDOW w AS (PARTITION BY c.usecase, c.site, c.model, c.prefix_key ORDER BY c.ts))
-SELECT day, usecase, site, model, CASE WHEN gap IS NULL THEN 'first' {cases} ELSE 'more' END AS bucket,
+SELECT usecase, site, model, CASE WHEN gap IS NULL THEN 'first' {cases} ELSE 'more' END AS bucket,
        COUNT(*) AS calls, SUM(prefix_tokens) AS prefix_tokens, SUM(prompt_tokens) AS prompt_tokens,
        SUM(cached) AS cached, SUM(written) AS written
-FROM seq GROUP BY 1, 2, 3, 4, 5;
+FROM seq GROUP BY 1, 2, 3, 4;
 """
 
 _SITES = """
@@ -147,7 +147,6 @@ FROM sites_daily s JOIN vers v ON v.usecase IS NOT DISTINCT FROM s.usecase AND v
 LEFT JOIN site_layout y ON y.site = s.site
 GROUP BY 1, 2
 """
-_USECASE_LINES = "SELECT usecase, line, share, limited_days FROM site_lines WHERE share >= %s" % STABLE
 _LEDGER = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM ledger_daily"
 _GAPS = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM cache_gaps"
 _SAMPLE = """
@@ -177,9 +176,6 @@ class Build:
 
     def sites(self):
         return [dict(r) for r in self.s.query(_SITES)]
-
-    def usecase_lines(self):
-        return [dict(r) for r in self.s.query(_USECASE_LINES)]
 
     def ledger(self):
         return [dict(r) for r in self.s.query(_LEDGER)]

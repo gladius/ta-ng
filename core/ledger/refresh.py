@@ -1,14 +1,24 @@
-"""One refresh: the BigQuery script (identity, ledger, gaps; temp tables only) -> the app's tables -> profiles for
-new call-sites -> the cache diagnoses. Run from the Cache analysis page or POST /api/suite/cache/refresh."""
+"""One refresh: the BigQuery script (identity, ledger, gaps; temp tables only, nothing written there) -> the
+call-site records and the daily ledger in the app's database -> a profile for each new call-site -> the cache
+decision on each record. Run from the Cache analysis page or POST /api/suite/cache/refresh."""
 import datetime
 import threading
 
 from core import profiler
-from core.identity import store as callsite_store
+from core.identity import store
 from core.ledger import build, tables
 
 _lock = threading.Lock()
 _state = {"running": False, "error": None, "finished": None, "built_at": None}
+
+
+def _texts(req):
+    msgs = req.get("messages") or [{}]
+    c = msgs[0].get("content")
+    system = "\n".join(p.get("text", "") for p in c if isinstance(p, dict)) if isinstance(c, list) else (c or "")
+    first_user = next((m.get("content") for m in msgs[1:] if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
+    tools = [t.get("function", {}).get("name", "") for t in req.get("tools") or []]
+    return system, tools, first_user
 
 
 def run(days=30):
@@ -19,26 +29,18 @@ def run(days=30):
     try:
         b = build.Build(days)
         sites = b.sites()
-        callsite_store.sync(sites, days)
-        tables.store_usecase_lines(b.usecase_lines())
+        ids = store.sync(sites, days)
+        store.drop_missing(ids)
         ledger = b.ledger()
         gaps = b.gaps()
         tables.store_ledger(ledger)
-        tables.store_gaps(gaps)
         for site in sites:                                   # name each new call-site once
-            have = profiler.get(site["site"])
-            if have and not have.get("usecase") and site["usecase"]:
-                profiler.put(site["site"], site["usecase"], have)
-            if not have:
+            if not profiler.get(site["site"]):
                 req = b.sample_request(site["site"]) or {}
-                msgs = req.get("messages") or [{}]
-                c = msgs[0].get("content")
-                system = "\n".join(p.get("text", "") for p in c if isinstance(p, dict)) if isinstance(c, list) else (c or "")
-                first_user = next((m.get("content") for m in msgs[1:] if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
-                profiler.profile(site["site"], site["usecase"], system,
-                                 [t.get("function", {}).get("name", "") for t in req.get("tools") or []], first_user)
+                profiler.profile(site["site"], *_texts(req))
         built_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-        tables.store_diagnoses(report.diagnoses(sites, ledger, gaps, days), built_at)
+        for site, decision in report.cache_decisions(sites, ledger, gaps, days).items():
+            store.set_decision(site, "cache", {**decision, "built_at": built_at.isoformat(timespec="seconds")})
         _state["built_at"] = built_at.isoformat(timespec="seconds")
     except Exception as e:
         _state["error"] = "%s: %s" % (type(e).__name__, e)

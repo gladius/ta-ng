@@ -2,7 +2,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.web.validations import require_key
-from core import profiler
 from core.identity import store
 
 api = APIRouter(prefix="/api/suite/callsites", dependencies=[Depends(require_key)], include_in_schema=False)
@@ -15,19 +14,13 @@ def _cache_decision(site):
 
 
 def _with_profile(s):
-    p = profiler.get(s["site"])
-    return {**s, "profile": p, "name": (p or {}).get("name") or (s["signature"][0][:60] if s["signature"] else s["site"])}
+    p = s.get("profile")
+    return {**s, "name": (p or {}).get("name") or (s["signature"][0][:60] if s["signature"] else s["site"])}
 
 
 @api.get("/usecases")
 def usecases(q: str | None = None, page: int = 1, per_page: int = 50):
-    out = store.usecases(q=q, page=max(1, page), per_page=min(200, max(1, per_page)))
-    profiled = {p["usecase"]: 0 for p in profiler.listing(per_page=200)["profiles"]}
-    for p in profiler.listing(per_page=200)["profiles"]:
-        profiled[p["usecase"]] = profiled.get(p["usecase"], 0) + 1
-    for u in out["usecases"]:
-        u["profiled"] = profiled.get(u["usecase"], 0)
-    return out
+    return store.usecases(q=q, page=max(1, page), per_page=min(200, max(1, per_page)))
 
 
 @api.get("/usecases/{usecase}")

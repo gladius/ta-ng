@@ -127,7 +127,7 @@ The first core downloaded prompts and clustered them in Python and rebuilt every
 ## Read-only BigQuery (2026-10-12)
 Production BigQuery is read-only, so the app creates nothing there. A refresh is ONE script in a BigQuery session
 (`core/ledger/build.py`): temp tables only (identity: line shares, every call -> site; per-site layout; the daily
-ledger; the gap buckets), then small result sets into the app's tables (`core/ledger/tables.py`): `usecase_lines`,
-`callsites`, `profiles`, `ledger_daily`, `cache_gaps`, `cache_diagnoses`. Pages read only those
-(`modules/cache/query.py`); the stored-JSON report is gone. Refresh on the replica: ~80 s end to end. Grouping still
+ledger; the gap buckets), then small result sets into TWO app tables: `callsites` (one record per call-site: identity refreshed each run,
+profile written once, `decisions` JSON per module; `core/identity/store.py`) and `ledger_daily` (the one time series,
+usecase x site x model x day; `core/ledger/tables.py`). Pages read only those (`modules/cache/query.py`). Refresh on the replica: ~80 s end to end. Grouping still
 exact. Incremental later = query only the days the app's tables lack (no BigQuery write needed).
