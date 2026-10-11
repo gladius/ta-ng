@@ -348,6 +348,12 @@ class ResultsPage(_Out):
     results: list[Result]
 
 
+def _logged_bodies(ids):
+    """{request_id: (request, response)} from BigQuery, for the model checks (same lookup as the API's items)."""
+    from connectors.bigquery import source
+    return source.lookup(set(ids)) if ids else {}
+
+
 def _logged(items):
     """{request_id: (request, response)} for the items sent by request_id only: one BigQuery lookup per batch."""
     from connectors.bigquery import source

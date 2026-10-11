@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { get } from '../api'
 import { CAUSE, usecaseName, type Cause, type Proof } from '../cache'
 import { count, Failed, Kpi, Loading, money, Page, pct, when } from '../ui'
+import { CheckDialog, VerdictChip, type Verdict } from './Checks'
 
 type Profile = { name: string; does: string; task: string; output: string; fixed: string | null; per_call: string | null; model: string; created_at: string | null } | null
 type CacheDecision = { cause: Cause | null; action: string; worth: number; proof: Proof; share: number; models: string[]; built_at: string | null } | null
@@ -15,7 +16,8 @@ type Site = {
 type UsecaseRow = { usecase: string | null; calls: number; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; analysing: boolean; error: string | null }
 type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; usecases: UsecaseRow[] }
 type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision })[]; analysing: boolean }
-type SitePage = Site & { decisions: { cache: CacheDecision; models: null; router: null } }
+type Models = { candidates: Record<string, Verdict & { check: string; at: string; trigger: string }> } | null
+type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null } }
 
 const ucPath = (u: string | null) => `/usecases/${encodeURIComponent(u ?? 'None')}`
 const sitePath = (u: string | null, site: string) => `${ucPath(u)}/callsites/${site}`
@@ -90,7 +92,7 @@ export function CallSiteUsecase() {
     <Page crumbs={crumbs}>
       <div className="head">
         <div><h1>{usecaseName(u.usecase)}</h1><span className="muted">{u.calls.toLocaleString('en-US')} calls in the window{u.sites.length > 0 && <> · made of {count(u.sites.length, 'call-site')} ({calls.toLocaleString('en-US')} chat calls)</>} · derived from the log, no source code needed{u.analysed_at && <> · analysed {when(u.analysed_at)}</>}</span></div>
-        <button className="btn" disabled={u.analysing} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? 'Analysing…' : 'Analyse again'}</button>
+        <div className="row"><CheckDialog usecase={u.usecase} /><button className="btn" disabled={u.analysing} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? 'Analysing…' : 'Analyse again'}</button></div>
       </div>
       {u.analysing && !u.sites.length && <p className="empty">Analysing this usecase from the log: finding its call-sites, naming them, reading their cache behaviour. Usually under a minute.</p>}
       {u.error && <p className="error" role="alert">The last analysis failed: {u.error}</p>}
@@ -149,6 +151,7 @@ export function CallSite() {
             {s.unsure && <span className="chip warn">grouping unsure</span>}
           </div>
         </div>
+        <CheckDialog usecase={s.usecase} site={s.site} />
       </div>
       <div className="kpis">
         <Kpi label="Calls" value={s.calls.toLocaleString('en-US')} note={`last ${s.window_days} days, ${s.first_day} → ${s.last_day}`} />
@@ -186,7 +189,9 @@ export function CallSite() {
           <h2>Decisions</h2>
           <p><b>Cache</b> · {s.decisions.cache ? <CacheLine c={s.decisions.cache} site={s.site} /> : <span className="muted">not analysed yet</span>}</p>
           {s.decisions.cache?.action && <p className="muted">{s.decisions.cache.action}</p>}
-          <p><b>Models</b> · <span className="muted">no cheaper model validated for this call-site yet</span></p>
+          <p><b>Models</b> · {s.decisions.models ? Object.entries(s.decisions.models.candidates).map(([cand, v]) => (
+            <span key={cand} className="row"><span className="mono">{cand}</span> <VerdictChip v={v} />{v.cost_vs_original_pct != null && <span className="muted">{v.cost_vs_original_pct}% cost</span>}<Link className="muted" to={`/checks/${v.check}`}>check {when(v.at)}</Link></span>
+          )) : <span className="muted">no model checked for this call-site yet</span>}</p>
           <p><b>Router</b> · <span className="muted">no pin</span></p>
         </div>
       </section>

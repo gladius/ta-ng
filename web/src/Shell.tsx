@@ -27,7 +27,6 @@ export default function Shell() {
   const [menu, setMenu] = useState(false)
   useEffect(() => { setMenu(false) }, [pathname, search])               // a phone's menu closes once you go somewhere
   const auditing = pathname.startsWith('/sources') || pathname.startsWith('/agents')
-  const openWeight = auditing && search.includes('dgmode=open-weight')
   const brand = <div className="brand"><span className="mark" aria-hidden="true"><i /><b /></span><span>Token Auditor</span></div>
 
   return (
@@ -49,9 +48,9 @@ export default function Shell() {
         </div>
         <div className="group">
           <span className="group-name">Models</span>
-          <Entry icon={TrendingDown} label="Tier downgrade" to="/sources" active={auditing && !openWeight} />
-          <Entry icon={PackageOpen} label="Open-weight" to="/sources?dgmode=open-weight" active={openWeight} />
+          <Entry icon={TrendingDown} label="Checks" to="/checks" />
           <Entry icon={ShieldCheck} label="Validations" to="/validations" />
+          <Entry icon={PackageOpen} label="Audit an agent (LangSmith)" to="/sources" active={auditing} />
         </div>
         <div className="group">
           <span className="group-name">Cache</span>

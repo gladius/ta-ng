@@ -12,6 +12,7 @@ import Profile from './pages/Profile'
 import { Migrations, Models } from './pages/Catalog'
 import { CacheOverview, CacheSite, CacheUsecase } from './pages/Cache'
 import { CallSite, CallSiteUsecase, CallSiteUsecases } from './pages/CallSites'
+import { CheckDetail, Checks } from './pages/Checks'
 import { Page } from './ui'
 
 export default function App() {
@@ -31,6 +32,8 @@ export default function App() {
         <Route path="agents/:source/:ws/:project/report" element={<Report />} />
         <Route path="agents/:source/:ws/:project/profile" element={<Profile />} />
         <Route path="agents/:source/:ws/:project/analyze" element={<Analyze />} />
+        <Route path="checks" element={<Checks />} />
+        <Route path="checks/:checkId" element={<CheckDetail />} />
         <Route path="usecases" element={<CallSiteUsecases />} />
         <Route path="usecases/:usecase" element={<CallSiteUsecase />} />
         <Route path="usecases/:usecase/callsites/:site" element={<CallSite />} />
