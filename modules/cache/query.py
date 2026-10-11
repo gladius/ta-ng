@@ -1,19 +1,18 @@
-"""What the cache pages show, read from the call-site records and the daily ledger. Same JSON shapes as before."""
+"""What the cache pages show, read from the call-site records (their series and decisions). Same JSON shapes as
+before: the org and usecase levels are sums over records."""
 from collections import defaultdict
 
-from sqlalchemy import func, select
-
-from app.services import db
 from core.identity import store
-from core.ledger import tables
 from modules.cache.report import SUM, total
 
 
-def _days_series(rows):
+def _series_total(series):
+    """{model: {day: {...}}} -> per-day totals across models, and the window total."""
     days = defaultdict(lambda: {k: 0 for k in SUM})
-    for r in rows:
-        for k in SUM:
-            days[r["day"]][k] += r.get(k) or 0
+    for by_day in series.values():
+        for day, d in by_day.items():
+            for k in SUM:
+                days[day][k] += d.get(k) or 0
     return dict(days)
 
 
@@ -31,55 +30,46 @@ def trend(days):
     return {"recent": round(_share(recent), 3), "before": round(_share(before), 3), "delta": round(_share(recent) - _share(before), 3)}
 
 
-def window():
-    eng = db.ready()
-    with eng.connect() as c:
-        v = c.execute(select(func.max(store.callsites.c.window_days))).scalar()
-    return v or 30
+def _sum_days(blocks):
+    days = defaultdict(lambda: {k: 0 for k in SUM})
+    for b in blocks:
+        for day, d in b["days"].items():
+            for k in SUM:
+                days[day][k] += d[k]
+    return dict(days)
 
 
 _EMPTY_STORY = {"now": "", "why": "", "action": "", "worth": 0, "share": 0, "proof": None, "cause": None}
 
 
-def _site_block(rec, ledger_rows):
-    """One call-site record + its ledger rows as the pages expect them."""
+def _site_block(rec):
     cache = rec["decisions"].get("cache") or {}
-    days = _days_series(ledger_rows)
+    days = _series_total(rec["series"])
     static = rec.get("static_chars") or 0
     return {"site": rec["site"], "usecase": rec["usecase"], "anchors": rec["signature"], "unsure": rec["unsure"],
             "versions": rec["versions"],
             "layout": {"static_chars": static, "dynamic_chars": rec.get("dynamic_chars"),
                        "static_after_dynamic": (rec.get("static_after") or 0) / static if static else 0.0, "tool_sets": rec.get("tool_sets")},
-            "models": cache.get("models", {}), "days": days, "total": total(ledger_rows), "saving": cache.get("saving", 0),
+            "models": cache.get("models", {}), "days": days, "total": total(list(days.values())), "saving": cache.get("saving", 0),
             "profile": rec["profile"], "story": cache.get("story") or _EMPTY_STORY, "trend": trend(days),
-            "built_at": cache.get("built_at")}
-
-
-def _blocks(recs, ledger):
-    by_site = defaultdict(list)
-    for r in ledger:
-        by_site[r["site"]].append(r)
-    return [_site_block(rec, by_site.get(rec["site"], [])) for rec in recs]
+            "built_at": cache.get("built_at"), "window": rec["window_days"]}
 
 
 def usecase(uc):
     recs = store.by_usecase(uc)
     if not recs:
         return None
-    ledger = tables.ledger(tables.ledger_daily.c.usecase == (uc or ""))
-    sites = _blocks(recs, ledger)
-    days = _days_series(ledger)
-    return {"built_at": max((s["built_at"] or "" for s in sites), default=None) or None, "window": window(), "usecase": uc,
-            "total": total(ledger), "days": days, "trend": trend(days), "saving": round(sum(s["saving"] for s in sites), 2),
+    sites = [_site_block(r) for r in recs]
+    days = _sum_days(sites)
+    return {"built_at": max((s["built_at"] or "" for s in sites), default=None) or None, "window": sites[0]["window"],
+            "usecase": uc, "total": total(list(days.values())), "days": days, "trend": trend(days),
+            "saving": round(sum(s["saving"] for s in sites), 2),
             "sites": sorted(sites, key=lambda s: (-s["saving"], -s["total"]["cost"]))}
 
 
 def site(site_id):
     rec = store.get(site_id)
-    if not rec:
-        return None
-    ledger = tables.ledger(tables.ledger_daily.c.site == site_id)
-    return {"window": window(), **_site_block(rec, ledger)}
+    return _site_block(rec) if rec else None
 
 
 def _brief(s):
@@ -90,34 +80,29 @@ def _brief(s):
 
 
 def overview():
-    """The org level: reuse and its trend, opportunities, drops, and every usecase ranked by what's left."""
+    """The org level over every analysed usecase: reuse and its trend, opportunities, drops, usecases by what's left."""
     recs = store.all_sites()
-    ledger = tables.ledger()
-    if not recs or not ledger:
+    if not recs:
         return None
-    sites = _blocks(recs, ledger)
-    by_uc_l, by_uc_s = defaultdict(list), defaultdict(list)
-    for r in ledger:
-        by_uc_l[r["usecase"] or ""].append(r)
+    sites = [_site_block(r) for r in recs]
+    by_uc = defaultdict(list)
     for s in sites:
-        by_uc_s[s["usecase"] or ""].append(s)
+        by_uc[s["usecase"]].append(s)
     usecases = []
-    for uc, rows in by_uc_l.items():
-        uc_sites = by_uc_s.get(uc, [])
-        days = _days_series(rows)
-        usecases.append({"usecase": uc or None, "total": total(rows), "saving": round(sum(s["saving"] for s in uc_sites), 2),
+    for uc, uc_sites in by_uc.items():
+        days = _sum_days(uc_sites)
+        usecases.append({"usecase": uc, "total": total(list(days.values())), "saving": round(sum(s["saving"] for s in uc_sites), 2),
                          "trend": trend(days), "sites": len(uc_sites), "unsure": any(s["unsure"] for s in uc_sites),
                          "causes": sorted({s["story"]["cause"] for s in uc_sites if s["story"]["cause"]})})
-    days = _days_series(ledger)
-    return {"built_at": max((s["built_at"] or "" for s in sites), default=None) or None, "window": window(), "daily": days,
-            "total": total(ledger), "trend": trend(days), "saving": round(sum(u["saving"] for u in usecases), 2),
+    days = _sum_days(sites)
+    return {"built_at": max((s["built_at"] or "" for s in sites), default=None) or None, "window": sites[0]["window"], "daily": days,
+            "total": total(list(days.values())), "trend": trend(days), "saving": round(sum(u["saving"] for u in usecases), 2),
             "opportunities": [_brief(s) for s in sorted(sites, key=lambda s: -s["saving"]) if s["saving"] > 0][:10],
             "dropped": sorted([_brief(s) for s in sites if s["trend"] and s["trend"]["delta"] <= -0.05], key=lambda b: b["trend"]["delta"]),
             "usecases": sorted(usecases, key=lambda u: (-u["saving"], -u["total"]["cost"]))}
 
 
 def decision(site_id):
-    """The cache decision of one site, for the call-site pages."""
     rec = store.get(site_id)
     cache = (rec or {}).get("decisions", {}).get("cache")
     if not cache:

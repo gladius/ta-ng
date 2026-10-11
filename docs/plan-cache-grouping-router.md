@@ -131,3 +131,10 @@ ledger; the gap buckets), then small result sets into TWO app tables: `callsites
 profile written once, `decisions` JSON per module; `core/identity/store.py`) and `ledger_daily` (the one time series,
 usecase x site x model x day; `core/ledger/tables.py`). Pages read only those (`modules/cache/query.py`). Refresh on the replica: ~80 s end to end. Grouping still
 exact. Incremental later = query only the days the app's tables lack (no BigQuery write needed).
+
+## On demand per usecase (2026-10-12)
+`usecases` table = the cheap list (usecase, calls, days; reloaded when older than 12 h) plus each usecase's analysis
+state and roll-up. Opening a usecase runs the script scoped to it (`Build(days, usecase)`: ~30 s on the replica) and
+writes its call-site records (identity, per-model daily series as JSON, profile once, decisions). The org view sums
+the records of analysed usecases; "Analyse all usecases" runs the whole window (~65 s here). `ledger_daily` is gone:
+the series live on the records. Core tables: `usecases`, `callsites`.

@@ -12,9 +12,9 @@ type Site = {
   versions: { version: string; first: string; last: string }[]; static_chars: number; dynamic_chars: number; static_after: number
   tool_sets: number; unsure: boolean; window_days: number; updated_at: string | null; profile: Profile
 }
-type UsecaseRow = { usecase: string | null; sites: number; calls: number; unsure: number; profiled: number }
-type Usecases = { page: number; per_page: number; total: number; usecases: UsecaseRow[] }
-type UsecasePage = { usecase: string | null; sites: (Site & { cache: CacheDecision })[] }
+type UsecaseRow = { usecase: string | null; calls: number; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; analysing: boolean; error: string | null }
+type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; usecases: UsecaseRow[] }
+type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision })[]; analysing: boolean }
 type SitePage = Site & { decisions: { cache: CacheDecision; models: null; router: null } }
 
 const ucPath = (u: string | null) => `/usecases/${encodeURIComponent(u ?? 'None')}`
@@ -25,29 +25,30 @@ export function CallSiteUsecases() {
   const [params, setParams] = useSearchParams()
   const page = Math.max(1, Number(params.get('page')) || 1)
   const [q, setQ] = useState(params.get('q') ?? '')
-  const list = useQuery({ queryKey: ['callsites', 'usecases', page, q], queryFn: () => get<Usecases>(`/suite/callsites/usecases?page=${page}&per_page=50${q ? '&q=' + encodeURIComponent(q) : ''}`) })
+  const list = useQuery({ queryKey: ['callsites', 'usecases', page, q], queryFn: () => get<Usecases>(`/suite/callsites/usecases?page=${page}&per_page=50${q ? '&q=' + encodeURIComponent(q) : ''}`),
+    refetchInterval: (query) => (query.state.data?.reloading || query.state.data?.running.length ? 5000 : false) })
   const crumbs = [{ label: 'Profiles' }, { label: 'Usecases' }]
   return (
     <Page crumbs={crumbs}>
       <div className="head">
-        <div><h1>Usecases</h1><span className="muted">each usecase is made of call-sites: one prompt template each, found from the instruction lines its calls share, named by the profiler</span></div>
-        <input className="input" placeholder="Find a usecase" value={q} onChange={(e) => { setQ(e.target.value); setParams({ q: e.target.value }) }} />
+        <div><h1>Usecases</h1><span className="muted">each usecase is made of call-sites: one prompt template each, found from the instruction lines its calls share, named by the profiler{list.data?.listed_at && <> · list from {when(list.data.listed_at)}{list.data.reloading && ', reloading'}</>}</span></div>
+        <div className="row"><input className="input" placeholder="Find a usecase" value={q} onChange={(e) => { setQ(e.target.value); setParams({ q: e.target.value }) }} /><button className="btn" onClick={() => get(`/suite/callsites/usecases?reload=true`).then(() => list.refetch())}>Reload list</button></div>
       </div>
       {list.isPending ? <Loading /> : list.isError ? <Failed error={list.error} /> : !list.data.usecases.length ? (
-        <p className="empty">No call-sites yet: run a refresh on the Cache analysis page.</p>
+        <p className="empty">{list.data.reloading ? 'Reading the usecases from the log…' : 'No usecases in the window.'}</p>
       ) : (
         <section className="panel">
           <div className="panel-head"><b>{count(list.data.total, 'usecase')}</b><span className="muted">most calls first</span></div>
           <table className="grid">
-            <thead><tr><th>Usecase</th><th className="num">Calls</th><th className="num">Call-sites</th><th>Profiled</th><th>Grouping</th></tr></thead>
+            <thead><tr><th>Usecase</th><th className="num">Calls in the window</th><th>Active</th><th className="num">Call-sites</th><th>Analysed</th></tr></thead>
             <tbody>
               {list.data.usecases.map((u) => (
                 <tr key={u.usecase ?? 'None'}>
                   <td><Link to={ucPath(u.usecase)}>{usecaseName(u.usecase)}</Link></td>
                   <td className="num mono">{u.calls.toLocaleString('en-US')}</td>
-                  <td className="num mono">{u.sites}</td>
-                  <td>{u.profiled} of {u.sites}</td>
-                  <td>{u.unsure ? <span className="chip warn">{count(u.unsure, 'call-site')} unsure</span> : <span className="chip">confident</span>}</td>
+                  <td className="muted nowrap">{u.first_day} → {u.last_day}</td>
+                  <td className="num mono">{u.sites ?? '—'}</td>
+                  <td>{u.analysing || list.data.running.includes(u.usecase ?? '') ? <span className="chip">analysing…</span> : u.error ? <span className="chip warn" title={u.error}>failed</span> : u.analysed_at ? <span className="muted nowrap">{when(u.analysed_at)}</span> : <span className="muted">open to analyse</span>}</td>
                 </tr>
               ))}
             </tbody>
@@ -78,7 +79,8 @@ function CacheLine({ c, site }: { c: CacheDecision; site: string }) {
 /** One usecase: its call-sites as cards. */
 export function CallSiteUsecase() {
   const { usecase = '' } = useParams()
-  const q = useQuery({ queryKey: ['callsites', 'usecase', usecase], queryFn: () => get<UsecasePage>(`/suite/callsites/usecases/${encodeURIComponent(usecase)}`) })
+  const q = useQuery({ queryKey: ['callsites', 'usecase', usecase], queryFn: () => get<UsecasePage>(`/suite/callsites/usecases/${encodeURIComponent(usecase)}`),
+    refetchInterval: (query) => (query.state.data?.analysing ? 4000 : false) })
   const crumbs = [{ label: 'Profiles' }, { label: 'Usecases', to: '/usecases' }, { label: usecaseName(usecase) }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
@@ -86,7 +88,12 @@ export function CallSiteUsecase() {
   const calls = u.sites.reduce((n, s) => n + s.calls, 0)
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>{usecaseName(u.usecase)}</h1><span className="muted">made of {count(u.sites.length, 'call-site')} · {calls.toLocaleString('en-US')} calls in the last {u.sites[0]?.window_days} days · derived from the log, no source code needed</span></div></div>
+      <div className="head">
+        <div><h1>{usecaseName(u.usecase)}</h1><span className="muted">{u.calls.toLocaleString('en-US')} calls in the window{u.sites.length > 0 && <> · made of {count(u.sites.length, 'call-site')} ({calls.toLocaleString('en-US')} chat calls)</>} · derived from the log, no source code needed{u.analysed_at && <> · analysed {when(u.analysed_at)}</>}</span></div>
+        <button className="btn" disabled={u.analysing} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? 'Analysing…' : 'Analyse again'}</button>
+      </div>
+      {u.analysing && !u.sites.length && <p className="empty">Analysing this usecase from the log: finding its call-sites, naming them, reading their cache behaviour. Usually under a minute.</p>}
+      {u.error && <p className="error" role="alert">The last analysis failed: {u.error}</p>}
       {u.sites.map((s) => (
         <section key={s.site} className="panel site-card">
           <div className="spread">

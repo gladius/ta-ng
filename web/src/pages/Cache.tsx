@@ -93,7 +93,7 @@ export function CacheOverview() {
   if (q.isError) {
     return (
       <Page crumbs={crumbs}>
-        <div className="head"><h1>Cache analysis</h1><button className="btn primary" onClick={() => refresh.mutate()} disabled={refresh.isPending}>Build the report</button></div>
+        <div className="head"><h1>Cache analysis</h1><button className="btn primary" onClick={() => refresh.mutate()} disabled={refresh.isPending}>Analyse all usecases</button></div>
         <Failed error={q.error} />
       </Page>
     )
@@ -107,7 +107,7 @@ export function CacheOverview() {
     <Page crumbs={crumbs}>
       <div className="head">
         <div><h1>Cache analysis</h1><Built at={o.built_at} /></div>
-        <div className="row"><WindowPick n={n} set={setN} max={o.window} /><button className="btn" onClick={() => refresh.mutate()} disabled={refresh.isPending || o.status.running}>{o.status.running ? 'Refreshing…' : 'Refresh'}</button></div>
+        <div className="row"><WindowPick n={n} set={setN} max={o.window} /><button className="btn" onClick={() => refresh.mutate()} disabled={refresh.isPending || o.status.running} title="Analyse every usecase of the window; single usecases are analysed when opened">{o.status.running ? 'Analysing all…' : 'Analyse all usecases'}</button></div>
       </div>
       {o.status.error && <p className="error" role="alert">The last refresh failed: {o.status.error}</p>}
       <div className="kpis">

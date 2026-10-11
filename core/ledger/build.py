@@ -32,7 +32,7 @@ WITH prompts AS (
   SELECT `{usecase}` AS usecase, DATE(`{time}`) AS day,
          ARRAY(SELECT DISTINCT l FROM UNNEST({lines}) l WHERE LENGTH(l) >= 8) AS lines
   FROM `{table}`
-  WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL
+  WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL{scope}
   QUALIFY ROW_NUMBER() OVER (PARTITION BY `{usecase}` ORDER BY FARM_FINGERPRINT(CAST(`{id}` AS STRING))) <= {sample})
 SELECT r.usecase, l AS line, COUNT(*) / ANY_VALUE(t.total) AS share,
        COUNT(DISTINCT r.day) < 0.8 * ANY_VALUE(t.days) AS limited_days
@@ -60,7 +60,7 @@ WITH prompts AS (
          JSON_QUERY(`{req}`, '$.tools') IS NOT NULL AS has_tools,
          {lines} AS lines
   FROM `{table}`
-  WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL),
+  WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL{scope}),
 tagged AS (
   SELECT r.id, l AS line, LENGTH(l) AS chars,
          d.share IS NOT NULL AND LENGTH(l) >= {min_len} AS template,
@@ -90,7 +90,7 @@ FROM call_rows GROUP BY 1, 2, 3;
 CREATE TEMP TABLE sample_rows AS
 SELECT c.site, c.tools_hash, FARM_FINGERPRINT(c.id) AS rid, {lines} AS lines
 FROM `{table}` l JOIN call_rows c ON c.id = CAST(l.`{id}` AS STRING) AND c.day = DATE(l.`{time}`)
-WHERE DATE(l.`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
+WHERE DATE(l.`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY){scope_l}
 QUALIFY ROW_NUMBER() OVER (PARTITION BY c.site ORDER BY FARM_FINGERPRINT(c.id)) <= {sample};
 CREATE TEMP TABLE tagged_s AS
 SELECT site, rid, off, LENGTH(l) AS chars, l AS line FROM sample_rows, UNNEST(lines) l WITH OFFSET off WHERE LENGTH(l) >= 8;
@@ -155,11 +155,25 @@ WHERE c.site = @site LIMIT 1
 """
 
 
-def _names():
+_USECASES = """
+SELECT `{usecase}` AS usecase, COUNT(*) AS calls, MIN(DATE(`{time}`)) AS first_day, MAX(DATE(`{time}`)) AS last_day
+FROM `{table}` WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
+GROUP BY 1 ORDER BY calls DESC
+"""
+
+
+def _names(usecase=None):
     c = bq.cfg()
+    scope = "" if usecase is None else " AND `%s` IS NOT DISTINCT FROM @usecase" % c["usecase"]
+    scope_l = "" if usecase is None else " AND l.`%s` IS NOT DISTINCT FROM @usecase" % c["usecase"]
     return {**c, "lines": _LINES.format(**c), "min_len": MIN_LEN, "stable": STABLE, "template": TEMPLATE,
-            "top_k": TOP_K, "sample": SAMPLE,
+            "top_k": TOP_K, "sample": SAMPLE, "scope": scope, "scope_l": scope_l,
             "cases": " ".join("WHEN gap <= %d THEN '%s'" % (secs, name) for name, secs in BUCKETS)}
+
+
+def usecases(days=30):
+    """Every usecase of the window with its call count and days: the cheap list (no JSON column read)."""
+    return [dict(r) for r in bq.query(_USECASES.format(**bq.cfg()), {"days": days})]
 
 
 def _prices():
@@ -168,11 +182,14 @@ def _prices():
 
 
 class Build:
-    """Run the script once, then read its results."""
-    def __init__(self, days=30):
-        self.days = days
+    """Run the script once (the whole window, or one usecase), then read its results."""
+    def __init__(self, days=30, usecase=None):
+        self.days, self.usecase = days, usecase
         self.s = bq.Session()
-        self.s.query(SCRIPT.format(**_names()), {"days": days, "prices": _prices()})
+        params = {"days": days, "prices": _prices()}
+        if usecase is not None:
+            params["usecase"] = usecase
+        self.s.query(SCRIPT.format(**_names(usecase)), params)
 
     def sites(self):
         return [dict(r) for r in self.s.query(_SITES)]

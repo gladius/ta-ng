@@ -1,15 +1,21 @@
-"""One refresh: the BigQuery script (identity, ledger, gaps; temp tables only, nothing written there) -> the
-call-site records and the daily ledger in the app's database -> a profile for each new call-site -> the cache
-decision on each record. Run from the Cache analysis page or POST /api/suite/cache/refresh."""
+"""Two refreshes, both read-only on BigQuery:
+
+  list_usecases(days)        the cheap list (usecase, calls, days) -> the usecases table; reloaded when older than STALE
+  analyse(usecase, days)     one usecase: the script scoped to it (identity, series, gaps; temp tables only) -> its
+                             call-site records, a profile for each new one, the cache decision on each
+  analyse(None, days)        the same for the whole window (every usecase)
+
+Opening a usecase analyses it when it never was; the router or any caller can POST the same."""
 import datetime
 import threading
 
 from core import profiler
 from core.identity import store
-from core.ledger import build, tables
+from core.ledger import build
 
+STALE = datetime.timedelta(hours=12)
 _lock = threading.Lock()
-_state = {"running": False, "error": None, "finished": None, "built_at": None}
+_running = set()
 
 
 def _texts(req):
@@ -21,42 +27,63 @@ def _texts(req):
     return system, tools, first_user
 
 
-def run(days=30):
+def list_usecases(days=30):
+    rows = build.usecases(days)
+    store.list_usecases(rows, days)
+    return len(rows)
+
+
+def list_is_stale():
+    at = store.listed_at()
+    return at is None or datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - at > STALE
+
+
+def analyse(usecase=None, days=30):
+    """Analyse one usecase (or the whole window when None). Blocking; see start()."""
     from modules.cache import report
-    with _lock:
-        _state.update(running=True, error=None)
+    key = usecase if usecase is not None else "*"
     b = None
+    scoped = [usecase] if usecase is not None else None
     try:
-        b = build.Build(days)
+        for uc in scoped or []:
+            store.mark_analysing(uc, True)
+        b = build.Build(days, usecase)
         sites = b.sites()
-        ids = store.sync(sites, days)
-        store.drop_missing(ids)
         ledger = b.ledger()
         gaps = b.gaps()
-        tables.store_ledger(ledger)
+        store.sync(sites, ledger, days, usecase)
         for site in sites:                                   # name each new call-site once
             if not profiler.get(site["site"]):
                 req = b.sample_request(site["site"]) or {}
                 profiler.profile(site["site"], *_texts(req))
-        built_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        built_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
         for site, decision in report.cache_decisions(sites, ledger, gaps, days).items():
-            store.set_decision(site, "cache", {**decision, "built_at": built_at.isoformat(timespec="seconds")})
-        _state["built_at"] = built_at.isoformat(timespec="seconds")
+            store.set_decision(site, "cache", {**decision, "built_at": built_at})
+        for uc in (scoped if scoped is not None else {s.get("usecase") or "" for s in sites}):
+            store.set_usecase_summary(uc, sum(1 for s in sites if (s.get("usecase") or "") == (uc or "")))
+            store.mark_analysing(uc, False)
+        return len(sites)
     except Exception as e:
-        _state["error"] = "%s: %s" % (type(e).__name__, e)
+        for uc in scoped or []:
+            store.mark_analysing(uc, False, "%s: %s" % (type(e).__name__, e))
         raise
     finally:
         if b:
             b.close()
-        _state.update(running=False, finished=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"))
+        with _lock:
+            _running.discard(key)
 
 
-def start(days=30):
-    if _state["running"]:
-        return False
-    threading.Thread(target=run, args=(days,), daemon=True).start()
+def start(usecase=None, days=30):
+    """Analyse in the background; False when that analysis is already running."""
+    key = usecase if usecase is not None else "*"
+    with _lock:
+        if key in _running:
+            return False
+        _running.add(key)
+    threading.Thread(target=analyse, args=(usecase, days), daemon=True).start()
     return True
 
 
-def status():
-    return dict(_state)
+def running():
+    return sorted(_running)
