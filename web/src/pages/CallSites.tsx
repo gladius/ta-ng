@@ -13,10 +13,10 @@ type Site = {
   versions: { version: string; first: string; last: string }[]; static_chars: number; dynamic_chars: number; static_after: number
   tool_sets: number; unsure: boolean; window_days: number; updated_at: string | null; profile: Profile
 }
+type Models = { candidates: Record<string, Verdict & { check: string; at: string; trigger: string }> } | null
 type UsecaseRow = { usecase: string | null; calls: number; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; analysing: boolean; error: string | null }
 type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; usecases: UsecaseRow[] }
-type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision })[]; analysing: boolean }
-type Models = { candidates: Record<string, Verdict & { check: string; at: string; trigger: string }> } | null
+type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean }
 type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null } }
 
 const ucPath = (u: string | null) => `/usecases/${encodeURIComponent(u ?? 'None')}`
@@ -108,7 +108,7 @@ export function CallSiteUsecase() {
             {s.unsure && <span className="chip warn">grouping unsure</span>}
             {!s.profile && <span className="chip">not profiled</span>}
           </div>
-          <p><CacheLine c={s.cache} site={s.site} /> · models: not validated yet · router: no pin</p>
+          <p><CacheLine c={s.cache} site={s.site} /> · models: {s.decisions?.models ? Object.entries(s.decisions.models.candidates).map(([cand, v]) => <span key={cand}><span className="mono">{cand}</span> <VerdictChip v={v} /> </span>) : 'not checked yet'} · router: no pin</p>
         </section>
       ))}
     </Page>

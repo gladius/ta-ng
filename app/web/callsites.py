@@ -75,4 +75,5 @@ def one(site: str):
     s = store.get(site)
     if not s:
         raise HTTPException(404, "unknown call-site")
-    return {**_with_profile(s), "decisions": {"cache": _cache_decision(site), "models": None, "router": None}}
+    return {**_with_profile(s), "decisions": {"cache": _cache_decision(site), "models": s["decisions"].get("models"),
+                                              "router": s["decisions"].get("router")}}
