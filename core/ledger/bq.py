@@ -1,4 +1,6 @@
-"""BigQuery access for core, on the app's BQ_* settings (the same table the validations read).
+"""BigQuery access for core, on the app's BQ_* settings (the same table the validations read). READ-ONLY: the app
+creates nothing in the customer's dataset. A refresh runs one script in a BigQuery session, whose temporary tables
+(BigQuery's own scratch space) the following queries read; the results land in the app's database.
 
     BQ_TABLE            project.dataset.table_or_view, one row per call
     BQ_REQUEST_COLUMN   the request body (messages, tools, model)
@@ -6,9 +8,8 @@
     BQ_ID_COLUMN        the call's id
     BQ_AGENT_COLUMN     the usecase
     BQ_TIME_COLUMN      the call's timestamp (partition column)
-Derived tables land next to BQ_TABLE in BQ_WORK_DATASET (default: the same dataset).
 """
-import json
+import datetime
 
 import credentials
 from connectors.bigquery.source import _client
@@ -18,13 +19,14 @@ def cfg():
     table = credentials.get_config("BQ_TABLE")
     if not table:
         raise RuntimeError("BQ_TABLE is not set")
-    project, dataset, _ = table.split(".")
-    return {"table": table, "project": project, "dataset": credentials.get_config("BQ_WORK_DATASET") or dataset,
+    project = table.split(".")[0]
+    return {"table": table, "project": project,
             "req": credentials.get_config("BQ_REQUEST_COLUMN", "request_payload"),
             "resp": credentials.get_config("BQ_RESPONSE_COLUMN", "response_payload"),
             "id": credentials.get_config("BQ_ID_COLUMN", "request_id"),
             "usecase": credentials.get_config("BQ_AGENT_COLUMN", "vegas_usecase_name"),
-            "time": credentials.get_config("BQ_TIME_COLUMN", "created_timestamp_utc")}
+            "time": credentials.get_config("BQ_TIME_COLUMN", "created_timestamp_utc"),
+            "latency": credentials.get_config("BQ_LATENCY_COLUMN", "duration_ms")}      # ms per call, when the log has it
 
 
 _clients = {}
@@ -37,42 +39,65 @@ def client():
     return _clients[project]
 
 
-def query(sql, params=None, timeout=600):
+def _params(params):
     from google.cloud import bigquery
-    import datetime
+
     def kind(v):
-        return "INT64" if isinstance(v, int) else "DATE" if isinstance(v, datetime.date) else "STRING"
-    qp = [bigquery.ArrayQueryParameter(k, kind(v[0]) if v else "STRING", v) if isinstance(v, list)
-          else bigquery.ScalarQueryParameter(k, kind(v), v) for k, v in (params or {}).items()]
-    from google.auth.exceptions import RefreshError
-    try:
-        return list(client().query(sql, job_config=bigquery.QueryJobConfig(query_parameters=qp)).result(timeout=timeout))
-    except RefreshError:                      # the dev machine's gcloud token expired mid-run: a fresh client, once
-        _clients.pop(cfg()["project"], None)
-        return list(client().query(sql, job_config=bigquery.QueryJobConfig(query_parameters=qp)).result(timeout=timeout))
+        return "INT64" if isinstance(v, int) else "FLOAT64" if isinstance(v, float) else \
+            "DATE" if isinstance(v, datetime.date) else "STRING"
+    def struct(d):
+        return bigquery.StructQueryParameter(None, *[bigquery.ScalarQueryParameter(n, kind(x), x) for n, x in d.items()])
+    out = []
+    for k, v in (params or {}).items():
+        if isinstance(v, list) and v and isinstance(v[0], dict):
+            out.append(bigquery.ArrayQueryParameter(k, "STRUCT", [struct(d) for d in v]))
+        elif isinstance(v, list):
+            out.append(bigquery.ArrayQueryParameter(k, kind(v[0]) if v else "STRING", v))
+        else:
+            out.append(bigquery.ScalarQueryParameter(k, kind(v), v))
+    return out
 
 
-def work(name):
-    """Fully qualified name of a derived table."""
+_locations = {}
+
+
+def location():
+    """The log's dataset location (EU, US, ...): every job, the session included, must run there."""
     c = cfg()
-    return "`%s.%s.%s`" % (c["project"], c["dataset"], name)
+    key = ".".join(c["table"].split(".")[:2])
+    if key not in _locations:
+        _locations[key] = client().get_dataset(key).location
+    return _locations[key]
 
 
-def load_rows(name, rows, schema, replace=False):
-    """Load dict rows into a derived table (created if missing)."""
+class Session:
+    """A BigQuery session: temp tables made by one query stay readable by the next, for 24 h or until closed."""
+    def __init__(self):
+        from google.cloud import bigquery
+        job = client().query("SELECT 1", job_config=bigquery.QueryJobConfig(create_session=True), location=location())
+        job.result()
+        self.id = job.session_info.session_id
+
+    def query(self, sql, params=None, timeout=1800):
+        from google.cloud import bigquery
+        from google.auth.exceptions import RefreshError
+        cfg_ = bigquery.QueryJobConfig(query_parameters=_params(params),
+                                       connection_properties=[bigquery.ConnectionProperty("session_id", self.id)])
+        try:
+            return list(client().query(sql, job_config=cfg_, location=location()).result(timeout=timeout))
+        except RefreshError:                  # the dev machine's gcloud token expired mid-run: a fresh client, once
+            _clients.pop(cfg()["project"], None)
+            return list(client().query(sql, job_config=cfg_, location=location()).result(timeout=timeout))
+
+    def close(self):
+        try:
+            self.query("CALL BQ.ABORT_SESSION()")
+        except Exception:
+            pass
+
+
+def query(sql, params=None, timeout=600):
+    """One query outside a session."""
     from google.cloud import bigquery
-    c = client()
-    job = c.load_table_from_json(rows, work(name).strip("`"), job_config=bigquery.LoadJobConfig(
-        schema=[bigquery.SchemaField(n, t, mode=m) for n, t, m in schema],
-        write_disposition="WRITE_TRUNCATE" if replace else "WRITE_APPEND"))
-    job.result()
-    return job.output_rows
-
-
-def system_text(first_message):
-    """The text of a logged message whose content is a string or a list of parts."""
-    m = json.loads(first_message) if isinstance(first_message, str) else (first_message or {})
-    c = m.get("content")
-    if isinstance(c, list):
-        return "\n".join(p.get("text", "") for p in c if isinstance(p, dict))
-    return c if isinstance(c, str) else ""
+    return list(client().query(sql, job_config=bigquery.QueryJobConfig(query_parameters=_params(params)), location=location())
+                .result(timeout=timeout))

@@ -1,7 +1,7 @@
 """TTL what-if from the recorded gaps: under a lifetime T, every call whose gap since the previous call sharing its
 prefix is <= T reads the prefix; the rest write it. Priced per provider, it says what each lifetime would have cost
 over the window, and the saving of the best one. No call is re-sent; this is arithmetic on the gap buckets."""
-from core.ledger.gaps import BUCKETS
+from core.ledger.build import BUCKETS
 from modules.cache import rules
 
 _SECS = dict(BUCKETS)

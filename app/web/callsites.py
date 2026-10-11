@@ -4,21 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.web.validations import require_key
 from core import profiler
 from core.identity import store
-from core.ledger import refresh
 
 api = APIRouter(prefix="/api/suite/callsites", dependencies=[Depends(require_key)], include_in_schema=False)
 
 
 def _cache_decision(site):
-    """The cache module's story for the site, from its stored report, or None."""
-    rep = refresh.latest() or {}
-    for u in rep.get("usecases", {}).values():
-        for s in u["sites"]:
-            if s["site"] == site:
-                return {"cause": s["story"]["cause"], "action": s["story"]["action"], "worth": s["story"]["worth"],
-                        "proof": s["story"]["proof"], "share": s["story"]["share"], "models": sorted(s["models"]),
-                        "built_at": rep.get("built_at")}
-    return None
+    """The cache module's decision for the site, from its stored diagnoses, or None."""
+    from modules.cache import query
+    return query.decision(site)
 
 
 def _with_profile(s):

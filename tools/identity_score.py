@@ -3,7 +3,7 @@
     BQ_TABLE=trust-router-sandbox.litellm.llm_log BQ_AGENT_COLUMN=vegas_usecase_name BQ_ID_COLUMN=vegas_common_services_txn_id \\
       .venv/bin/python tools/identity_score.py [--days 14] [--build]
 
---build recomputes the identity for the window first. Truth: the orchestrator's roles are distinct
+The script always runs the refresh build (temp tables in a BigQuery session), then scores call_rows. Truth: the orchestrator's roles are distinct
 call-sites; every other usecase is one call-site (its versions are versions of it). Purity = share of a found site's
 rows that belong to its majority true site; completeness = share of a true site's rows in its majority found site.
 """
@@ -14,13 +14,12 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.identity import sql as identity  # noqa: E402
-from core.ledger import bq  # noqa: E402
+from core.ledger import build, bq  # noqa: E402
 
 _SQL = """
-SELECT a.usecase, a.site, FALSE AS unsure,
+SELECT a.usecase, CAST(a.site AS STRING) AS site, FALSE AS unsure,
        COALESCE(JSON_VALUE(l.synthetic, '$.role'), 'main') AS truth, COUNT(*) AS n
-FROM {assign} a JOIN `{table}` l ON CAST(l.`{id}` AS STRING) = a.id AND a.day = DATE(l.`{time}`)
+FROM call_rows a JOIN `{table}` l ON CAST(l.`{id}` AS STRING) = a.id AND a.day = DATE(l.`{time}`)
 GROUP BY 1, 2, 3, 4
 """
 _TOTAL = """
@@ -30,13 +29,13 @@ GROUP BY 1
 """
 
 
-def main(days, build):
-    if build:
-        identity.build(days)
-        print("%d sites" % len(identity.sites(days)))
+def main(days, _build):
     c = bq.cfg()
-    rows = bq.query(_SQL.format(assign=bq.work("call_sites"), **c))
-    totals = {r["usecase"]: r["n"] for r in bq.query(_TOTAL.format(**c), {"days": days})}
+    b = build.Build(days)                                  # the refresh script, in a session: call_rows is its temp table
+    print("%d sites" % len(b.sites()))
+    rows = b.s.query(_SQL.format(**c))
+    totals = {r["usecase"]: r["n"] for r in b.s.query(_TOTAL.format(**c), {"days": days})}
+    b.close()
     by = {}
     for r in rows:
         by.setdefault(r["usecase"], []).append(r)

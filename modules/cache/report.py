@@ -1,104 +1,60 @@
-"""The cache report: the ledger, gaps and sites joined per usecase and call-site, with each site's diagnosis and TTL
-what-if. Built by core.ledger.refresh and stored; the API serves it as it is."""
+"""The cache diagnoses: for every call-site and model of the window, the cause, the lifetime what-if and the story,
+from the ledger and gap rows the refresh just fetched. Stored in cache_diagnoses; modules/cache/query.py serves them."""
 from collections import defaultdict
 
 from core import profiler
-from core.identity import sql as identity
-from core.ledger import daily, gaps
 from modules.cache import diagnosis, story, ttl
 
-_SUM = ("calls", "prompt_tokens", "cached_tokens", "written_tokens", "completion_tokens", "calls_cached", "cost",
-        "cost_nocache", "calls_with_tools")
+SUM = ("calls", "prompt_tokens", "cached_tokens", "written_tokens", "completion_tokens", "calls_cached", "cost",
+       "cost_nocache", "calls_with_tools")
 
 
-def _sum(rows):
-    out = {k: 0 for k in _SUM}
+def total(rows):
+    out = {k: 0 for k in SUM}
     for r in rows:
-        for k in _SUM:
+        for k in SUM:
             out[k] += r.get(k) or 0
-    out["unsure"] = any(r.get("unsure") for r in rows)
     return out
 
 
-def _share(d):
-    return d["cached_tokens"] / d["prompt_tokens"] if d.get("prompt_tokens") else 0.0
+def site_entry(s):
+    """A sites row (from the build) as the diagnosis and story code expect it."""
+    static = int(s.get("static_chars") or 0)
+    return {"site": str(s["site"]), "usecase": s.get("usecase"), "static_chars": static,
+            "dynamic_chars": int(s.get("dynamic_chars") or 0),
+            "static_after_dynamic": (int(s.get("static_after") or 0) / static) if static else 0.0,
+            "tool_sets": int(s.get("tool_sets") or 0),
+            "versions": [{"version": str(v["version"]), "first": str(v["first"]), "last": str(v["last"])} for v in s.get("versions") or []],
+            "profile": profiler.get(str(s["site"]))}
 
 
-def trend(days):
-    """Reuse share over the last 7 days against the 7 before: (recent, before, delta) or None."""
-    keys = sorted(days)
-    if len(keys) < 8:
-        return None
-    recent = _sum([days[k] for k in keys[-7:]])
-    before = _sum([days[k] for k in keys[-14:-7]])
-    if not before["prompt_tokens"]:
-        return None
-    return {"recent": round(_share(recent), 3), "before": round(_share(before), 3),
-            "delta": round(_share(recent) - _share(before), 3)}
-
-
-def build(days=14):
-    sites = {}
-    for r in identity.sites(days):
-        s = dict(r)
-        s["anchors"] = (s.pop("signature") or "").split("\n")
-        s["static_chars"] = int(s["static_chars"] or 0)
-        s["dynamic_chars"] = int(s["dynamic_chars"] or 0)
-        s["static_after_dynamic"] = (s.pop("static_after") or 0) / s["static_chars"] if s["static_chars"] else 0.0
-        s["versions"] = [{"version": str(v["version"]), "first": str(v["first"]), "last": str(v["last"])} for v in s["versions"] or []]
-        s["unsure"] = (s["n"] or 0) < 5 or not s["anchors"][0]
-        s["profile"] = profiler.get(s["site"])
-        sites[s["site"]] = s
-    led = daily.fetch(days)
-    gap = gaps.fetch(days)
-    by_site_model = defaultdict(list)
-    by_gap = defaultdict(list)
-    for r in led:
-        by_site_model[(r["usecase"], r["site"], r["model"])].append(r)
-    for g in gap:
-        by_gap[(g["usecase"], g["site"], g["model"])].append(g)
-    usecases = defaultdict(lambda: {"sites": {}, "days": defaultdict(lambda: {k: 0 for k in _SUM})})
-    for (uc, site, model), rows in by_site_model.items():
-        u = usecases[uc]
-        for r in rows:
-            d = u["days"][str(r["day"])]
-            for k in _SUM:
-                d[k] += r.get(k) or 0
-        tot = _sum(rows)
-        tot["model"] = model
-        t = ttl.what_if(by_gap.get((uc, site, model), []), model)
-        s = sites.get(site)
-        diag = diagnosis.diagnose(s, tot, t) if s else None
-        entry = u["sites"].setdefault(site, {"site": site, "anchors": (s or {}).get("anchors", []),
-                                             "profile": (s or {}).get("profile"),
-                                             "unsure": (s or {}).get("unsure", True), "versions": (s or {}).get("versions", []),
-                                             "layout": {k: (s or {}).get(k) for k in ("static_chars", "dynamic_chars",
-                                                                                      "static_after_dynamic", "tool_sets")},
-                                             "models": {}, "days": defaultdict(lambda: {k: 0 for k in _SUM})})
-        entry["models"][model] = {**tot, "ttl": t, "diagnosis": diag}
-        for r in rows:
-            d = entry["days"][str(r["day"])]
-            for k in _SUM:
-                d[k] += r.get(k) or 0
-    out = {"days": days, "usecases": {}}
-    for uc, u in usecases.items():
-        for s in u["sites"].values():
-            s["days"] = dict(s["days"])
-            s["total"] = _sum(list(s["models"].values()))
-            s["saving"] = round(sum((m["diagnosis"] or {}).get("saving", 0) for m in s["models"].values()), 2)
-            s["story"] = story.tell(s, days)
-            s["trend"] = trend(s["days"])
-        tot = _sum([s["total"] for s in u["sites"].values()])
-        out["usecases"][uc] = {"usecase": uc, "total": tot, "days": dict(u["days"]), "trend": trend(dict(u["days"])),
-                               "saving": round(sum(s["saving"] for s in u["sites"].values()), 2),
-                               "sites": sorted(u["sites"].values(), key=lambda s: (-s["saving"], -s["total"]["cost"]))}
-    out["total"] = _sum([u["total"] for u in out["usecases"].values()])
-    by_day = defaultdict(lambda: {k: 0 for k in _SUM})
-    for u in out["usecases"].values():
-        for day, d in u["days"].items():
-            for k in _SUM:
-                by_day[day][k] += d[k]
-    out["daily"] = dict(by_day)
-    out["trend"] = trend(out["daily"])
-    out["saving"] = round(sum(u["saving"] for u in out["usecases"].values()), 2)
+def diagnoses(sites, ledger, gaps, days):
+    """-> rows for cache_diagnoses: one per site and model, each carrying the site's story."""
+    by_sm, by_gap = defaultdict(list), defaultdict(list)
+    for r in ledger:
+        by_sm[(str(r["site"]), r["model"] or "")].append(r)
+    for g in gaps:
+        by_gap[(str(g["site"]), g["model"] or "")].append(g)
+    out = []
+    for s in sites:
+        site = str(s["site"])
+        entry = site_entry(s)
+        models = {}
+        for (st, model), rows in by_sm.items():
+            if st != site:
+                continue
+            tot = total(rows)
+            tot["model"] = model
+            t = ttl.what_if(by_gap.get((site, model), []), model)
+            models[model] = {**tot, "ttl": t, "diagnosis": diagnosis.diagnose(entry, tot, t)}
+        if not models:
+            continue
+        entry["models"] = models
+        entry["total"] = total(list(models.values()))
+        entry["saving"] = round(sum((m["diagnosis"] or {}).get("saving", 0) for m in models.values()), 2)
+        st = story.tell(entry, days)
+        for model, m in models.items():
+            out.append({"site": site, "model": model, "usecase": s.get("usecase"), "cause": m["diagnosis"]["cause"],
+                        "saving": m["diagnosis"]["saving"], "proof": m["diagnosis"]["proof"],
+                        "diagnosis": m["diagnosis"], "ttl": m["ttl"], "story": st})
     return out
