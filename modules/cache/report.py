@@ -64,5 +64,11 @@ def build(days=14):
                                "saving": round(sum(s["saving"] for s in u["sites"].values()), 2),
                                "sites": sorted(u["sites"].values(), key=lambda s: -s["total"]["cost"])}
     out["total"] = _sum([u["total"] for u in out["usecases"].values()])
+    by_day = defaultdict(lambda: {k: 0 for k in _SUM})
+    for u in out["usecases"].values():
+        for day, d in u["days"].items():
+            for k in _SUM:
+                by_day[day][k] += d[k]
+    out["daily"] = dict(by_day)
     out["saving"] = round(sum(u["saving"] for u in out["usecases"].values()), 2)
     return out

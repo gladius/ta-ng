@@ -27,8 +27,8 @@ export default function Home() {
           <div className="row"><Link className="btn primary" to="/sources">Audit an agent</Link><Link className="btn" to="/models">Model catalog</Link></div>
         </section>
         <section className="panel tile">
-          <div className="tile-head"><h2>Cache</h2><span className="chip">later</span></div>
-          <p className="muted">Which call-sites could cache their prompts, and what it would save.</p>
+          <div className="tile-head"><h2>Cache</h2><Link to="/cache">Cache analysis</Link></div>
+          <p className="muted">What caching saves today per usecase and call-site, why it isn't more, and what each fix is worth.</p>
         </section>
       </div>
     </Page>

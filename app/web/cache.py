@@ -17,7 +17,8 @@ def _report():
 @api.get("/overview")
 def overview():
     rep = _report()
-    return {"built_at": rep.get("built_at"), "days": rep["days"], "total": rep["total"], "saving": rep["saving"],
+    return {"built_at": rep.get("built_at"), "window": rep["days"], "daily": rep.get("daily", {}), "total": rep["total"],
+            "saving": rep["saving"],
             "usecases": [{"usecase": u["usecase"], "total": u["total"], "saving": u["saving"], "days": u["days"],
                           "sites": len(u["sites"]),
                           "causes": sorted({m["diagnosis"]["cause"] for s in u["sites"] for m in s["models"].values()
@@ -32,7 +33,7 @@ def usecase(usecase: str):
     u = rep["usecases"].get(usecase)
     if not u:
         raise HTTPException(404, "unknown usecase")
-    return {"built_at": rep.get("built_at"), "days": rep["days"], **u}
+    return {"built_at": rep.get("built_at"), "window": rep["days"], **u}
 
 
 @api.get("/sites/{site}")
@@ -41,7 +42,7 @@ def site(site: str):
     for u in rep["usecases"].values():
         for s in u["sites"]:
             if s["site"] == site:
-                return {"built_at": rep.get("built_at"), "days": rep["days"], "usecase": u["usecase"], **s}
+                return {"built_at": rep.get("built_at"), "window": rep["days"], "usecase": u["usecase"], **s}
     raise HTTPException(404, "unknown call-site")
 
 

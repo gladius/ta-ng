@@ -10,6 +10,7 @@ import Select from './pages/Select'
 import Report from './pages/Report'
 import Profile from './pages/Profile'
 import { Migrations, Models } from './pages/Catalog'
+import { CacheOverview, CacheSite, CacheUsecase } from './pages/Cache'
 import { Page } from './ui'
 
 export default function App() {
@@ -29,6 +30,9 @@ export default function App() {
         <Route path="agents/:source/:ws/:project/report" element={<Report />} />
         <Route path="agents/:source/:ws/:project/profile" element={<Profile />} />
         <Route path="agents/:source/:ws/:project/analyze" element={<Analyze />} />
+        <Route path="cache" element={<CacheOverview />} />
+        <Route path="cache/usecases/:usecase" element={<CacheUsecase />} />
+        <Route path="cache/sites/:site" element={<CacheSite />} />
         <Route path="models" element={<Models />} />
         <Route path="models/migrations/:provider" element={<Migrations />} />
         <Route path="*" element={<Page crumbs={[]}><p className="empty">No such page.</p></Page>} />

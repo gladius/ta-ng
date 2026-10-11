@@ -51,7 +51,7 @@ export default function Shell() {
         </div>
         <div className="group">
           <span className="group-name">Cache</span>
-          <Entry icon={Database} label="Cache analysis" later />
+          <Entry icon={Database} label="Cache analysis" to="/cache" />
         </div>
         <div className="group">
           <span className="group-name">Router</span>
