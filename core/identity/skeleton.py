@@ -117,8 +117,33 @@ def version_id(static_lines):
     return hashlib.sha1("\n".join(sorted(static_lines)).encode()).hexdigest()[:8]
 
 
+def ordered(prompt):
+    """The prompt's masked lines in order (the ones `lines` keeps)."""
+    return [l.strip() for l in mask(prompt).split("\n") if len(l.strip()) >= MIN_LINE]
+
+
+def layout(prompts, members, static, sample=200):
+    """How the static text sits: static_chars, dynamic_chars, and the share of static characters that come AFTER the
+    first dynamic line (text a prefix cache can't reach while the layout stays), plus distinct tool sets."""
+    sc = dc = after = 0
+    tool_sets = set()
+    for i in members[:sample]:
+        seen_dynamic = False
+        for l in ordered(prompts[i][0]):
+            if l in static:
+                sc += len(l)
+                after += len(l) if seen_dynamic else 0
+            else:
+                dc += len(l)
+                seen_dynamic = True
+        tool_sets.add(tuple(sorted(prompts[i][1] or ())))
+    n = min(len(members), sample) or 1
+    return {"static_chars": sc // n, "dynamic_chars": dc // n, "static_after_dynamic": after / sc if sc else 0.0,
+            "tool_sets": len(tool_sets)}
+
+
 def describe(usecase, prompts, stamps=None):
-    """Group a usecase's sampled prompts -> [{site, n, unsure, anchors, static, dynamic, versions, members}].
+    """Group a usecase's sampled prompts -> [{site, n, unsure, anchors, static, dynamic, versions, members, layout}].
     `stamps` (one per prompt, sortable) gives versions: the static set per day; a change of it is a new version."""
     cs = cluster(prompts)
     ancs = anchors(cs)
@@ -140,5 +165,6 @@ def describe(usecase, prompts, stamps=None):
             versions = list(seen.values())
         out.append({"site": site_id(usecase, anc) if anc else site_id(usecase, ["<no anchors>", str(len(out))]),
                     "n": c.n, "unsure": c.n < UNSURE or not anc, "anchors": anc,
-                    "static": len(static), "dynamic": len(dynamic), "versions": versions, "members": c.members})
+                    "static": len(static), "dynamic": len(dynamic), "versions": versions, "members": c.members,
+                    "layout": layout(prompts, c.members, static)})
     return out

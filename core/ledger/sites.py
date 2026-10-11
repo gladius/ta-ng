@@ -9,6 +9,8 @@ SAMPLE = 2000
 SITES_SCHEMA = [("usecase", "STRING", "NULLABLE"), ("site", "STRING", "REQUIRED"), ("rank", "INTEGER", "REQUIRED"),
                 ("n", "INTEGER", "REQUIRED"), ("unsure", "BOOL", "REQUIRED"), ("anchors", "STRING", "REPEATED"),
                 ("static_lines", "INTEGER", "REQUIRED"), ("dynamic_lines", "INTEGER", "REQUIRED"),
+                ("static_chars", "INTEGER", "REQUIRED"), ("dynamic_chars", "INTEGER", "REQUIRED"),
+                ("static_after_dynamic", "FLOAT", "REQUIRED"), ("tool_sets", "INTEGER", "REQUIRED"),
                 ("versions", "STRING", "NULLABLE")]
 
 _SAMPLE_SQL = """
@@ -56,7 +58,7 @@ def build(days=14, sample=SAMPLE):
         for rank, d in enumerate(skeleton.describe(usecase, prompts, [ts for _, _, ts in items])):
             out.append({"usecase": usecase, "site": d["site"], "rank": rank, "n": d["n"], "unsure": d["unsure"],
                         "anchors": d["anchors"], "static_lines": d["static"], "dynamic_lines": d["dynamic"],
-                        "versions": json.dumps(d["versions"])})
+                        **d["layout"], "versions": json.dumps(d["versions"])})
     bq.load_rows("sites", out, SITES_SCHEMA, replace=True)
     bq.query(_ASSIGN_SQL.format(out=bq.work("call_sites"), sites=bq.work("sites"), **c), {"days": days})
     return out
