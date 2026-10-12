@@ -9,7 +9,7 @@ BigQuery). Mid-run instance 1 crashes (SIGKILL: its requests must go stale, then
 later instance 2 is stopped as in a redeploy (SIGTERM: it must hand its requests back at once) and is restarted.
 Everything is then checked against the database itself, and a PASS/FAIL line is printed per check.
 
---reset drops the four validation_* tables first (never point it at a database whose jobs you want to keep).
+--reset drops the model_audits and validation_* tables first (never point it at a database whose jobs you want to keep).
 Ports 8101-8104 and 8199 must be free. Logs: .data/e2e_logs/."""
 import collections
 import csv
@@ -222,9 +222,9 @@ def main():
     eng = sa.create_engine(DB_URL, pool_pre_ping=True)
     if "--reset" in sys.argv:
         with eng.begin() as c:
-            for t in ("validation_callbacks", "validation_cells", "validation_items", "validation_jobs"):
+            for t in ("validation_callbacks", "validation_cells", "validation_items", "validation_jobs", "model_audits"):
                 c.execute(sa.text("DROP TABLE IF EXISTS %s" % t))
-        say("dropped the validation tables (--reset)")
+        say("dropped the audit tables (--reset)")
     srv = ThreadingHTTPServer(("127.0.0.1", CB_PORT), CB)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     names = {}              # worker-id prefix (one per process) -> instance name
