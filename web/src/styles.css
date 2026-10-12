@@ -367,3 +367,8 @@ tr.dim { opacity: 0.45; }
 .dialog { display: flex; flex-direction: column; gap: 10px; }
 .dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-2); }
 .dialog select.input { min-width: 240px; }
+
+.picks { display: flex; flex-wrap: wrap; gap: 6px 14px; max-height: 220px; overflow: auto; padding: 6px 0; }
+.pick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.pick.off { color: var(--ink-2); }
+.btn.small { padding: 4px 10px; font-size: 12px; }

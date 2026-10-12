@@ -13,8 +13,9 @@ type Site = {
   versions: { version: string; first: string; last: string }[]; static_chars: number; dynamic_chars: number; static_after: number
   tool_sets: number; unsure: boolean; window_days: number; updated_at: string | null; profile: Profile
 }
-type Models = { candidates: Record<string, Verdict & { check: string; at: string; trigger: string }> } | null
-type UsecaseRow = { usecase: string | null; calls: number; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; analysing: boolean; error: string | null }
+type Pick = { model: string; cost_vs_original_pct?: number; latency_vs_original_pct?: number; check: string } | null
+type Models = { candidates: Record<string, Verdict & { check: string; at: string; trigger: string }>; cheapest?: Pick; fastest?: Pick } | null
+type UsecaseRow = { usecase: string | null; calls: number; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; analysing: boolean; error: string | null; decisions?: { models?: { sites: number; with_cheaper: number; saving: number; cost: number } } }
 type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; usecases: UsecaseRow[] }
 type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean }
 type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null } }
@@ -92,10 +93,11 @@ export function CallSiteUsecase() {
     <Page crumbs={crumbs}>
       <div className="head">
         <div><h1>{usecaseName(u.usecase)}</h1><span className="muted">{u.calls.toLocaleString('en-US')} calls in the window{u.sites.length > 0 && <> · made of {count(u.sites.length, 'call-site')} ({calls.toLocaleString('en-US')} chat calls)</>} · derived from the log, no source code needed{u.analysed_at && <> · analysed {when(u.analysed_at)}</>}</span></div>
-        <div className="row"><CheckDialog usecase={u.usecase} /><button className="btn" disabled={u.analysing} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? 'Analysing…' : 'Analyse again'}</button></div>
+        <div className="row"><CheckDialog usecase={u.usecase} lockScope /><button className="btn" disabled={u.analysing} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? 'Analysing…' : 'Analyse again'}</button></div>
       </div>
       {u.analysing && !u.sites.length && <p className="empty">Analysing this usecase from the log: finding its call-sites, naming them, reading their cache behaviour. Usually under a minute.</p>}
       {u.error && <p className="error" role="alert">The last analysis failed: {u.error}</p>}
+      {u.decisions?.models && u.decisions.models.with_cheaper > 0 && <p><b>A cheaper model passes on {u.decisions.models.with_cheaper} of {u.decisions.models.sites} call-sites</b>: about {money(u.decisions.models.saving, 2)} of {money(u.decisions.models.cost, 2)} spent in the window.</p>}
       {u.sites.map((s) => (
         <section key={s.site} className="panel site-card">
           <div className="spread">
@@ -108,7 +110,7 @@ export function CallSiteUsecase() {
             {s.unsure && <span className="chip warn">grouping unsure</span>}
             {!s.profile && <span className="chip">not profiled</span>}
           </div>
-          <p><CacheLine c={s.cache} site={s.site} /> · models: {s.decisions?.models ? Object.entries(s.decisions.models.candidates).map(([cand, v]) => <span key={cand}><span className="mono">{cand}</span> <VerdictChip v={v} /> </span>) : 'not checked yet'} · router: no pin</p>
+          <p><CacheLine c={s.cache} site={s.site} /> · models: {s.decisions?.models ? (s.decisions.models.cheapest ? <><b>cheapest that passes: <span className="mono">{s.decisions.models.cheapest.model}</span></b> ({s.decisions.models.cheapest.cost_vs_original_pct}% cost)</> : 'none cheaper passes yet') : 'not checked yet'} · router: no pin</p>
         </section>
       ))}
     </Page>
@@ -189,6 +191,7 @@ export function CallSite() {
           <h2>Decisions</h2>
           <p><b>Cache</b> · {s.decisions.cache ? <CacheLine c={s.decisions.cache} site={s.site} /> : <span className="muted">not analysed yet</span>}</p>
           {s.decisions.cache?.action && <p className="muted">{s.decisions.cache.action}</p>}
+          {s.decisions.models?.cheapest && <p><b>Cheapest that passes: <span className="mono">{s.decisions.models.cheapest.model}</span></b> at {s.decisions.models.cheapest.cost_vs_original_pct}% cost{s.decisions.models.fastest && <>; fastest that passes: <span className="mono">{s.decisions.models.fastest.model}</span> at {s.decisions.models.fastest.latency_vs_original_pct}% latency</>}.</p>}
           <p><b>Models</b> · {s.decisions.models ? Object.entries(s.decisions.models.candidates).map(([cand, v]) => (
             <span key={cand} className="row"><span className="mono">{cand}</span> <VerdictChip v={v} />{v.cost_vs_original_pct != null && <span className="muted">{v.cost_vs_original_pct}% cost</span>}<Link className="muted" to={`/checks/${v.check}`}>check {when(v.at)}</Link></span>
           )) : <span className="muted">no model checked for this call-site yet</span>}</p>

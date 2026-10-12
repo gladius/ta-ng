@@ -1,4 +1,4 @@
-"""Model checks: start one (a usecase or a call-site, a preset or named candidates, a budget), list them, follow one."""
+"""Model checks: one way to start them (usecases or a call-site, the models to try, Auto), list them, follow one."""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,12 +12,14 @@ api = APIRouter(prefix="/api/suite/checks", dependencies=[Depends(require_key)],
 
 
 class CheckIn(BaseModel):
-    usecase: Optional[str] = None                   # None / "None" for the untagged usecase
+    """Scope: `usecases` (one check each), or one `site`. Candidates: `models` (any served models) and/or `auto`
+    (per call-site, the catalog's cheaper tier and open-weight swap of its current model)."""
+    usecases: list[str] = Field(default_factory=list)       # "None" names the untagged usecase
     site: Optional[str] = None
-    preset: str = "cheaper"
-    candidates: list[str] = Field(default_factory=list)
+    models: list[str] = Field(default_factory=list)
+    auto: bool = False
     samples: int = Field(default=checks.DEFAULT_SAMPLES, ge=1, le=50)
-    max_budget_usd: float = Field(gt=0)
+    max_budget_usd: Optional[float] = Field(default=None, gt=0, description="per check; none when left out")
     trigger: str = "user"
     judge_model: Optional[str] = None
 
@@ -33,40 +35,28 @@ def estimate(usecase: Optional[str] = None, site: Optional[str] = None, samples:
 
 @api.post("", status_code=202)
 def start(body: CheckIn):
-    if body.preset not in checks.PRESETS:
-        raise HTTPException(422, "preset must be one of %s" % ", ".join(checks.PRESETS))
-    if body.preset in ("release", "custom") and not body.candidates:
-        raise HTTPException(422, "%s needs candidate models" % body.preset)
+    if not body.models and not body.auto:
+        raise HTTPException(422, "name at least one model, or choose Auto")
     if body.trigger not in checks.TRIGGERS:
         raise HTTPException(422, "trigger must be one of %s" % ", ".join(checks.TRIGGERS))
-    if body.site and not store.get(body.site):
-        raise HTTPException(404, "unknown call-site")
-    if not body.site and not store.get_usecase(_uc(body.usecase)):
-        raise HTTPException(404, "unknown usecase")
-    c = checks.start(usecase=_uc(body.usecase), site=body.site, preset=body.preset, asked=body.candidates,
-                     n=body.samples, max_budget_usd=body.max_budget_usd, trigger=body.trigger, judge_model=body.judge_model)
-    return c
-
-
-class ReleaseIn(BaseModel):
-    """A release check: the named models against every analysed usecase (or the top N by calls), one check each."""
-    candidates: list[str] = Field(min_length=1)
-    top: int = Field(default=20, ge=1, le=500)
-    usecases: list[str] = Field(default_factory=list)       # explicit instead of top N
-    samples: int = Field(default=checks.DEFAULT_SAMPLES, ge=1, le=50)
-    max_budget_usd: float = Field(gt=0, description="per usecase")
-    judge_model: Optional[str] = None
-
-
-@api.post("/release", status_code=202)
-def release(body: ReleaseIn):
-    analysed = [u for u in store.usecase_list(per_page=200)["usecases"] if u["analysed_at"] and u["sites"]]
-    wanted = [u["usecase"] for u in analysed if not body.usecases or (u["usecase"] or "None") in body.usecases][:body.top]
-    if not wanted:
-        raise HTTPException(422, "no analysed usecase to check: open usecases first, or analyse all on the cache page")
-    started = [checks.start(usecase=uc, preset="release", asked=body.candidates, n=body.samples,
-                            max_budget_usd=body.max_budget_usd, trigger="release", judge_model=body.judge_model) for uc in wanted]
-    return {"checks": [c["id"] for c in started], "usecases": wanted}
+    preset = "auto" if body.auto and not body.models else "custom"
+    kw = dict(preset=preset, asked=body.models, auto=body.auto, n=body.samples, max_budget_usd=body.max_budget_usd,
+              trigger=body.trigger, judge_model=body.judge_model)
+    if body.site:
+        rec = store.get(body.site)
+        if not rec:
+            raise HTTPException(404, "unknown call-site")
+        c = checks.start(usecase=rec["usecase"], site=body.site, **kw)
+        return {"checks": [c["id"]]}
+    if not body.usecases:
+        raise HTTPException(422, "choose at least one usecase, or a call-site")
+    started = []
+    for u in body.usecases:
+        if not store.get_usecase(_uc(u)):
+            raise HTTPException(404, "unknown usecase %s" % u)
+    for u in body.usecases:
+        started.append(checks.start(usecase=_uc(u), site=None, **kw)["id"])
+    return {"checks": started}
 
 
 @api.get("")

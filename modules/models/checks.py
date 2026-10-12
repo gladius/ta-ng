@@ -25,7 +25,7 @@ from core.identity import store
 from core.ledger import build
 from validation import jobs
 
-PRESETS = ("cheaper", "open_weight", "release", "custom")
+PRESETS = ("cheaper", "open_weight", "release", "custom", "auto")
 TRIGGERS = ("user", "release", "router", "api")
 DEFAULT_SAMPLES = 8
 
@@ -102,15 +102,39 @@ def sample(usecase, site=None, n=DEFAULT_SAMPLES, days=30):
 
 
 # --------------------------------------------------------------------------------------------------- candidates
-def candidates_for(model, preset, asked):
-    """The candidate models for a call-site sent to `model`: by preset, or as asked."""
+def auto_candidates(model):
+    """What Auto tries for a call-site on `model`: the catalog's next cheaper tier and its open-weight swap. The
+    measurement decides; these are only the seeds. ponytail: add one tier up and the cross-provider peer once the
+    conclusion can rank them by measured cost."""
+    out = []
+    for c in (catalog.next_cheaper(model), catalog.open_weight_target(model)):
+        if c and c != model and c not in out:
+            out.append(c)
+    return out
+
+
+def served(models):
+    """Only the models the gateway serves (a check can't call the others); unknown off-gateway -> keep as given."""
+    from app import registry
+    try:
+        if not registry.has_gateway():
+            return list(models)
+        return [m for m in models if registry.is_available(m)]
+    except Exception:
+        return list(models)
+
+
+def candidates_for(model, preset, asked, auto=False):
+    """The candidate models for a call-site sent to `model`: the ones asked for, plus Auto's seeds."""
     if preset == "cheaper":
-        c = catalog.next_cheaper(model)
-        return [c] if c else []
+        return served(auto_candidates(model)[:1])
     if preset == "open_weight":
         c = catalog.open_weight_target(model)
-        return [c] if c else []
-    return [m for m in asked if m and m != model]
+        return served([c] if c else [])
+    out = [m for m in asked if m and m != model]
+    if auto or preset == "auto":
+        out += [m for m in auto_candidates(model) if m not in out]
+    return served(out)
 
 
 # -------------------------------------------------------------------------------------------------------- checks
@@ -192,7 +216,7 @@ def start(**kw):
 
 
 def _fill(check_id, usecase, site=None, preset="cheaper", asked=(), n=DEFAULT_SAMPLES, max_budget_usd=None,
-          trigger="user", judge_model=None, days=30):
+          trigger="user", judge_model=None, days=30, auto=False):
     """The body of create() for a check row that already exists."""
     from app.services.downgrade_refset import spec as app_spec
     from app.web.validations import _logged_bodies
@@ -200,7 +224,7 @@ def _fill(check_id, usecase, site=None, preset="cheaper", asked=(), n=DEFAULT_SA
     try:
         if preset not in PRESETS:
             raise ValueError("preset must be one of %s" % ", ".join(PRESETS))
-        if preset in ("release", "custom") and not asked:
+        if preset in ("release", "custom") and not asked and not auto:
             raise ValueError("%s needs candidate models" % preset)
         samples = sample(usecase, site, n, days)
         if not samples:
@@ -213,7 +237,7 @@ def _fill(check_id, usecase, site=None, preset="cheaper", asked=(), n=DEFAULT_SA
                 if s["id"] not in bodies or not bodies[s["id"]][1]:
                     continue
                 req, resp = bodies[s["id"]]
-                cands = candidates_for(req.get("model"), preset, asked)
+                cands = candidates_for(req.get("model"), preset, asked, auto)
                 if not cands:
                     continue
                 trace = to_trace(req, resp, usecase or "log")
@@ -280,6 +304,7 @@ def refresh_status(check):
         return get(check["id"])
     verdicts = _verdicts(check)
     at = _now()
+    touched = set()
     for st, by in verdicts.items():
         rec = store.get(st)
         if not rec:
@@ -287,7 +312,36 @@ def refresh_status(check):
         cur = (rec["decisions"].get("models") or {}).get("candidates", {})
         for cand, v in by.items():
             cur[cand] = {**v, "check": check["id"], "at": at.isoformat(timespec="seconds"), "trigger": check["trigger"]}
-        store.set_decision(st, "models", {"candidates": cur})
+        store.set_decision(st, "models", {"candidates": cur, **conclusion(cur)})
+        touched.add(rec["usecase"] or "")
+    for uc in touched:
+        store.set_usecase_decision(uc, "models", usecase_rollup(uc))
     _set(check["id"], status="done" if job["status"] == "done" else job["status"], summary=json.dumps(verdicts),
          finished_at=at, error=job.get("error"))
     return get(check["id"])
+
+
+def conclusion(cands):
+    """Among the candidates that pass on every sampled request, the cheapest and the fastest by MEASURED cost and
+    latency against the original (a stronger model that answers tightly can be both)."""
+    ok = {m: v for m, v in cands.items() if v.get("verdict") == "passes"}
+    cheapest = min((m for m in ok if ok[m].get("cost_vs_original_pct") is not None), key=lambda m: ok[m]["cost_vs_original_pct"], default=None)
+    fastest = min((m for m in ok if ok[m].get("latency_vs_original_pct") is not None), key=lambda m: ok[m]["latency_vs_original_pct"], default=None)
+    pick = lambda m, k: None if m is None or ok[m][k] >= 0 else {"model": m, k: ok[m][k], "check": ok[m]["check"]}
+    return {"cheapest": pick(cheapest, "cost_vs_original_pct"), "fastest": pick(fastest, "latency_vs_original_pct")}
+
+
+def usecase_rollup(usecase):
+    """Per usecase: on how many call-sites a cheaper model passed, and the saving at the window's volume."""
+    recs = store.by_usecase(usecase or None)
+    sites, with_pick, saving, base = 0, 0, 0.0, 0.0
+    for r in recs:
+        sites += 1
+        m = r["decisions"].get("models") or {}
+        cost = sum(d.get("cost") or 0 for days in r["series"].values() for d in days.values())
+        base += cost
+        if m.get("cheapest"):
+            with_pick += 1
+            saving += cost * (-m["cheapest"]["cost_vs_original_pct"]) / 100
+    return {"sites": sites, "with_cheaper": with_pick, "saving": round(saving, 2), "cost": round(base, 2),
+            "picks": {r["site"]: r["decisions"]["models"]["cheapest"] for r in recs if (r["decisions"].get("models") or {}).get("cheapest")}}

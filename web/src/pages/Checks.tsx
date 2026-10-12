@@ -14,71 +14,77 @@ export type Check = {
 }
 type CheckPage = Check & { job: { id: string; status: string; items_total: number; items_done: number; spend_usd: number; stop_reason: string | null } | null; site_names: Record<string, string> }
 
-export const PRESET: Record<string, string> = { cheaper: 'cheaper tier of each call-site\'s model', open_weight: 'open-weight swap in the same tier', release: 'a release (one named model)', custom: 'models you name' }
+export const PRESET: Record<string, string> = { cheaper: 'cheaper tier of each call-site\'s model', open_weight: 'open-weight swap in the same tier', release: 'a release', custom: 'chosen models', auto: 'Auto' }
 const STATUS: Record<string, string> = { sampling: 'Sampling', queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', stopped: 'Stopped' }
 
 export function VerdictChip({ v }: { v: Verdict }) {
   return <span className={'chip ' + (v.verdict === 'passes' ? 'cause-ok' : v.verdict === 'drifts' ? 'cause-dynamic_first' : '')}>{v.verdict} · {v.within} of {v.requests}</span>
 }
 
-/** Start a check for a usecase or a call-site: preset, candidates, samples, budget, with the estimate. */
-export function CheckDialog({ usecase, site, onStarted }: { usecase: string | null; site?: string; onStarted?: (id: string) => void }) {
+type Served = { models: { model: string; available: boolean; provider: string; tier: string | null; open_weight: boolean }[] }
+type UsecaseOpt = { usecase: string | null; sites: number | null; analysed_at: string | null; calls: number }
+
+/** The one way to start a check: which usecases (or the one call-site this page is on), which models (any the
+    gateway serves, several at once) and/or Auto; samples and budget under "advanced". */
+export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { usecase?: string | null; site?: string; lockScope?: boolean; onStarted?: (ids: string[]) => void }) {
   const [open, setOpen] = useState(false)
-  const [preset, setPreset] = useState('cheaper')
-  const [models, setModels] = useState('')
+  const [usecases, setUsecases] = useState<string[]>(usecase !== undefined ? [usecase ?? 'None'] : [])
+  const [models, setModels] = useState<string[]>([])
+  const [auto, setAuto] = useState(true)
+  const [advanced, setAdvanced] = useState(false)
   const [samples, setSamples] = useState(8)
-  const [budget, setBudget] = useState(10)
-  const nCand = preset === 'custom' || preset === 'release' ? Math.max(1, models.split(',').filter((x) => x.trim()).length) : 1
-  const est = useQuery({ queryKey: ['check-estimate', usecase, site, samples, nCand], enabled: open,
-    queryFn: () => get<{ usd: number }>(`/suite/checks/estimate?${new URLSearchParams({ usecase: usecase ?? 'None', ...(site && { site }), samples: String(samples), candidates: String(nCand) })}`) })
+  const [budget, setBudget] = useState<number | ''>('')
+  const served = useQuery({ queryKey: ['served-models'], queryFn: () => get<Served>('/suite/models'), enabled: open })
+  const opts = useQuery({ queryKey: ['usecase-options'], queryFn: () => get<{ usecases: UsecaseOpt[] }>('/suite/callsites/usecases?per_page=200'), enabled: open && !site && !lockScope })
+  const est = useQuery({ queryKey: ['check-estimate', usecases, site, samples, models.length + (auto ? 1 : 0)], enabled: open && (!!site || usecases.length > 0),
+    queryFn: async () => {
+      const n = Math.max(1, models.length + (auto ? 1 : 0))
+      const scopes: (string | null)[] = site ? [null] : usecases
+      const sums = await Promise.all(scopes.map((u) => get<{ usd: number }>(`/suite/checks/estimate?${new URLSearchParams({ ...(u != null && { usecase: u }), ...(site && { site }), samples: String(samples), candidates: String(n) })}`)))
+      return { usd: sums.reduce((a, b) => a + b.usd, 0) }
+    } })
   const start = useMutation({
-    mutationFn: () => get<Check>('/suite/checks', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ usecase: usecase ?? 'None', site, preset, candidates: models.split(',').map((x) => x.trim()).filter(Boolean), samples, max_budget_usd: budget }) }),
-    onSuccess: (c) => { setOpen(false); onStarted?.(c.id) },
+    mutationFn: () => get<{ checks: string[] }>('/suite/checks', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ usecases: site ? [] : usecases, site, models, auto, samples, ...(budget !== '' && { max_budget_usd: budget }) }) }),
+    onSuccess: (r) => { setOpen(false); onStarted?.(r.checks) },
   })
   if (!open) return <button className="btn primary" onClick={() => setOpen(true)}>Check models…</button>
+  const toggle = (list: string[], v: string, set: (l: string[]) => void) => set(list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
+  const available = (served.data?.models ?? []).filter((m) => m.available)
   return (
     <div className="panel pad dialog">
-      <h2>Check models {site ? 'for this call-site' : 'for every call-site of this usecase'}</h2>
-      <p className="muted">Samples each call-site's requests by size (smallest, largest, the quartiles, the heaviest answers, a few random), re-runs the original and each candidate on them, and judges the answers with evidence. Nothing in production changes.</p>
-      <div className="row">
-        <label>Candidates <select className="input" value={preset} onChange={(e) => setPreset(e.target.value)}>{Object.entries(PRESET).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
-        {(preset === 'custom' || preset === 'release') && <label>Models <input className="input" placeholder="gpt-5.5, claude-haiku-4-5" value={models} onChange={(e) => setModels(e.target.value)} /></label>}
-        <label>Samples per call-site <input className="input" type="number" min={1} max={50} value={samples} onChange={(e) => setSamples(Number(e.target.value))} /></label>
-        <label>Budget, $ <input className="input" type="number" min={1} step={1} value={budget} onChange={(e) => setBudget(Number(e.target.value))} /></label>
+      <h2>Check models {site ? 'on this call-site' : lockScope ? 'on this usecase' : ''}</h2>
+      <p className="muted">Each call-site's requests are sampled by size; the current model and every candidate answer them again; a judge compares the answers with evidence. You get, per call-site: which candidates drift, and the cheapest and fastest that don't, by measured cost and latency. Nothing in production changes.</p>
+      {!site && !lockScope && (
+        <div>
+          <div className="muted">Usecases ({usecases.length} chosen) <button className="btn small" onClick={() => setUsecases((opts.data?.usecases ?? []).filter((u) => u.analysed_at && u.sites).map((u) => u.usecase ?? 'None'))}>all analysed</button> <button className="btn small" onClick={() => setUsecases([])}>none</button></div>
+          <div className="picks">
+            {(opts.data?.usecases ?? []).map((u) => { const id = u.usecase ?? 'None'; const ok = !!u.analysed_at && !!u.sites; return (
+              <label key={id} className={'pick' + (ok ? '' : ' off')} title={ok ? `${u.calls.toLocaleString('en-US')} calls` : 'not analysed yet: open it first'}>
+                <input type="checkbox" disabled={!ok} checked={usecases.includes(id)} onChange={() => toggle(usecases, id, setUsecases)} /> {usecaseName(u.usecase)}
+              </label>) })}
+          </div>
+        </div>
+      )}
+      <div>
+        <div className="muted">Models to try ({models.length} chosen{auto && ' + Auto'})</div>
+        <div className="picks">
+          <label className="pick"><input type="checkbox" checked={auto} onChange={() => setAuto(!auto)} /> <b>Auto</b> <span className="muted">per call-site: the cheaper tier and the open-weight swap of its current model</span></label>
+          {available.map((m) => (
+            <label key={m.model} className="pick"><input type="checkbox" checked={models.includes(m.model)} onChange={() => toggle(models, m.model, setModels)} /> <span className="mono">{m.model}</span> <span className="muted">{m.provider}{m.tier ? ` · ${m.tier}` : ''}{m.open_weight ? ' · open-weight' : ''}</span></label>
+          ))}
+        </div>
       </div>
-      <p className="muted">Estimated cost: {est.data ? money(est.data.usd, 2) : '…'} (the budget stops the check once reached).</p>
+      <button className="btn small" onClick={() => setAdvanced(!advanced)}>{advanced ? 'Hide advanced' : 'Advanced'}</button>
+      {advanced && (
+        <div className="row">
+          <label>Samples per call-site <input className="input" type="number" min={1} max={50} value={samples} onChange={(e) => setSamples(Number(e.target.value))} /></label>
+          <label>Budget per check, $ (optional) <input className="input" type="number" min={1} step={1} value={budget} onChange={(e) => setBudget(e.target.value === '' ? '' : Number(e.target.value))} /></label>
+        </div>
+      )}
+      <p className="muted">Estimated cost: {est.data ? money(est.data.usd, 2) : '…'} · {site ? '1 check' : `${usecases.length} check${usecases.length === 1 ? '' : 's'}, one per usecase`}</p>
       {start.isError && <p className="error" role="alert">{start.error instanceof Error ? start.error.message : String(start.error)}</p>}
-      <div className="row"><button className="btn primary" disabled={start.isPending} onClick={() => start.mutate()}>Start</button><button className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
-    </div>
-  )
-}
-
-/** A release check: named models against every analysed usecase (or the top N), one check per usecase. */
-function ReleaseDialog({ onStarted }: { onStarted: () => void }) {
-  const [open, setOpen] = useState(false)
-  const [models, setModels] = useState('')
-  const [top, setTop] = useState(20)
-  const [samples, setSamples] = useState(8)
-  const [budget, setBudget] = useState(5)
-  const start = useMutation({
-    mutationFn: () => get<{ checks: string[]; usecases: string[] }>('/suite/checks/release', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ candidates: models.split(',').map((x) => x.trim()).filter(Boolean), top, samples, max_budget_usd: budget }) }),
-    onSuccess: () => { setOpen(false); onStarted() },
-  })
-  if (!open) return <button className="btn primary" onClick={() => setOpen(true)}>Check a release…</button>
-  return (
-    <div className="panel pad dialog">
-      <h2>Check a release across usecases</h2>
-      <p className="muted">One check per analysed usecase, biggest first: the named model against each call-site's current model on sampled requests. The budget is per usecase.</p>
-      <div className="row">
-        <label>Models <input className="input" placeholder="gpt-5.5" value={models} onChange={(e) => setModels(e.target.value)} /></label>
-        <label>Top usecases by calls <input className="input" type="number" min={1} max={500} value={top} onChange={(e) => setTop(Number(e.target.value))} /></label>
-        <label>Samples per call-site <input className="input" type="number" min={1} max={50} value={samples} onChange={(e) => setSamples(Number(e.target.value))} /></label>
-        <label>Budget per usecase, $ <input className="input" type="number" min={1} step={1} value={budget} onChange={(e) => setBudget(Number(e.target.value))} /></label>
-      </div>
-      {start.isError && <p className="error" role="alert">{start.error instanceof Error ? start.error.message : String(start.error)}</p>}
-      <div className="row"><button className="btn primary" disabled={start.isPending || !models.trim()} onClick={() => start.mutate()}>Start</button><button className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
+      <div className="row"><button className="btn primary" disabled={start.isPending || (!site && !usecases.length) || (!models.length && !auto)} onClick={() => start.mutate()}>Start</button><button className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
     </div>
   )
 }
@@ -90,7 +96,7 @@ export function Checks() {
   const crumbs = [{ label: 'Models' }, { label: 'Checks' }]
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>Model checks</h1><span className="muted">would a cheaper, open-weight or newly released model hold on a usecase's call-sites? Started from a usecase or call-site page, here for a release, by the API, or by the router.</span></div><ReleaseDialog onStarted={() => q.refetch()} /></div>
+      <div className="head"><div><h1>Model checks</h1><span className="muted">would a cheaper, open-weight or newly released model hold on a usecase's call-sites? Started from a usecase or call-site page, here for a release, by the API, or by the router.</span></div><CheckDialog onStarted={() => q.refetch()} /></div>
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No checks yet. Open a usecase and press "Check models…".</p> : (
         <section className="panel">
           <table className="grid">

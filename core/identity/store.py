@@ -118,6 +118,15 @@ def set_usecase_summary(uc, sites, profile=None):
         c.execute(update(usecases).where(usecases.c.usecase == (uc or "")).values(**vals))
 
 
+def set_usecase_decision(uc, module, value):
+    eng = db.ready()
+    with eng.begin() as c:
+        cur = c.execute(select(usecases.c.decisions).where(usecases.c.usecase == (uc or ""))).scalar()
+        d = json.loads(cur or "{}")
+        d[module] = value
+        c.execute(update(usecases).where(usecases.c.usecase == (uc or "")).values(decisions=json.dumps(d)))
+
+
 def _urow(r):
     d = dict(zip([c.name for c in usecases.columns], r))
     d["usecase"] = d["usecase"] or None
