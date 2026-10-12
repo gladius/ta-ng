@@ -162,3 +162,14 @@ per-request candidates); one id per audit, also its job's id; results, resume, d
 `/api/audit/models/{id}`. The UI's Validations pages became the audit's own pages (`/audit/models/:id/requests`,
 `.../requests/:request`). "Validation" is now only the internal name of the engine (validation/). The old batches
 were migrated into request-scope audits with their ids. Env names still say VALIDATION_* (deployment settings).
+
+## Findings vs choice (2026-10-12)
+An audit's findings are rows of `audit_verdicts` (audit x call-site x model), history kept; "what we know" about a
+call-site is a query (latest valid verdict per model; cheapest/fastest that pass). The call-site record has one owner
+per part: identity (analysis, or an audit's sampling: upsert only), profile (profiler), cache_findings (cache analysis),
+choice (router or a person; the only stored decision, pointing at the audit it relied on). No shared decisions JSON,
+no race. Any generative usecase can be audited (no "analysed" gate). The usecases list counts generative calls only:
+chat-format analysed, other formats (prompt / non-embedding input) counted as not analysed yet; embeddings out.
+Strategies pick among served generative models (up to 3), with a preview; drift watch removed until the engine can
+compare with a previous audit's answers. catalog.canonical_model fixed: dashed dates and longest match
+(gpt-5.4-2026-03-05 was mapped, and priced, as gpt-5).

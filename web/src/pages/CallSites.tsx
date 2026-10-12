@@ -15,7 +15,7 @@ type Site = {
 }
 type Pick = { model: string; cost_vs_original_pct?: number; latency_vs_original_pct?: number; audit: string } | null
 type Models = { candidates: Record<string, Verdict & { audit: string; at: string; trigger: string; valid?: boolean }>; cheapest?: Pick; fastest?: Pick } | null
-type UsecaseRow = { usecase: string | null; calls: number; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; analysing: boolean; error: string | null; decisions?: { models?: { sites: number; with_cheaper: number; saving: number; cost: number } } }
+type UsecaseRow = { usecase: string | null; calls: number; other_calls?: number | null; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; analysing: boolean; error: string | null; decisions?: { models?: { sites: number; with_cheaper: number; saving: number; cost: number } } }
 type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; usecases: UsecaseRow[] }
 type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean }
 type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null } }
@@ -48,7 +48,7 @@ export function CallSiteUsecases() {
               {list.data.usecases.map((u) => (
                 <tr key={u.usecase ?? 'None'}>
                   <td><Link to={ucPath(u.usecase)}>{usecaseName(u.usecase)}</Link></td>
-                  <td className="num mono">{u.calls.toLocaleString('en-US')}</td>
+                  <td className="num mono">{u.calls.toLocaleString('en-US')}{u.other_calls ? <div className="muted" title="generative calls in another format (not chat): counted, not analysed yet">+{u.other_calls.toLocaleString('en-US')} other</div> : null}</td>
                   <td className="muted nowrap">{u.first_day} → {u.last_day}</td>
                   <td className="num mono">{u.sites ?? '—'}</td>
                   <td>{u.analysing || list.data.running.includes(u.usecase ?? '') ? <span className="chip">analysing…</span> : u.error ? <span className="chip warn" title={u.error}>failed</span> : u.analysed_at ? <span className="muted nowrap">{when(u.analysed_at)}</span> : <span className="muted">open to analyse</span>}</td>

@@ -1,4 +1,4 @@
-"""What the cache pages show, read from the call-site records (their series and decisions). Same JSON shapes as
+"""What the cache pages show, read from the call-site records (their series and cache findings). Same JSON shapes as
 before: the org and usecase levels are sums over records."""
 from collections import defaultdict
 
@@ -43,7 +43,7 @@ _EMPTY_STORY = {"now": "", "why": "", "action": "", "worth": 0, "share": 0, "pro
 
 
 def _site_block(rec):
-    cache = rec["decisions"].get("cache") or {}
+    cache = rec["cache"] or {}
     days = _series_total(rec["series"])
     static = rec.get("static_chars") or 0
     return {"site": rec["site"], "usecase": rec["usecase"], "anchors": rec["signature"], "unsure": rec["unsure"],
@@ -104,7 +104,7 @@ def overview():
 
 def decision(site_id):
     rec = store.get(site_id)
-    cache = (rec or {}).get("decisions", {}).get("cache")
+    cache = (rec or {}).get("cache")
     if not cache:
         return None
     st = cache["story"]

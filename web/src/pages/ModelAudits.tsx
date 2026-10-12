@@ -44,9 +44,12 @@ export function AuditDialog({ usecase, site, lockScope = false, initialOpen = fa
     queryFn: async () => {
       const n = Math.max(1, models.length + (auto ? 1 : 0))
       const scopes: (string | null)[] = site ? [null] : usecases
-      const sums = await Promise.all(scopes.map((u) => get<{ usd: number }>(`/audit/models/estimate?${new URLSearchParams({ ...(u != null && { usecase: u }), ...(site && { site }), samples: String(samples), candidates: String(n) })}`)))
-      return { usd: sums.reduce((a, b) => a + b.usd, 0) }
+      const sums = await Promise.all(scopes.map((u) => get<{ usd: number | null }>(`/audit/models/estimate?${new URLSearchParams({ ...(u != null && { usecase: u }), ...(site && { site }), samples: String(samples), candidates: String(n) })}`)))
+      return { usd: sums.reduce((a, b) => a + (b.usd ?? 0), 0), unknown: sums.filter((x) => x.usd == null).length }
     } })
+  const prev = useQuery({ queryKey: ['audit-preview', usecases, site, strategy, models], enabled: open && (!!site || usecases.length > 0),
+    queryFn: () => get<{ call_sites: { usecase: string | null; site: string; name: string; model: string; candidates: string[] }[]; not_known_yet: string[] }>(
+      `/audit/models/preview?${new URLSearchParams({ strategy, usecases: site ? '' : usecases.join(','), ...(site && { site }), models: models.join(',') })}`) })
   const start = useMutation({
     mutationFn: () => get<{ audits: { id: string }[] }>('/audit/models', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ usecases: site ? [] : usecases, site, strategy, models, samples, ...(budget !== '' && { max_budget_usd: budget }) }) }),
@@ -61,12 +64,12 @@ export function AuditDialog({ usecase, site, lockScope = false, initialOpen = fa
       {!site && !lockScope && (
         <label>Usecases
           <Select isMulti classNamePrefix="rs" placeholder="Choose usecases… (type to search)" closeMenuOnSelect={false}
-            options={(opts.data?.usecases ?? []).map((u) => ({ value: u.usecase ?? 'None', label: usecaseName(u.usecase), isDisabled: !(u.analysed_at && u.sites),
-              hint: u.analysed_at && u.sites ? `${u.calls.toLocaleString('en-US')} calls` : 'not analysed yet' }))}
+            options={(opts.data?.usecases ?? []).map((u) => ({ value: u.usecase ?? 'None', label: usecaseName(u.usecase),
+              hint: `${u.calls.toLocaleString('en-US')} calls${u.sites ? ` · ${u.sites} call-site${u.sites === 1 ? '' : 's'}` : ''}` }))}
             value={usecases.map((id) => ({ value: id, label: usecaseName(id === 'None' ? null : id) }))}
             onChange={(v) => setUsecases(v.map((o) => o.value))}
             formatOptionLabel={(o: { label: string; hint?: string }, m) => m.context === 'menu' ? <span>{o.label} <span className="muted">{o.hint}</span></span> : o.label} />
-          <span className="row"><button type="button" className="btn small" onClick={() => setUsecases((opts.data?.usecases ?? []).filter((u) => u.analysed_at && u.sites).map((u) => u.usecase ?? 'None'))}>all analysed</button></span>
+          <span className="row"><button type="button" className="btn small" onClick={() => setUsecases((opts.data?.usecases ?? []).filter((u) => u.calls > 0).map((u) => u.usecase ?? 'None'))}>all usecases</button></span>
         </label>
       )}
       <label>Strategy
@@ -90,7 +93,21 @@ export function AuditDialog({ usecase, site, lockScope = false, initialOpen = fa
           <label>Budget per audit, $ (optional) <input className="input" type="number" min={1} step={1} value={budget} onChange={(e) => setBudget(e.target.value === '' ? '' : Number(e.target.value))} /></label>
         </div>
       )}
-      <p className="muted">Estimated cost: {est.data ? money(est.data.usd, 2) : '…'} · {site ? '1 audit' : `${usecases.length} audit${usecases.length === 1 ? '' : 's'}, one per usecase`}</p>
+      {prev.data && (prev.data.call_sites.length > 0 || prev.data.not_known_yet.length > 0) && (
+        <div className="preview">
+          <div className="muted">What this will try</div>
+          <table className="grid">
+            <tbody>
+              {prev.data.call_sites.map((c) => (
+                <tr key={c.site + c.model}><td>{c.name}{!site && <span className="muted"> · {usecaseName(c.usecase)}</span>}</td><td className="mono">{c.model}</td>
+                  <td>{c.candidates.length ? <span className="mono">→ {c.candidates.join(', ')}</span> : <span className="chip warn">nothing to try: no served model for this strategy</span>}</td></tr>
+              ))}
+              {prev.data.not_known_yet.map((u) => <tr key={u}><td>{usecaseName(u === 'None' ? null : u)}</td><td colSpan={2} className="muted">call-sites found when the audit samples</td></tr>)}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="muted">Estimated cost: {est.data ? money(est.data.usd, 2) : '…'}{est.data?.unknown ? ` plus ${est.data.unknown} usecase${est.data.unknown === 1 ? '' : 's'} not sized yet` : ''} · {site ? '1 audit' : `${usecases.length} audit${usecases.length === 1 ? '' : 's'}, one per usecase`}</p>
       {start.isError && <p className="error" role="alert">{start.error instanceof Error ? start.error.message : String(start.error)}</p>}
       <div className="row"><button className="btn primary" disabled={start.isPending || (!site && !usecases.length) || ((strategy === 'manual' || strategy === 'release') && !models.length)} onClick={() => start.mutate()}>Start</button><button className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
     </div>
@@ -106,7 +123,7 @@ export function ModelAudits() {
   const crumbs = [{ label: 'Model audit' }, { label: 'Model audits' }]
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>Model audits</h1><span className="muted">which models hold on a usecase's call-sites, and which is cheapest and fastest by measured cost? Started here, by the API, or by the router: on requests sampled from the log per call-site, or on requests you send. Findings are written on the call-sites. <Link to="/audit/models/how">How an audit works</Link>.</span></div>{!preset && <AuditDialog onStarted={() => q.refetch()} />}</div>
+      <div className="head"><div><h1>Model audits</h1><span className="muted">which models hold on a usecase's call-sites, and which is cheapest and fastest by measured cost? Started here, by the API, or by the router: on requests sampled from the log per call-site, or on requests you send. Each audit keeps its findings; a call-site's page shows what all audits found there. <Link to="/audit/models/how">How an audit works</Link>.</span></div>{!preset && <AuditDialog onStarted={() => q.refetch()} />}</div>
       {preset && <AuditDialog key={preset.usecase + (preset.site ?? '')} usecase={preset.usecase} site={preset.site} initialOpen onStarted={() => { setParams({}); q.refetch() }} />}
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No model audits yet: press "New model audit…", or "Audit models" on a usecase.</p> : (
         <section className="panel">

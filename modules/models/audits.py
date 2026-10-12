@@ -1,13 +1,17 @@
 """Model audits.
 
-An audit = scope (a usecase, or one call-site) + a sample per call-site + candidate models + a budget. It samples
-requests from the log by size (smallest and largest prompts, the quartiles, the heaviest answers, a few random),
-submits ONE validation job (faithful re-runs, the judge, evidence: validation/engine.py unchanged) and, when the job
-ends, writes a verdict per call-site x candidate: on the audit (history, provenance) and on the call-site record as
-decisions["models"] (the latest per candidate, with the audit it came from). The usecase record gets the roll-up.
+An audit = a scope (a usecase, one call-site, or requests the caller sent) + candidate models + a budget. For a
+usecase or call-site it samples requests from the log by size (smallest and largest prompts, the quartiles, the
+heaviest answers, a few random) and upserts those call-sites' identity (it never drops one); then ONE validation job
+runs them (faithful re-runs, the judge, evidence: validation/engine.py). When the job ends, its verdicts per
+call-site x candidate are written as rows of `audit_verdicts`: findings of that audit, kept as history.
 
-Candidates come from a strategy or a list: "cheaper" (the catalog's next lower tier of each site's own model),
-"open_weight" (the catalog's in-tier open-weight swap), "release" (one named model), "custom".
+What is known about a call-site is a query over those rows (`knowledge`): per model the latest verdict, valid when not
+expired and measured on the call-site's current prompt version, and from the valid ones the cheapest and fastest that
+pass. Audits never write the call-site record; the CHOICE of a model is the router's or a person's
+(core.identity.store.set_choice).
+
+Candidates: the strategy's picks among the generative models the gateway serves, plus the models named.
 """
 import dataclasses
 import datetime
@@ -17,7 +21,7 @@ import secrets
 import threading
 from collections import defaultdict
 
-from sqlalchemy import Column, DateTime, Float, String, Table, Text, select, update
+from sqlalchemy import Column, DateTime, Float, Integer, String, Table, Text, delete, select, update
 
 from app import catalog
 from app.services import db
@@ -26,15 +30,16 @@ from core.ledger import build
 from validation import jobs
 
 STRATEGIES = {
-    "cheaper": "per call-site, the catalog's next cheaper tier and the open-weight swap of its current model",
-    "better_value": "per call-site, one tier up and the same-tier model of another provider: a stronger model can be "
-                    "cheaper per call when it answers tightly",
+    "cheaper": "per call-site, the served models in lower tiers than its current model (same provider first) and the "
+               "served open-weight ones; up to 3",
+    "better_value": "per call-site, the served model one tier up and the same-tier served models of other providers: "
+                    "a stronger model can be cheaper per call when it answers tightly; up to 3",
     "release": "the named models, against every call-site in scope",
-    "revalidate": "the models of each call-site's current verdicts, before they expire",
-    "drift_watch": "each call-site's own current model against itself: has its behaviour moved since the last audit",
+    "revalidate": "the models already measured on each call-site, again",
     "manual": "exactly the models you name",
 }
-STRATEGY_IDS = tuple(STRATEGIES) + ("open_weight", "custom", "auto")      # the last three: older rows
+STRATEGY_IDS = tuple(STRATEGIES) + ("open_weight", "custom", "auto", "drift_watch")      # older rows
+MAX_PICKS = 3
 TRIGGERS = ("user", "release", "router", "api", "schedule")
 DEFAULT_SAMPLES = 12
 VALID_DAYS = 30                 # a verdict is re-earned after this, or when the call-site's prompt version changes
@@ -57,6 +62,22 @@ audits = Table(
     Column("scope", String(10)),                    # usecase | site | requests
     Column("callback_url", Text),
     Column("finished_at", DateTime),
+)
+
+verdict_rows = Table(
+    "audit_verdicts", db.metadata,
+    Column("audit_id", String(20), primary_key=True),
+    Column("site", String(32), primary_key=True),       # "" for requests the caller sent
+    Column("model", Text, primary_key=True),             # the candidate (its label)
+    Column("usecase", Text),
+    Column("trigger", String(12)),
+    Column("verdict", String(14), nullable=False),       # passes | drifts | not verified
+    Column("requests", Integer), Column("within", Integer), Column("outside", Integer), Column("unverified", Integer),
+    Column("pass_rate", Float), Column("fit_rate", Float),
+    Column("cost_vs_original_pct", Integer), Column("latency_vs_original_pct", Integer),
+    Column("site_version", Text),                        # the call-site's prompt version when measured
+    Column("at", DateTime, nullable=False),
+    Column("valid_until", DateTime, nullable=False),
 )
 COLS = [c.name for c in audits.columns]
 
@@ -100,9 +121,17 @@ def pick(rows, n=DEFAULT_SAMPLES):
 
 
 def sample(usecase, site=None, n=DEFAULT_SAMPLES, days=30):
-    """{site: [samples]} for the usecase (or one of its call-sites), from the log, in one BigQuery session."""
+    """{site: [samples]} for the usecase (or one of its call-sites), from the log, in one BigQuery session. The
+    call-sites found are upserted on the way (identity, a profile for new ones), so any usecase can be audited."""
+    from core import profiler
+    from core.ledger.refresh import _texts
     b = build.Build(days, usecase or "")
     try:
+        found = b.sites()
+        store.sync(found, b.ledger(), days, usecase or "", drop=False)
+        for f in found:
+            if (not site or str(f["site"]) == site) and not profiler.get(f["site"]):
+                profiler.profile(f["site"], *_texts(b.sample_request(f["site"]) or {}))
         scope = " AND CAST(site AS STRING) = @site" if site else ""
         rows = b.s.query(_POOL.format(scope=scope), {"site": site} if site else None)
     finally:
@@ -118,38 +147,49 @@ def _tier_rank(m):
     return catalog._TIER_RANK.get((catalog._ORDER.get(m) or {}).get("tier"), 99)
 
 
+def served_models():
+    """The generative models the gateway serves (catalog ids). Off-gateway (tests): every catalog chat model."""
+    from app import registry
+    pool = [m for m in catalog.PRICE if (catalog._ORDER.get(m) or {}).get("mode", "chat") == "chat" and catalog.is_callable(m)]
+    try:
+        if registry.has_gateway():
+            return [m for m in pool if registry.is_available(m)]
+    except Exception:
+        pass
+    return pool
+
+
+def _price(m):
+    p = catalog.PRICE.get(m) or {}
+    return (p.get("input") or 0) + (p.get("output") or 0)
+
+
 def auto_candidates(model):
-    """Strategy "cheaper": the catalog's next cheaper tier and its open-weight swap. Seeds only; the measurement decides."""
-    out = []
-    for c in (catalog.next_cheaper(model), catalog.open_weight_target(model)):
-        if c and c != model and c not in out:
-            out.append(c)
-    return out
+    """Strategy "cheaper": served models in a lower tier, same provider first then by price, and the served open-weight
+    ones; up to MAX_PICKS. Seeds only: the measured cost decides."""
+    m = catalog.canonical_model(model) or model
+    cur, prov = _tier_rank(m), catalog.provider_of(m)
+    pool = [s for s in served_models() if s != m]
+    lower = sorted((s for s in pool if _tier_rank(s) > cur), key=lambda s: (catalog.provider_of(s) != prov, _tier_rank(s), _price(s)))
+    ow = [s for s in pool if (catalog._ORDER.get(s) or {}).get("open_weight") and s not in lower]
+    return (lower + ow)[:MAX_PICKS]
 
 
 def better_value_candidates(model):
-    """Strategy "better value": the nearest tier UP of the same provider (newest there) and the same-tier model of
-    another provider (cheapest input price). A stronger or different model can be cheaper per call than the price
-    list suggests when it answers tightly; only the measured cost tells."""
+    """Strategy "better value": the served model one tier up (same provider first) and the same-tier served models of
+    other providers; up to MAX_PICKS. A stronger or different model can be cheaper per call when it answers tightly."""
     m = catalog.canonical_model(model) or model
-    info = catalog._ORDER.get(m)
-    if not info:
-        return []
-    out = []
-    cur = _tier_rank(m)
-    up = [s for s in info["siblings"] if _tier_rank(s) < cur and catalog.is_callable(s)]
-    if up:
-        nearest = max(_tier_rank(s) for s in up)
-        out.append(max((s for s in up if _tier_rank(s) == nearest), key=lambda s: catalog._ORDER[s].get("release") or ""))
-    peers = [s for s in catalog.PRICE if s != m and catalog.provider_of(s) != catalog.provider_of(m) and _tier_rank(s) == cur
-             and catalog.is_callable(s) and not catalog._ORDER.get(s, {}).get("open_weight")]
-    if peers:
-        out.append(min(peers, key=lambda s: catalog.PRICE[s]["input"]))
-    return [c for c in out if c != model]
+    cur, prov = _tier_rank(m), catalog.provider_of(m)
+    pool = [s for s in served_models() if s != m]
+    up = [s for s in pool if _tier_rank(s) < cur]
+    nearest = max((_tier_rank(s) for s in up), default=None)
+    up = sorted((s for s in up if _tier_rank(s) == nearest), key=lambda s: (catalog.provider_of(s) != prov, _price(s)))[:1]
+    peers = sorted((s for s in pool if _tier_rank(s) == cur and catalog.provider_of(s) != prov), key=_price)
+    return (up + peers)[:MAX_PICKS]
 
 
 def served(models):
-    """Only the models the gateway serves (an audit can't call the others); unknown off-gateway -> keep as given."""
+    """Only the models the gateway serves (a check can't call the others); unknown off-gateway -> keep as given."""
     from app import registry
     try:
         if not registry.has_gateway():
@@ -160,20 +200,22 @@ def served(models):
 
 
 def candidates_for(model, strategy, asked, auto=False, rec=None):
-    """The candidate models for a call-site sent to `model`, by strategy, plus any models named on top."""
-    named = [m for m in asked if m and m != model]
+    """The candidate models for a call-site sent to `model`, by strategy, plus any models named on top; never the
+    model itself under another id (a dated id is the same model)."""
+    same = {model, catalog.canonical_model(model)}
+    named = [m for m in asked if m and m not in same]
     if strategy in ("cheaper", "auto") or auto:
         named += [m for m in auto_candidates(model) if m not in named]
-    if strategy == "open_weight":
-        c = catalog.open_weight_target(model)
-        named += [c] if c and c not in named else []
     if strategy == "better_value":
         named += [m for m in better_value_candidates(model) if m not in named]
     if strategy == "revalidate" and rec:
-        named += [m for m in ((rec["decisions"].get("models") or {}).get("candidates") or {}) if m not in named and m != model]
-    if strategy == "drift_watch":
-        return served([model])                       # the model against itself, labelled "<model> now"
-    return served(named)
+        named += [m for m in knowledge(rec["site"], rec)["candidates"] if m not in named and m != model]
+    return served([m for m in named if m not in same])
+
+
+def preview(site_models, strategy, asked):
+    """What a strategy will try: {site: {current model: [candidates]}} from each call-site's known models."""
+    return {st: {m: candidates_for(m, strategy, asked, rec=rec) for m in models} for st, (models, rec) in site_models.items()}
 
 
 # -------------------------------------------------------------------------------------------------------- checks
@@ -366,41 +408,48 @@ def refresh_status(audit):
         return audit                                       # its verdicts are written
     verdicts = _verdicts(audit)
     at = _now()
-    touched = set()
+    rows = []
     for st, by in verdicts.items():
-        rec = store.get(st)
-        if not rec:
-            continue
-        cur = (rec["decisions"].get("models") or {}).get("candidates", {})
-        version = rec["versions"][-1]["version"] if rec["versions"] else None
+        rec = store.get(st) if st else None
+        version = rec["versions"][-1]["version"] if rec and rec["versions"] else None
         for cand, v in by.items():
-            cur[cand] = {**v, "audit": audit["id"], "at": at.isoformat(timespec="seconds"), "trigger": audit["trigger"],
-                         "valid_until": (at + datetime.timedelta(days=VALID_DAYS)).isoformat(timespec="seconds"),
-                         "site_version": version}
-        store.set_decision(st, "models", {"candidates": cur, **conclusion(current(cur, rec))})
-        touched.add(rec["usecase"] or "")
-    for uc in touched:
-        store.set_usecase_decision(uc, "models", usecase_rollup(uc))
+            rows.append({"audit_id": audit["id"], "site": st, "model": cand, "usecase": audit["usecase"] or "",
+                         "trigger": audit["trigger"], "verdict": v["verdict"], "requests": v["requests"],
+                         "within": v["within"], "outside": v["outside"], "unverified": v["unverified"],
+                         "pass_rate": v["pass_rate"], "fit_rate": v["fit_rate"],
+                         "cost_vs_original_pct": v["cost_vs_original_pct"], "latency_vs_original_pct": v["latency_vs_original_pct"],
+                         "site_version": version, "at": at, "valid_until": at + datetime.timedelta(days=VALID_DAYS)})
+    eng = db.ready()
+    with eng.begin() as c:
+        c.execute(delete(verdict_rows).where(verdict_rows.c.audit_id == audit["id"]))
+        if rows:
+            c.execute(verdict_rows.insert(), rows)
     _set(audit["id"], status="done" if job["status"] == "done" else job["status"], verdicts=json.dumps(verdicts),
          finished_at=at, error=job.get("error"))
     return get(audit["id"])
 
 
-def current(cands, rec):
-    """The verdicts still valid for this call-site: not expired, and measured on its current prompt version."""
-    now = _now().isoformat(timespec="seconds")
-    version = rec["versions"][-1]["version"] if rec.get("versions") else None
-    return {m: v for m, v in cands.items()
-            if (v.get("valid_until") or "9999") > now and (v.get("site_version") in (None, version))}
-
-
-def with_validity(models, rec):
-    """A record's models decision with `valid` on each verdict and the conclusion over the valid ones only."""
-    if not models:
-        return None
-    cands = models.get("candidates") or {}
-    cur = current(cands, rec)
-    return {"candidates": {m: {**v, "valid": m in cur} for m, v in cands.items()}, **conclusion(cur)}
+def knowledge(site, rec=None):
+    """What the audits found on a call-site: per model its latest verdict (with `valid`: not expired and measured on
+    the current prompt version), and among the valid ones the cheapest and fastest that pass."""
+    rec = rec or store.get(site)
+    version = rec["versions"][-1]["version"] if rec and rec.get("versions") else None
+    eng = db.ready()
+    with eng.connect() as c:
+        rows = c.execute(select(*verdict_rows.columns).where(verdict_rows.c.site == str(site))
+                         .order_by(verdict_rows.c.at.desc())).all()
+    now = _now()
+    cands = {}
+    for r in rows:
+        d = dict(zip([col.name for col in verdict_rows.columns], r))
+        if d["model"] in cands:
+            continue                                        # an older verdict of the same model
+        d["valid"] = d["valid_until"] > now and d["site_version"] in (None, version)
+        d["audit"] = d.pop("audit_id")
+        for k in ("at", "valid_until"):
+            d[k] = d[k].isoformat(timespec="seconds")
+        cands[d["model"]] = d
+    return {"candidates": cands, **conclusion({m: v for m, v in cands.items() if v["valid"]})}
 
 
 def conclusion(cands):
@@ -414,19 +463,20 @@ def conclusion(cands):
 
 
 def usecase_rollup(usecase):
-    """Per usecase: on how many call-sites a cheaper model passed, and the saving at the window's volume."""
+    """Per usecase, from what the audits found: on how many call-sites a cheaper model passes (valid verdicts), and
+    the saving at the window's volume."""
     recs = store.by_usecase(usecase or None)
-    sites, with_pick, saving, base = 0, 0, 0.0, 0.0
+    sites, with_pick, saving, base, picks = 0, 0, 0.0, 0.0, {}
     for r in recs:
         sites += 1
-        m = r["decisions"].get("models") or {}
+        k = knowledge(r["site"], r)
         cost = sum(d.get("cost") or 0 for days in r["series"].values() for d in days.values())
         base += cost
-        if m.get("cheapest"):
+        if k["cheapest"]:
             with_pick += 1
-            saving += cost * (-m["cheapest"]["cost_vs_original_pct"]) / 100
-    return {"sites": sites, "with_cheaper": with_pick, "saving": round(saving, 2), "cost": round(base, 2),
-            "picks": {r["site"]: r["decisions"]["models"]["cheapest"] for r in recs if (r["decisions"].get("models") or {}).get("cheapest")}}
+            saving += cost * (-k["cheapest"]["cost_vs_original_pct"]) / 100
+            picks[r["site"]] = k["cheapest"]
+    return {"sites": sites, "with_cheaper": with_pick, "saving": round(saving, 2), "cost": round(base, 2), "picks": picks}
 
 
 def for_job(job_id):

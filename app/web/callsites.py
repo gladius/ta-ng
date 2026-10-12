@@ -60,7 +60,8 @@ def usecase(usecase: str):
     sites = store.by_usecase(uc)
     from modules.models import audits
     for s in sites:
-        s["decisions"] = {**s["decisions"], "models": audits.with_validity(s["decisions"].get("models"), s)}
+        s["decisions"] = {"models": audits.knowledge(s["site"], s), "router": s["choice"]}
+    u = {**u, "decisions": {"models": audits.usecase_rollup(uc)}}
     return {**u, "sites": [{**_with_profile(s), "cache": _cache_decision(s["site"])} for s in sites],
             "analysing": bool(u["analysing"]) or (uc or "") in refresh.running()}
 
@@ -79,5 +80,5 @@ def one(site: str):
     if not s:
         raise HTTPException(404, "unknown call-site")
     from modules.models import audits
-    return {**_with_profile(s), "decisions": {"cache": _cache_decision(site), "models": audits.with_validity(s["decisions"].get("models"), s),
-                                              "router": s["decisions"].get("router")}}
+    return {**_with_profile(s), "decisions": {"cache": _cache_decision(site), "models": audits.knowledge(site, s),
+                                              "router": s["choice"]}}

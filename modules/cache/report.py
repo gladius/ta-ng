@@ -1,6 +1,6 @@
 """The cache decision per call-site: for each model it is sent to, the window totals, the lifetime what-if and the
 diagnosis; plus the story (now / why / what to do) and the saving. Stored on the call-site record as
-decisions["cache"]; modules/cache/query.py serves it."""
+its cache findings; modules/cache/query.py serves it."""
 from collections import defaultdict
 
 from core.identity import store

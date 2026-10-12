@@ -1,9 +1,13 @@
 """The core records in the app's database: one row per usecase, one row per call-site.
 
-usecases   the cheap list from the log (calls, days; `listed_at`) plus, once a usecase was analysed, its roll-up and
-           profile and when (`analysed_at`); decisions JSON for module-level conclusions.
-callsites  identity refreshed by each analysis (usecase, signature lines = the fingerprint, calls, days, versions,
-           layout, series per model per day), profile written once by the profiler, decisions JSON per module.
+usecases   the cheap list from the log (generative calls, days; `listed_at`) plus, once analysed, its call-site count,
+           profile and when (`analysed_at`).
+callsites  one row per call-site, each part written by one owner only:
+             identity       an analysis, or an audit's sampling (upsert; only an analysis drops a call-site)
+             profile        the profiler, once
+             cache_findings the cache analysis (its latest diagnosis)
+             choice         the router or a person: the model this call-site uses, the audit it relied on, guard, expiry
+           What the audits found is not stored here: it is a query over audit_verdicts (modules/models/audits.py).
 
 The site id is the hash of the signature; every module keys on it. A request belongs to a call-site when its
 usecase matches and its system prompt (numbers masked) contains all the signature lines."""
@@ -27,7 +31,7 @@ usecases = Table(
     Column("error", Text),
     Column("sites", Integer),
     Column("profile", Text),                                   # JSON {name, does} once synthesised
-    Column("decisions", Text, nullable=False, default="{}"),
+    Column("other_calls", Integer),                            # generative calls in a format not analysed yet
 )
 callsites = Table(
     "callsites", db.metadata,
@@ -56,8 +60,9 @@ callsites = Table(
     Column("per_call", Text),
     Column("profile_model", Text),
     Column("profiled_at", DateTime),
-    # decisions
-    Column("decisions", Text, nullable=False, default="{}"),
+    # findings and the choice
+    Column("cache_findings", Text),                            # JSON, the cache analysis's latest
+    Column("choice", Text),                                    # JSON {model, audit, guard, until, by, at} or null
 )
 UNSURE_BELOW = 5
 SERIES_KEYS = ("calls", "prompt_tokens", "cached_tokens", "written_tokens", "completion_tokens", "calls_cached", "cost",
@@ -84,11 +89,11 @@ def list_usecases(rows, days):
             uc = r["usecase"] or ""
             seen.add(uc)
             vals = {"calls": int(r["calls"] or 0), "first_day": str(r["first_day"] or ""), "last_day": str(r["last_day"] or ""),
-                    "window_days": days, "listed_at": now}
+                    "window_days": days, "listed_at": now, "other_calls": int(r.get("other_calls") or 0)}
             if uc in have:
                 c.execute(update(usecases).where(usecases.c.usecase == uc).values(**vals))
             else:
-                c.execute(usecases.insert().values(usecase=uc, decisions="{}", analysing=False, **vals))
+                c.execute(usecases.insert().values(usecase=uc, analysing=False, **vals))
         if seen:
             c.execute(delete(usecases).where(usecases.c.usecase.notin_(list(seen))))
     return len(rows)
@@ -118,20 +123,10 @@ def set_usecase_summary(uc, sites, profile=None):
         c.execute(update(usecases).where(usecases.c.usecase == (uc or "")).values(**vals))
 
 
-def set_usecase_decision(uc, module, value):
-    eng = db.ready()
-    with eng.begin() as c:
-        cur = c.execute(select(usecases.c.decisions).where(usecases.c.usecase == (uc or ""))).scalar()
-        d = json.loads(cur or "{}")
-        d[module] = value
-        c.execute(update(usecases).where(usecases.c.usecase == (uc or "")).values(decisions=json.dumps(d)))
-
-
 def _urow(r):
     d = dict(zip([c.name for c in usecases.columns], r))
     d["usecase"] = d["usecase"] or None
     d["profile"] = json.loads(d["profile"]) if d["profile"] else None
-    d["decisions"] = json.loads(d["decisions"] or "{}")
     for k in ("listed_at", "analysed_at"):
         d[k] = _iso(d[k])
     return d
@@ -177,9 +172,9 @@ def series_by_site(ledger_rows):
     return out
 
 
-def sync(sites, ledger_rows, days, usecase=None):
-    """Upsert the identity of every call-site the analysis found (the whole window, or one usecase); profiles and
-    decisions stay; sites of the scope no longer found are dropped. Returns the ids."""
+def sync(sites, ledger_rows, days, usecase=None, drop=True):
+    """Upsert the identity of every call-site found (the whole window, or one usecase); profile, findings and choice
+    stay. With `drop` (an analysis), the scope's call-sites no longer found are removed; an audit never drops."""
     eng = db.ready()
     now = _now()
     series = series_by_site(ledger_rows)
@@ -192,8 +187,10 @@ def sync(sites, ledger_rows, days, usecase=None):
             if site in have:
                 c.execute(update(callsites).where(callsites.c.site == site).values(**row))
             else:
-                c.execute(callsites.insert().values(site=site, decisions="{}", **row))
+                c.execute(callsites.insert().values(site=site, **row))
             ids.append(site)
+        if not drop:
+            return ids
         gone = callsites.c.site.notin_(ids) if ids else True
         if usecase is None:
             c.execute(delete(callsites).where(gone))
@@ -210,20 +207,29 @@ def set_profile(site, p):
             per_call=p.get("per_call"), profile_model=p["model"], profiled_at=_now()))
 
 
-def set_decision(site, module, value):
+def _set_json(site, column, value):
     eng = db.ready()
     with eng.begin() as c:
-        cur = c.execute(select(callsites.c.decisions).where(callsites.c.site == str(site))).scalar()
-        d = json.loads(cur or "{}")
-        d[module] = value
-        c.execute(update(callsites).where(callsites.c.site == str(site)).values(decisions=json.dumps(d)))
+        c.execute(update(callsites).where(callsites.c.site == str(site)).values(**{column: json.dumps(value) if value is not None else None}))
+
+
+def set_cache_findings(site, value):
+    """The cache analysis's latest findings for the site (its only writer)."""
+    _set_json(site, "cache_findings", value)
+
+
+def set_choice(site, value):
+    """The model this call-site uses: written by the router or a person only, never by an audit."""
+    _set_json(site, "choice", value)
 
 
 def _row(r):
     d = dict(zip([c.name for c in callsites.columns], r))
     d["signature"] = json.loads(d["signature"] or "[]")
     d["versions"] = json.loads(d["versions"] or "[]")
-    d["decisions"] = json.loads(d["decisions"] or "{}")
+    d["cache"] = json.loads(d["cache_findings"]) if d["cache_findings"] else None
+    d["choice"] = json.loads(d["choice"]) if d["choice"] else None
+    d.pop("cache_findings")
     d["series"] = json.loads(d["series"] or "{}")
     for k in ("seen_at", "profiled_at"):
         d[k] = _iso(d[k])

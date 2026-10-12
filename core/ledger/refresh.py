@@ -58,7 +58,7 @@ def analyse(usecase=None, days=30):
                 profiler.profile(site["site"], *_texts(req))
         built_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
         for site, decision in report.cache_decisions(sites, ledger, gaps, days).items():
-            store.set_decision(site, "cache", {**decision, "built_at": built_at})
+            store.set_cache_findings(site, {**decision, "built_at": built_at})
         for uc in (scoped if scoped is not None else {s.get("usecase") or "" for s in sites}):
             store.set_usecase_summary(uc, sum(1 for s in sites if (s.get("usecase") or "") == (uc or "")))
             store.mark_analysing(uc, False)

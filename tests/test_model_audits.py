@@ -23,21 +23,37 @@ def test_pick_with_fewer_rows_than_asked_returns_them_all_once():
     assert audits.pick([], n=8) == []
 
 
-def test_strategies_resolve_candidates_and_never_the_original_itself():
+def _verdict(audit, site, model, verdict, cost, version, days_left, age_days=0):
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - datetime.timedelta(days=age_days)
+    return {"audit_id": audit, "site": site, "model": model, "usecase": "uc", "trigger": "user", "verdict": verdict,
+            "requests": 4, "within": 4, "outside": 0, "unverified": 0, "pass_rate": 1.0, "fit_rate": 1.0,
+            "cost_vs_original_pct": cost, "latency_vs_original_pct": -10, "site_version": version, "at": now,
+            "valid_until": now + datetime.timedelta(days=days_left)}
+
+
+def test_strategies_pick_served_generative_models_and_never_the_original_itself():
     assert audits.candidates_for("gpt-5.4", "manual", ["gpt-5.4", "gpt-5.4-mini"]) == ["gpt-5.4-mini"]
     assert audits.candidates_for("gpt-5.4", "release", ["gpt-5.5"]) == ["gpt-5.5"]
-    assert "gpt-5.4" not in audits.candidates_for("gpt-5.4", "cheaper", [])
-    assert "gpt-5.4" not in audits.candidates_for("gpt-5.4", "better_value", [])
-    assert audits.candidates_for("gpt-5.4", "drift_watch", []) == ["gpt-5.4"]        # itself, labelled "now"
-    rec = {"decisions": {"models": {"candidates": {"gpt-5.4-mini": {}, "gpt-5.4": {}}}}, "versions": []}
-    assert audits.candidates_for("gpt-5.4", "revalidate", [], rec=rec) == ["gpt-5.4-mini"]
+    cheaper = audits.candidates_for("gpt-5.4", "cheaper", [])
+    assert cheaper and "gpt-5.4" not in cheaper and len(cheaper) <= audits.MAX_PICKS
+    assert cheaper[0].startswith("gpt-")                       # same provider first
+    better = audits.candidates_for("gpt-5.4-mini", "better_value", [])
+    assert better and "gpt-5.4-mini" not in better and len(better) <= audits.MAX_PICKS
 
 
-def test_verdicts_expire_and_are_tied_to_the_prompt_version():
-    rec = {"versions": [{"version": "v2"}]}
-    cands = {"a": {"valid_until": "2999-01-01T00:00:00", "site_version": "v2", "verdict": "passes", "cost_vs_original_pct": -50, "audit": "c1"},
-             "b": {"valid_until": "2000-01-01T00:00:00", "site_version": "v2", "verdict": "passes", "cost_vs_original_pct": -90, "audit": "c0"},
-             "c": {"valid_until": "2999-01-01T00:00:00", "site_version": "v1", "verdict": "passes", "cost_vs_original_pct": -95, "audit": "c0"}}
-    out = audits.with_validity({"candidates": cands}, rec)
-    assert [m for m, v in out["candidates"].items() if v["valid"]] == ["a"]
-    assert out["cheapest"]["model"] == "a"                     # the expired and the old-version verdicts don't count
+def test_knowledge_is_the_latest_valid_verdict_per_model_and_audits_never_touch_the_record():
+    from app.services import db
+    eng = db.ready()
+    with eng.begin() as c:
+        c.execute(audits.verdict_rows.delete())
+        c.execute(audits.verdict_rows.insert(), [
+            _verdict("a1", "s1", "a", "passes", -50, "v2", 30),
+            _verdict("a0", "s1", "b", "passes", -90, "v2", -1),      # expired
+            _verdict("a0", "s1", "c", "passes", -95, "v1", 30),      # measured on an older prompt version
+            _verdict("a0", "s1", "a", "drifts", -40, "v2", 30, age_days=3)])   # older verdict of a: the newer wins
+    rec = {"site": "s1", "versions": [{"version": "v2"}]}
+    k = audits.knowledge("s1", rec)
+    assert {m: v["valid"] for m, v in k["candidates"].items()} == {"a": True, "b": False, "c": False}
+    assert k["cheapest"]["model"] == "a" and k["candidates"]["a"]["audit"] == "a1"
+    assert sorted(audits.candidates_for("gpt-5.4", "revalidate", [], rec=rec)) == ["a", "b", "c"]

@@ -116,7 +116,28 @@ def strategies():
 @api.get("/estimate", summary="A rough cost before starting a sampled audit")
 def estimate(usecase: Optional[str] = None, site: Optional[str] = None, samples: int = audits.DEFAULT_SAMPLES,
              candidates: int = 1):
-    return {"usd": audits.estimate(_uc(usecase), site, samples, max(1, candidates))}
+    """null when the scope's call-sites aren't known yet (never analysed or audited): the audit finds them."""
+    known = bool(store.get(site)) if site else bool(store.by_usecase(_uc(usecase)))
+    return {"usd": audits.estimate(_uc(usecase), site, samples, max(1, candidates)) if known else None}
+
+
+@api.get("/preview", summary="What a strategy will try, per known call-site")
+def preview(strategy: str = "cheaper", usecases: str = "", site: Optional[str] = None, models: str = ""):
+    """For each call-site already known in the scope, its current models and the candidates the strategy picks for
+    them (served models only). Call-sites not known yet are found by the audit itself."""
+    if strategy not in audits.STRATEGIES:
+        raise HTTPException(422, "strategy must be one of %s" % ", ".join(audits.STRATEGIES))
+    asked = [m for m in models.split(",") if m]
+    recs = [store.get(site)] if site else [r for u in usecases.split(",") if u for r in store.by_usecase(_uc(u))]
+    out = []
+    for r in recs:
+        if not r:
+            continue
+        for m in sorted(r["series"]):
+            out.append({"usecase": r["usecase"], "site": r["site"], "name": (r["profile"] or {}).get("name") or r["site"],
+                        "model": m, "candidates": audits.candidates_for(m, strategy, asked, rec=r)})
+    unknown = [u for u in usecases.split(",") if u and not store.by_usecase(_uc(u))]
+    return {"call_sites": out, "not_known_yet": unknown}
 
 
 @api.post("", status_code=202, summary="Start model audits", responses={

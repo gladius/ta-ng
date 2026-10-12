@@ -53,14 +53,15 @@ def canonical_model(raw):
     rl = r.lower()
     if rl in _ALIASES:
         return _ALIASES[rl]
-    base = re.sub(r"[-_/:](\d{6,8}|v\d+|latest|preview|exp)$", "", rl)
+    base = re.sub(r"[-_/:](\d{4}-\d{2}-\d{2}|\d{6,8}|v\d+|latest|preview|exp)$", "", rl)
+    if base in PRICE:
+        return base
     if base in _ALIASES:
         return _ALIASES[base]
-    for name in PRICE:
-        nl = name.lower()
-        if rl == nl or nl == base or rl.startswith(nl) or base.startswith(nl) or nl.startswith(base):
-            return name
-    return None
+    # the LONGEST catalog name that matches: 'gpt-5.4-…' is gpt-5.4, never its prefix gpt-5
+    hits = [name for name in PRICE if (lambda nl: rl == nl or nl == base or rl.startswith(nl) or base.startswith(nl)
+                                       or nl.startswith(base))(name.lower())]
+    return max(hits, key=len) if hits else None
 
 
 def canonical_exact(raw):

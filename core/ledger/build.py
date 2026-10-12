@@ -156,8 +156,18 @@ WHERE c.site = @site LIMIT 1
 
 
 _USECASES = """
-SELECT `{usecase}` AS usecase, COUNT(*) AS calls, MIN(DATE(`{time}`)) AS first_day, MAX(DATE(`{time}`)) AS last_day
-FROM `{table}` WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
+-- generative calls only: chat-format ones (`messages`) are analysed; other generative formats (a `prompt`, or an
+-- `input` that is not an embedding's) are counted as not analysed yet; embeddings and the rest are left out
+WITH kinds AS (
+  SELECT `{usecase}` AS usecase, DATE(`{time}`) AS day,
+         JSON_QUERY(`{req}`, '$.messages') IS NOT NULL AS chat,
+         JSON_QUERY(`{req}`, '$.messages') IS NULL
+           AND (JSON_QUERY(`{req}`, '$.prompt') IS NOT NULL OR JSON_QUERY(`{req}`, '$.input') IS NOT NULL)
+           AND NOT REGEXP_CONTAINS(LOWER(COALESCE(JSON_VALUE(`{req}`, '$.model'), '')), r'embed|rerank|moderation|whisper|tts|image')
+           AND COALESCE(JSON_VALUE(`{resp}`, '$.object'), '') != 'list' AS other
+  FROM `{table}` WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY))
+SELECT usecase, COUNTIF(chat) AS calls, COUNTIF(other) AS other_calls, MIN(day) AS first_day, MAX(day) AS last_day
+FROM kinds WHERE chat OR other
 GROUP BY 1 ORDER BY calls DESC
 """
 

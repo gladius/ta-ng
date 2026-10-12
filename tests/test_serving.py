@@ -128,3 +128,11 @@ def test_gateway_map_surfaces_chosen_and_flavours(monkeypatch):
     assert gm["claude-sonnet-5"]["chosen"] == "claude-sonnet-5-eu"
     assert gm["claude-sonnet-5"]["flavours"] == ["claude-sonnet-5-eu", "claude-sonnet-5-us"]
     registry.refresh()
+
+
+def test_dated_ids_map_to_their_own_model_not_a_shorter_prefix():
+    from app.catalog import canonical_model
+    assert canonical_model("gpt-5.4-2026-03-05") == "gpt-5.4"            # was gpt-5: priced as the wrong model
+    assert canonical_model("gpt-5.4-mini-2026-03-17") == "gpt-5.4-mini"
+    assert canonical_model("gpt-5-2025-08-07") == "gpt-5"
+    assert canonical_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5"

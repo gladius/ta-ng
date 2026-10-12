@@ -563,7 +563,7 @@ def test_the_api_reference_matches_what_the_api_returns(client, monkeypatch):
     spec = client.get("/openapi.json").json()
     assert set(spec["paths"]) == {"/api/audit/models", "/api/audit/models/{audit_id}", "/api/audit/models/{audit_id}/resume",
                                   "/api/audit/models/{audit_id}/results", "/api/audit/models/{audit_id}/results/{request_id}",
-                                  "/api/audit/models/strategies", "/api/audit/models/estimate"}
+                                  "/api/audit/models/strategies", "/api/audit/models/estimate", "/api/audit/models/preview"}
     assert spec["components"]["securitySchemes"]["APIKeyHeader"] == {
         "type": "apiKey", "in": "header", "name": "X-API-Key", "description": "The server's VALIDATION_API_KEY"}
     assert spec["paths"]["/api/audit/models/{audit_id}"]["get"]["responses"]["200"]["content"]["application/json"][

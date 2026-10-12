@@ -396,3 +396,6 @@ tr.dim { opacity: 0.45; }
 .step-n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: #fff; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
 .step p { margin: 4px 0 0; font-size: 13px; }
 .flow-wrap { display: flex; flex-direction: column; gap: 12px; }
+
+.preview { display: flex; flex-direction: column; gap: 4px; }
+.preview .grid td { padding: 6px 10px; font-size: 13px; }
