@@ -372,3 +372,6 @@ tr.dim { opacity: 0.45; }
 .pick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .pick.off { color: var(--ink-2); }
 .btn.small { padding: 4px 10px; font-size: 12px; }
+.dialog .pick { flex-direction: row; color: var(--ink); }
+.dialog .pick.off { color: var(--ink-2); }
+.dialog > .btn { align-self: flex-start; }
