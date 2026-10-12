@@ -48,6 +48,27 @@ def start(body: CheckIn):
     return c
 
 
+class ReleaseIn(BaseModel):
+    """A release check: the named models against every analysed usecase (or the top N by calls), one check each."""
+    candidates: list[str] = Field(min_length=1)
+    top: int = Field(default=20, ge=1, le=500)
+    usecases: list[str] = Field(default_factory=list)       # explicit instead of top N
+    samples: int = Field(default=checks.DEFAULT_SAMPLES, ge=1, le=50)
+    max_budget_usd: float = Field(gt=0, description="per usecase")
+    judge_model: Optional[str] = None
+
+
+@api.post("/release", status_code=202)
+def release(body: ReleaseIn):
+    analysed = [u for u in store.usecase_list(per_page=200)["usecases"] if u["analysed_at"] and u["sites"]]
+    wanted = [u["usecase"] for u in analysed if not body.usecases or (u["usecase"] or "None") in body.usecases][:body.top]
+    if not wanted:
+        raise HTTPException(422, "no analysed usecase to check: open usecases first, or analyse all on the cache page")
+    started = [checks.start(usecase=uc, preset="release", asked=body.candidates, n=body.samples,
+                            max_budget_usd=body.max_budget_usd, trigger="release", judge_model=body.judge_model) for uc in wanted]
+    return {"checks": [c["id"] for c in started], "usecases": wanted}
+
+
 @api.get("")
 def listing(usecase: Optional[str] = None, site: Optional[str] = None, limit: int = 50):
     return [checks.refresh_status(c) for c in checks.recent(min(200, limit), _uc(usecase) if usecase else None, site)]

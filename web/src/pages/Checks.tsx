@@ -54,6 +54,35 @@ export function CheckDialog({ usecase, site, onStarted }: { usecase: string | nu
   )
 }
 
+/** A release check: named models against every analysed usecase (or the top N), one check per usecase. */
+function ReleaseDialog({ onStarted }: { onStarted: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [models, setModels] = useState('')
+  const [top, setTop] = useState(20)
+  const [samples, setSamples] = useState(8)
+  const [budget, setBudget] = useState(5)
+  const start = useMutation({
+    mutationFn: () => get<{ checks: string[]; usecases: string[] }>('/suite/checks/release', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ candidates: models.split(',').map((x) => x.trim()).filter(Boolean), top, samples, max_budget_usd: budget }) }),
+    onSuccess: () => { setOpen(false); onStarted() },
+  })
+  if (!open) return <button className="btn primary" onClick={() => setOpen(true)}>Check a release…</button>
+  return (
+    <div className="panel pad dialog">
+      <h2>Check a release across usecases</h2>
+      <p className="muted">One check per analysed usecase, biggest first: the named model against each call-site's current model on sampled requests. The budget is per usecase.</p>
+      <div className="row">
+        <label>Models <input className="input" placeholder="gpt-5.5" value={models} onChange={(e) => setModels(e.target.value)} /></label>
+        <label>Top usecases by calls <input className="input" type="number" min={1} max={500} value={top} onChange={(e) => setTop(Number(e.target.value))} /></label>
+        <label>Samples per call-site <input className="input" type="number" min={1} max={50} value={samples} onChange={(e) => setSamples(Number(e.target.value))} /></label>
+        <label>Budget per usecase, $ <input className="input" type="number" min={1} step={1} value={budget} onChange={(e) => setBudget(Number(e.target.value))} /></label>
+      </div>
+      {start.isError && <p className="error" role="alert">{start.error instanceof Error ? start.error.message : String(start.error)}</p>}
+      <div className="row"><button className="btn primary" disabled={start.isPending || !models.trim()} onClick={() => start.mutate()}>Start</button><button className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
+    </div>
+  )
+}
+
 /** Every check, newest first. */
 export function Checks() {
   const q = useQuery({ queryKey: ['checks'], queryFn: () => get<Check[]>('/suite/checks'),
@@ -61,7 +90,7 @@ export function Checks() {
   const crumbs = [{ label: 'Models' }, { label: 'Checks' }]
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>Model checks</h1><span className="muted">would a cheaper, open-weight or newly released model hold on a usecase's call-sites? Started from a usecase or call-site page, by the API, or by the router.</span></div></div>
+      <div className="head"><div><h1>Model checks</h1><span className="muted">would a cheaper, open-weight or newly released model hold on a usecase's call-sites? Started from a usecase or call-site page, here for a release, by the API, or by the router.</span></div><ReleaseDialog onStarted={() => q.refetch()} /></div>
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No checks yet. Open a usecase and press "Check models…".</p> : (
         <section className="panel">
           <table className="grid">
