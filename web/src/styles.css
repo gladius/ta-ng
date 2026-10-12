@@ -328,7 +328,7 @@ tr.dim { opacity: 0.45; }
 .share-track { position: relative; display: inline-block; width: 110px; height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
 .share-track i { position: absolute; left: 0; top: 0; bottom: 0; background: #FDE3E3; }
 .share-track b { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--ink); }
-.chip.cause-ok { background: #E6F4EA; }
+.chip.cause-ok { background: var(--hover); color: var(--ink); }
 .chip.cause-no_mark, .chip.cause-gaps { background: var(--gold-soft); color: var(--ink); }
 .chip.cause-dynamic_first, .chip.cause-tools_vary { background: #FDE3E3; color: var(--ink); }
 .pbar-wrap { display: flex; flex-direction: column; gap: 4px; }
