@@ -1,12 +1,12 @@
-"""Model checks.
+"""Model audits.
 
-A check = scope (a usecase, or one call-site) + a sample per call-site + candidate models + a budget. It samples
+An audit = scope (a usecase, or one call-site) + a sample per call-site + candidate models + a budget. It samples
 requests from the log by size (smallest and largest prompts, the quartiles, the heaviest answers, a few random),
 submits ONE validation job (faithful re-runs, the judge, evidence: validation/engine.py unchanged) and, when the job
-ends, writes a verdict per call-site x candidate: on the check (history, provenance) and on the call-site record as
-decisions["models"] (the latest per candidate, with the check it came from). The usecase record gets the roll-up.
+ends, writes a verdict per call-site x candidate: on the audit (history, provenance) and on the call-site record as
+decisions["models"] (the latest per candidate, with the audit it came from). The usecase record gets the roll-up.
 
-Candidates come from a preset or a list: "cheaper" (the catalog's next lower tier of each site's own model),
+Candidates come from a strategy or a list: "cheaper" (the catalog's next lower tier of each site's own model),
 "open_weight" (the catalog's in-tier open-weight swap), "release" (one named model), "custom".
 """
 import dataclasses
@@ -31,23 +31,23 @@ STRATEGIES = {
                     "cheaper per call when it answers tightly",
     "release": "the named models, against every call-site in scope",
     "revalidate": "the models of each call-site's current verdicts, before they expire",
-    "drift_watch": "each call-site's own current model against itself: has its behaviour moved since the last check",
+    "drift_watch": "each call-site's own current model against itself: has its behaviour moved since the last audit",
     "manual": "exactly the models you name",
 }
-PRESETS = tuple(STRATEGIES) + ("open_weight", "custom", "auto")      # the last three: older rows
+STRATEGY_IDS = tuple(STRATEGIES) + ("open_weight", "custom", "auto")      # the last three: older rows
 TRIGGERS = ("user", "release", "router", "api", "schedule")
 DEFAULT_SAMPLES = 12
 VALID_DAYS = 30                 # a verdict is re-earned after this, or when the call-site's prompt version changes
 
-checks = Table(
-    "checks", db.metadata,
+audits = Table(
+    "model_audits", db.metadata,
     Column("id", String(20), primary_key=True),
     Column("created_at", DateTime, nullable=False),
     Column("trigger", String(12), nullable=False),
     Column("usecase", Text, nullable=False, default=""),
     Column("site", String(32)),                     # one call-site, or NULL for the whole usecase
-    Column("preset", String(12), nullable=False),
-    Column("candidates", Text, nullable=False),     # JSON: the models asked for ("release"/"custom"), or [] for a preset
+    Column("strategy", String(16), nullable=False),
+    Column("candidates", Text, nullable=False),     # JSON: the models asked for ("release"/"custom"), or [] for a strategy
     Column("samples", Text, nullable=False),        # JSON: {site: [{id, why, prompt_tokens, completion_tokens}]}
     Column("job_id", String(32)),
     Column("max_budget_usd", Float),
@@ -56,7 +56,7 @@ checks = Table(
     Column("summary", Text),                        # JSON once done: {site: {candidate: verdict}}
     Column("finished_at", DateTime),
 )
-COLS = [c.name for c in checks.columns]
+COLS = [c.name for c in audits.columns]
 
 
 def _now():
@@ -147,7 +147,7 @@ def better_value_candidates(model):
 
 
 def served(models):
-    """Only the models the gateway serves (a check can't call the others); unknown off-gateway -> keep as given."""
+    """Only the models the gateway serves (an audit can't call the others); unknown off-gateway -> keep as given."""
     from app import registry
     try:
         if not registry.has_gateway():
@@ -185,29 +185,29 @@ def _row(r):
     return d
 
 
-def get(check_id):
+def get(audit_id):
     eng = db.ready()
     with eng.connect() as c:
-        r = c.execute(select(*checks.columns).where(checks.c.id == check_id)).first()
+        r = c.execute(select(*audits.columns).where(audits.c.id == audit_id)).first()
     return _row(r) if r else None
 
 
 def recent(limit=50, usecase=None, site=None):
     eng = db.ready()
-    stmt = select(*checks.columns)
+    stmt = select(*audits.columns)
     if usecase is not None:
-        stmt = stmt.where(checks.c.usecase == (usecase or ""))
+        stmt = stmt.where(audits.c.usecase == (usecase or ""))
     if site:
-        stmt = stmt.where(checks.c.site == site)
+        stmt = stmt.where(audits.c.site == site)
     with eng.connect() as c:
-        rows = c.execute(stmt.order_by(checks.c.created_at.desc()).limit(limit)).all()
+        rows = c.execute(stmt.order_by(audits.c.created_at.desc()).limit(limit)).all()
     return [_row(r) for r in rows]
 
 
-def _set(check_id, **vals):
+def _set(audit_id, **vals):
     eng = db.ready()
     with eng.begin() as c:
-        c.execute(update(checks).where(checks.c.id == check_id).values(**vals))
+        c.execute(update(audits).where(audits.c.id == audit_id).values(**vals))
 
 
 def estimate(usecase, site=None, n=DEFAULT_SAMPLES, n_candidates=1):
@@ -234,35 +234,35 @@ def estimate(usecase, site=None, n=DEFAULT_SAMPLES, n_candidates=1):
 
 
 def start(**kw):
-    """create() in the background (sampling takes ~30 s); returns the check id at once."""
-    check_id = "chk_" + secrets.token_hex(5)
+    """Start an audit in the background (sampling takes ~30 s); returns the audit id at once."""
+    audit_id = "aud_" + secrets.token_hex(5)
     eng = db.ready()
     with eng.begin() as c:
-        c.execute(checks.insert().values(id=check_id, created_at=_now(), trigger=kw.get("trigger", "user"),
-                                         usecase=kw.get("usecase") or "", site=kw.get("site"), preset=kw.get("preset", "cheaper"),
+        c.execute(audits.insert().values(id=audit_id, created_at=_now(), trigger=kw.get("trigger", "user"),
+                                         usecase=kw.get("usecase") or "", site=kw.get("site"), strategy=kw.get("strategy", "cheaper"),
                                          candidates=json.dumps(list(kw.get("asked") or [])), samples="{}",
                                          max_budget_usd=kw.get("max_budget_usd"), status="sampling"))
 
     def go():
         try:
-            _fill(check_id, **kw)
+            _fill(audit_id, **kw)
         except Exception:
             pass
     threading.Thread(target=go, daemon=True).start()
-    return get(check_id)
+    return get(audit_id)
 
 
-def _fill(check_id, usecase, site=None, preset="cheaper", asked=(), n=DEFAULT_SAMPLES, max_budget_usd=None,
+def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_SAMPLES, max_budget_usd=None,
           trigger="user", judge_model=None, days=30, auto=False):
-    """The body of create() for a check row that already exists."""
+    """Sample, build the items and queue the validation, for an audit row that already exists."""
     from app.services.downgrade_refset import spec as app_spec
     from app.web.validations import _logged_bodies
     from connectors.bigquery.source import to_trace
     try:
-        if preset not in PRESETS:
+        if strategy not in STRATEGY_IDS:
             raise ValueError("strategy must be one of %s" % ", ".join(STRATEGIES))
-        if preset in ("release", "manual", "custom") and not asked and not auto:
-            raise ValueError("%s needs model names" % preset)
+        if strategy in ("release", "manual", "custom") and not asked and not auto:
+            raise ValueError("%s needs model names" % strategy)
         samples = sample(usecase, site, n, days)
         if not samples:
             raise ValueError("no requests to sample for this scope")
@@ -274,32 +274,32 @@ def _fill(check_id, usecase, site=None, preset="cheaper", asked=(), n=DEFAULT_SA
                 if s["id"] not in bodies or not bodies[s["id"]][1]:
                     continue
                 req, resp = bodies[s["id"]]
-                cands = candidates_for(req.get("model"), preset, asked, auto, store.get(st))
+                cands = candidates_for(req.get("model"), strategy, asked, auto, store.get(st))
                 if not cands:
                     continue
                 trace = to_trace(req, resp, usecase or "log")
                 items.append({"id": s["id"], "request": trace, "model": req.get("model"), "recorded": trace["output"] or None,
-                              "candidates": [{"label": (m + " now") if preset == "drift_watch" else m, "model": m} for m in cands]})
+                              "candidates": [{"label": (m + " now") if strategy == "drift_watch" else m, "model": m} for m in cands]})
         if not items:
             raise ValueError("no candidate for these call-sites' models (nothing cheaper / no open-weight swap in the catalog)")
         spec = app_spec()
         if judge_model:
             spec = dataclasses.replace(spec, judge_model=judge_model)
         job = jobs.create(items, spec, max_budget_usd)
-        _set(check_id, samples=json.dumps(samples), job_id=job["id"], status="queued")
+        _set(audit_id, samples=json.dumps(samples), job_id=job["id"], status="queued")
     except Exception as e:
-        _set(check_id, status="failed", error="%s: %s" % (type(e).__name__, e), finished_at=_now())
+        _set(audit_id, status="failed", error="%s: %s" % (type(e).__name__, e), finished_at=_now())
         raise
 
 
 # -------------------------------------------------------------------------------------------------------- results
-def _verdicts(check):
+def _verdicts(audit):
     """{site: {candidate: {requests, within, outside, unverified, pass_rate, cost_vs_original_pct,
     latency_vs_original_pct, consistency}}} from the job's results, by the samples' ids."""
-    site_of = {s["id"]: st for st, ss in check["samples"].items() for s in ss}
+    site_of = {s["id"]: st for st, ss in audit["samples"].items() for s in ss}
     agg = defaultdict(lambda: defaultdict(lambda: {"requests": 0, "within": 0, "outside": 0, "unverified": 0,
                                                    "cost": [], "lat": [], "base_cost": [], "base_lat": [], "fit": []}))
-    for r in jobs.results(check["job_id"]):
+    for r in jobs.results(audit["job_id"]):
         st = site_of.get(r["id"])
         if not st:
             continue
@@ -328,18 +328,18 @@ def _verdicts(check):
     return out
 
 
-def refresh_status(check):
-    """Follow the job; when it ends, write the verdicts (once). Returns the current check."""
-    if check["status"] in ("done", "failed", "stopped") or not check["job_id"]:
-        return check
-    job = jobs.get(check["job_id"])
+def refresh_status(audit):
+    """Follow the job; when it ends, write the verdicts (once). Returns the current audit."""
+    if audit["status"] in ("done", "failed", "stopped") or not audit["job_id"]:
+        return audit
+    job = jobs.get(audit["job_id"])
     if not job:
-        return check
+        return audit
     if job["status"] in ("queued", "running"):
-        if check["status"] != job["status"]:
-            _set(check["id"], status=job["status"])
-        return get(check["id"])
-    verdicts = _verdicts(check)
+        if audit["status"] != job["status"]:
+            _set(audit["id"], status=job["status"])
+        return get(audit["id"])
+    verdicts = _verdicts(audit)
     at = _now()
     touched = set()
     for st, by in verdicts.items():
@@ -349,16 +349,16 @@ def refresh_status(check):
         cur = (rec["decisions"].get("models") or {}).get("candidates", {})
         version = rec["versions"][-1]["version"] if rec["versions"] else None
         for cand, v in by.items():
-            cur[cand] = {**v, "check": check["id"], "at": at.isoformat(timespec="seconds"), "trigger": check["trigger"],
+            cur[cand] = {**v, "audit": audit["id"], "at": at.isoformat(timespec="seconds"), "trigger": audit["trigger"],
                          "valid_until": (at + datetime.timedelta(days=VALID_DAYS)).isoformat(timespec="seconds"),
                          "site_version": version}
         store.set_decision(st, "models", {"candidates": cur, **conclusion(current(cur, rec))})
         touched.add(rec["usecase"] or "")
     for uc in touched:
         store.set_usecase_decision(uc, "models", usecase_rollup(uc))
-    _set(check["id"], status="done" if job["status"] == "done" else job["status"], summary=json.dumps(verdicts),
+    _set(audit["id"], status="done" if job["status"] == "done" else job["status"], summary=json.dumps(verdicts),
          finished_at=at, error=job.get("error"))
-    return get(check["id"])
+    return get(audit["id"])
 
 
 def current(cands, rec):
@@ -384,7 +384,7 @@ def conclusion(cands):
     ok = {m: v for m, v in cands.items() if v.get("verdict") == "passes"}
     cheapest = min((m for m in ok if ok[m].get("cost_vs_original_pct") is not None), key=lambda m: ok[m]["cost_vs_original_pct"], default=None)
     fastest = min((m for m in ok if ok[m].get("latency_vs_original_pct") is not None), key=lambda m: ok[m]["latency_vs_original_pct"], default=None)
-    pick = lambda m, k: None if m is None or ok[m][k] >= 0 else {"model": m, k: ok[m][k], "check": ok[m]["check"]}
+    pick = lambda m, k: None if m is None or ok[m][k] >= 0 else {"model": m, k: ok[m][k], "audit": ok[m]["audit"]}
     return {"cheapest": pick(cheapest, "cost_vs_original_pct"), "fastest": pick(fastest, "latency_vs_original_pct")}
 
 

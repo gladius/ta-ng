@@ -4,7 +4,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { get } from '../api'
 import { CAUSE, usecaseName, type Cause, type Proof } from '../cache'
 import { count, Failed, Kpi, Loading, money, Page, pct, when } from '../ui'
-import { VerdictChip, type Verdict } from './Checks'
+import { VerdictChip, type Verdict } from './ModelAudits'
 
 type Profile = { name: string; does: string; task: string; output: string; fixed: string | null; per_call: string | null; model: string; created_at: string | null } | null
 type CacheDecision = { cause: Cause | null; action: string; worth: number; proof: Proof; share: number; models: string[]; built_at: string | null } | null
@@ -13,8 +13,8 @@ type Site = {
   versions: { version: string; first: string; last: string }[]; static_chars: number; dynamic_chars: number; static_after: number
   tool_sets: number; unsure: boolean; window_days: number; updated_at: string | null; profile: Profile
 }
-type Pick = { model: string; cost_vs_original_pct?: number; latency_vs_original_pct?: number; check: string } | null
-type Models = { candidates: Record<string, Verdict & { check: string; at: string; trigger: string; valid?: boolean }>; cheapest?: Pick; fastest?: Pick } | null
+type Pick = { model: string; cost_vs_original_pct?: number; latency_vs_original_pct?: number; audit: string } | null
+type Models = { candidates: Record<string, Verdict & { audit: string; at: string; trigger: string; valid?: boolean }>; cheapest?: Pick; fastest?: Pick } | null
 type UsecaseRow = { usecase: string | null; calls: number; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; analysing: boolean; error: string | null; decisions?: { models?: { sites: number; with_cheaper: number; saving: number; cost: number } } }
 type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; usecases: UsecaseRow[] }
 type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean }
@@ -193,7 +193,7 @@ export function CallSite() {
           {s.decisions.cache?.action && <p className="muted">{s.decisions.cache.action}</p>}
           {s.decisions.models?.cheapest && <p><b>Cheapest that passes: <span className="mono">{s.decisions.models.cheapest.model}</span></b> at {s.decisions.models.cheapest.cost_vs_original_pct}% cost{s.decisions.models.fastest && <>; fastest that passes: <span className="mono">{s.decisions.models.fastest.model}</span> at {s.decisions.models.fastest.latency_vs_original_pct}% latency</>}.</p>}
           <p><b>Models</b> · {s.decisions.models ? Object.entries(s.decisions.models.candidates).map(([cand, v]) => (
-            <span key={cand} className="row"><span className="mono">{cand}</span> <VerdictChip v={v} />{v.cost_vs_original_pct != null && <span className="muted">{v.cost_vs_original_pct}% cost</span>}<Link className="muted" to={`/model-audits/${v.check}`}>audit {when(v.at)}</Link>{v.valid === false && <span className="chip warn">stale: expired or an older prompt version</span>}</span>
+            <span key={cand} className="row"><span className="mono">{cand}</span> <VerdictChip v={v} />{v.cost_vs_original_pct != null && <span className="muted">{v.cost_vs_original_pct}% cost</span>}<Link className="muted" to={`/model-audits/${v.audit}`}>audit {when(v.at)}</Link>{v.valid === false && <span className="chip warn">stale: expired or an older prompt version</span>}</span>
           )) : <span className="muted">no model checked for this call-site yet</span>}</p>
           <p><b>Router</b> · <span className="muted">no pin</span></p>
         </div>

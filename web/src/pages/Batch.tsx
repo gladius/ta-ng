@@ -109,7 +109,7 @@ export default function Batch() {
         <Kpi label="Labels passing every request" value={`${cands.filter((s) => s.requests && s.within === s.requests).length} of ${cands.length}`}
           note={cands.map((s) => `${s.label} ${s.within}/${s.requests}`).join(' · ')} />
         <Kpi label="Largest saving" best value={saving ? change(saving.cost_vs_original_pct) : '—'} note={saving ? `${saving.label}, cost per call` : 'no prices yet'} />
-        <Kpi label="Spent on this check" value={money(j.spend_usd, 2)} note={j.max_budget_usd == null ? 'no budget limit' : `of ${money(j.max_budget_usd, 2)}`} />
+        <Kpi label="Spent on this validation" value={money(j.spend_usd, 2)} note={j.max_budget_usd == null ? 'no budget limit' : `of ${money(j.max_budget_usd, 2)}`} />
       </div>
 
       {cands.length > 0 && (

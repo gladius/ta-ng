@@ -7,7 +7,7 @@ import Review from './pages/Review'
 import { Migrations, Models } from './pages/Catalog'
 import { CacheOverview, CacheSite, CacheUsecase } from './pages/Cache'
 import { CallSite, CallSiteUsecase, CallSiteUsecases } from './pages/CallSites'
-import { CheckDetail, Checks } from './pages/Checks'
+import { ModelAuditDetail, ModelAudits } from './pages/ModelAudits'
 import How from './pages/How'
 import { Page } from './ui'
 
@@ -19,9 +19,9 @@ export default function App() {
         <Route path="validations" element={<Batches />} />
         <Route path="validations/:jobId" element={<Batch />} />
         <Route path="validations/:jobId/requests/*" element={<Review />} />
-        <Route path="model-audits" element={<Checks />} />
+        <Route path="model-audits" element={<ModelAudits />} />
         <Route path="model-audits/how" element={<How />} />
-        <Route path="model-audits/:checkId" element={<CheckDetail />} />
+        <Route path="model-audits/:auditId" element={<ModelAuditDetail />} />
         <Route path="usecases" element={<CallSiteUsecases />} />
         <Route path="usecases/:usecase" element={<CallSiteUsecase />} />
         <Route path="usecases/:usecase/callsites/:site" element={<CallSite />} />
