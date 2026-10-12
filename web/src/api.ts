@@ -67,7 +67,7 @@ export async function get<T>(path: string, init?: RequestInit): Promise<T> {
 type Routing = { label: string; served_model: string | null; requests: number; within: number; outside: number; unverified: number }
 
 export type JobStatus = Job & {
-  spec: { reference_runs: number; candidate_runs: number; votes: number; judge_model: string }
+  spec: { reference_runs: number; candidate_runs: number; first_runs: number; votes: number; judge_model: string }
   summary: LabelSummary[]
   routing: Routing[]
   callback: { sent_at: string | null; error: string | null } | null

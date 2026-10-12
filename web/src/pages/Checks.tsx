@@ -33,7 +33,7 @@ export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { u
   const [models, setModels] = useState<string[]>([])
   const [auto, setAuto] = useState(true)
   const [advanced, setAdvanced] = useState(false)
-  const [samples, setSamples] = useState(8)
+  const [samples, setSamples] = useState(12)
   const [budget, setBudget] = useState<number | ''>('')
   const served = useQuery({ queryKey: ['served-models'], queryFn: () => get<Served>('/suite/models'), enabled: open })
   const opts = useQuery({ queryKey: ['usecase-options'], queryFn: () => get<{ usecases: UsecaseOpt[] }>('/suite/callsites/usecases?per_page=200'), enabled: open && !site && !lockScope })
@@ -148,7 +148,7 @@ export function CheckDetail() {
       </div>
       {c.error && <p className="error" role="alert">{c.error}</p>}
       {j && spec && (
-        <p className="muted">Each sampled request: the original re-run {spec.reference_runs}× beside its logged answer, each candidate {spec.candidate_runs}×; judge {spec.judge_model}, {spec.votes} votes when an answer isn't a pass. {j.items_done} of {j.items_total} done · spent {money(j.spend_usd, 2)}{c.max_budget_usd != null && ` of ${money(c.max_budget_usd, 2)}`}{j.stop_reason && ` · ${j.stop_reason}`}</p>
+        <p className="muted">Each sampled request: the original re-run {spec.reference_runs}× beside its logged answer, each candidate {spec.first_runs}× (up to {spec.candidate_runs}× when one isn't a pass); judge {spec.judge_model}, {spec.votes} votes when an answer isn't a pass. {j.items_done} of {j.items_total} done · spent {money(j.spend_usd, 2)}{c.max_budget_usd != null && ` of ${money(c.max_budget_usd, 2)}`}{j.stop_reason && ` · ${j.stop_reason}`}</p>
       )}
       {Object.keys(c.samples).map((st) => {
         const ids = new Set(c.samples[st].map((s) => s.id))

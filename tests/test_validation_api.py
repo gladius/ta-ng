@@ -542,7 +542,7 @@ def test_the_api_reference_matches_what_the_api_returns(client, monkeypatch):
     job_id = r.json()["id"]
     _work()
     got = v.Status.model_validate(client.get("/api/validations/" + job_id, headers=KEY).json())
-    assert got.status == "done" and got.routing and got.callback.sent_at and got.summary[1].answers.match == 10
+    assert got.status == "done" and got.routing and got.callback.sent_at and got.summary[1].answers.match == 6   # 2 requests x 3 clear passes
     page = v.ResultsPage.model_validate(client.get("/api/validations/%s/results" % job_id, headers=KEY).json())
     assert page.total == 2 and page.results[0].candidates[0].runs[0].judges[0].kept is True
     one = v.Result.model_validate(client.get("/api/validations/%s/results/req-1" % job_id, headers=KEY).json())

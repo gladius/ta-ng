@@ -185,7 +185,8 @@ class Submitted(_Out):
 
 class JobSpec(_Out):
     reference_runs: int = Field(description="Fresh re-runs of the original per request")
-    candidate_runs: int = Field(description="Answers per candidate per request")
+    candidate_runs: int = Field(description="Answers per candidate per request at most")
+    first_runs: int = Field(description="Answers per candidate first; the rest only when one of those isn't a pass")
     votes: int = Field(description="Judge calls per candidate answer when the first isn't a pass; an answer "
                                    "identical to one of the original's needs none")
     coherence_floor: float = Field(description="Below this self-agreement the original has no stable behaviour, so "

@@ -1,7 +1,8 @@
 """The validation engine: does a candidate model behave like the original on a request?
 
 The original's recorded answer plus `reference_runs` fresh re-runs form the reference set, the range of behaviour the
-original itself shows; one coherence judgement says how consistent it is. Each of `candidate_runs` candidate outputs
+original itself shows; one coherence judgement says how consistent it is. Each candidate output (`first_runs`, up to
+`candidate_runs` when one isn't a pass)
 is judged on whether it belongs to the set: an exact copy of a reference matches with no judge call; otherwise one
 judge vote, and when it isn't a pass `votes` - 1 more, the majority deciding. The judge reads the whole request and
 every output, never a cut. Verdict, relative to the original's consistency:
@@ -122,14 +123,22 @@ def _verdict(kept, nruns, failed, coh, spec):
     return "outside", "less consistent than the original " + rates
 
 
+def _ok(votes, copy):
+    """Whether a candidate run is kept: an exact copy of an original answer, or a majority of the decided votes."""
+    decided = [k for k, _, _ in votes if k is not None]
+    return copy or (len(decided) * 2 > len(votes) and sum(1 for k in decided if k) * 2 > len(decided))
+
+
 def validate_many(items, spec, run=None):
-    """[Item] -> [result]. Two pools across all items, every model call then every judge call, `max_parallel` wide."""
+    """[Item] -> [result]. Pools across all items, every model call then every judge call, `max_parallel` wide. Each
+    candidate answers `first_runs` times; only when one of those isn't a pass does it answer up to `candidate_runs`."""
     run = run or _default_run
+    first = min(spec.first_runs, spec.candidate_runs)
     calls = []                                                  # (item index, "ref" | candidate index, model)
     for i, it in enumerate(items):
         calls += [(i, "ref", it.model)] * (spec.reference_runs + (0 if it.recorded else 1))
         for c, cand in enumerate(it.candidates):
-            calls += [(i, c, cand.model)] * spec.candidate_runs
+            calls += [(i, c, cand.model)] * first
     runs = defaultdict(list)
     # all at once, as production would send them: no order of ours gives one model's re-runs a cache discount
     for (i, who, _), r in zip(calls, _pmap(lambda x: _call(run, items[x[0]].request, x[2]), calls, spec.max_parallel)):
@@ -137,13 +146,22 @@ def validate_many(items, spec, run=None):
     reference = {i: ([_recorded_run(it)] if it.recorded else []) + runs[(i, "ref")] for i, it in enumerate(items)}
     reqs = {i: request_text(it.request) for i, it in enumerate(items)}
     ref_ok = {i: not any(r.get("error") for r in reference[i]) for i in range(len(items))}
-    copies = {(i, c, j) for i, it in enumerate(items) for c in range(len(it.candidates))
-              for j, r in enumerate(runs[(i, c)]) if not r.get("error")
-              and (r["output"] or "").strip() in {(x["output"] or "").strip() for x in reference[i]}}
+    ref_texts = {i: {(x["output"] or "").strip() for x in reference[i]} for i in range(len(items))}
+    copies = set()
 
+    def note_copies(i, c, start):
+        for j, r in enumerate(runs[(i, c)][start:], start):
+            if not r.get("error") and (r["output"] or "").strip() in ref_texts[i]:
+                copies.add((i, c, j))
+
+    def fit_jobs(i, c, start):
+        return [("fit", i, c, j) for j in range(start, len(runs[(i, c)]))
+                if not runs[(i, c)][j].get("error") and (i, c, j) not in copies]
+    for i, it in enumerate(items):
+        for c in range(len(it.candidates)):
+            note_copies(i, c, 0)
     jobs = [("coh", i, None, None) for i in range(len(items)) if ref_ok[i]]
-    jobs += [("fit", i, c, j) for i, it in enumerate(items) if ref_ok[i] for c in range(len(it.candidates))
-             for j in range(spec.candidate_runs) if not runs[(i, c)][j].get("error") and (i, c, j) not in copies]
+    jobs += [job for i, it in enumerate(items) if ref_ok[i] for c in range(len(it.candidates)) for job in fit_jobs(i, c, 0)]
 
     def judge(job):
         from app.services.llm_client import Refused, Unreachable
@@ -164,11 +182,28 @@ def validate_many(items, spec, run=None):
                         "error": why}
             return None, why, 0.0                               # no vote: the run counts as not judged
     verdicts = defaultdict(list)                                # job -> its votes (coherence: its one reply)
-    for job, v in zip(jobs, _pmap_warm(judge, jobs, lambda j: j[:2], spec.max_parallel)):     # one prefix per item
-        verdicts[job].append(v)
-    more = [job for job in jobs if job[0] == "fit" and verdicts[job][0][0] is not True for _ in range(spec.votes - 1)]
-    for job, v in zip(more, _pmap(judge, more, spec.max_parallel)):        # not a pass: more votes, majority decides
-        verdicts[job].append(v)
+
+    def judge_all(jobs):
+        for job, v in zip(jobs, _pmap_warm(judge, jobs, lambda j: j[:2], spec.max_parallel)):     # one prefix per item
+            verdicts[job].append(v)
+        more = [job for job in jobs if job[0] == "fit" and verdicts[job][0][0] is not True for _ in range(spec.votes - 1)]
+        for job, v in zip(more, _pmap(judge, more, spec.max_parallel)):    # not a pass: more votes, majority decides
+            verdicts[job].append(v)
+    judge_all(jobs)
+
+    # a candidate that didn't pass every first run answers again, up to candidate_runs, and those are judged too
+    extra = [(i, c, cand.model) for i, it in enumerate(items) if ref_ok[i] for c, cand in enumerate(it.candidates)
+             if spec.candidate_runs > first and any(r.get("error") or not _ok(verdicts[("fit", i, c, j)], (i, c, j) in copies)
+                                                    for j, r in enumerate(runs[(i, c)]))]
+    if extra:
+        calls = [x for x in extra for _ in range(spec.candidate_runs - first)]
+        for (i, c, _), r in zip(calls, _pmap(lambda x: _call(run, items[x[0]].request, x[2]), calls, spec.max_parallel)):
+            runs[(i, c)].append(r)
+        jobs2 = []
+        for i, c, _ in extra:
+            note_copies(i, c, first)
+            jobs2 += fit_jobs(i, c, first)
+        judge_all(jobs2)
 
     out = []
     for i, it in enumerate(items):
@@ -187,7 +222,7 @@ def validate_many(items, spec, run=None):
                 if votes and len(decided) * 2 <= len(votes):            # most abstained: this run isn't judged
                     unjudged = unjudged or next(w for k, w, _ in votes if k is None)
                 yes = sum(1 for k in decided if k)
-                ok = copy or (len(decided) * 2 > len(votes) and yes * 2 > len(decided))
+                ok = _ok(votes, copy)
                 loose = sum(1 for k, w, _ in votes if k and w.startswith("acceptable:"))
                 category = ("match" if copy else
                             "unclear" if r.get("error") or not votes or len(decided) * 2 <= len(votes) else

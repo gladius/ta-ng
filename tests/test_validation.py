@@ -62,7 +62,7 @@ def test_within_with_measured_runs(monkeypatch):
     _judges(monkeypatch)
     r = validate(_item(), Spec(), _run)
     c = r["candidates"][0]
-    assert (c["verdict"], c["kept"], c["of"], c["fit_rate"]) == ("within", 5, 5, 1.0)
+    assert (c["verdict"], c["kept"], c["of"], c["fit_rate"]) == ("within", 3, 3, 1.0)     # 3 clear passes: no more runs
     assert r["reference"]["of"] == 5 and r["reference"]["consistency"] == 1.0 and r["reference"]["runs"][0]["recorded"] is True
     assert c["runs"][0]["latency_ms"] == 10 and c["runs"][0]["cost_usd"] > 0 and c["runs"][0]["votes"] == "1/1"
     assert c["latency_ms"] == 10 and r["spend_usd"] > 0 and c["judge_reason"] == "why"
@@ -295,12 +295,12 @@ def test_a_failed_judge_call_leaves_the_request_unverified(monkeypatch):
 def test_unsure_votes_abstain(monkeypatch):
     _judges(monkeypatch)
     # in order: each answer's first vote, then two more for each answer whose first vote wasn't a pass
-    votes = iter([(None, "unsure: truncated", 0.0)] * 5 + [(True, "same", 0.0)] * 10)
+    votes = iter([(None, "unsure: truncated", 0.0)] * 3 + [(True, "same", 0.0)] * 6)
     monkeypatch.setattr(engine.judges, "fit", lambda *a: next(votes))
-    one_at_a_time = Spec(max_parallel=1)                         # votes reach runs in order
+    one_at_a_time = Spec(max_parallel=1, candidate_runs=3)       # votes reach runs in order; 3 runs, no more
     c = validate(_item(), one_at_a_time, _run)["candidates"][0]
-    assert (c["verdict"], c["kept"]) == ("within", 5)            # 2 of 3 decided, both kept: one unsure vote is fine
-    votes = iter([(None, "unsure: truncated", 0.0)] * 5 + [(None, "unsure: truncated", 0.0), (True, "same", 0.0)] * 5)
+    assert (c["verdict"], c["kept"]) == ("within", 3)            # 2 of 3 decided, both kept: one unsure vote is fine
+    votes = iter([(None, "unsure: truncated", 0.0)] * 3 + [(None, "unsure: truncated", 0.0), (True, "same", 0.0)] * 3)
     c = validate(_item(), one_at_a_time, _run)["candidates"][0]
     assert (c["verdict"], c["reason"]) == ("unverified", "unsure: truncated")   # most abstained: not judged
 
@@ -313,7 +313,7 @@ def test_each_answer_is_judged_match_acceptable_drift_or_unclear(monkeypatch):
                  [(False, "changed the amount", 0.0)] * 2 +                                       # drift: 2 more
                  [(None, "unclear: truncated", 0.0), (True, "same", 0.0)])                        # unclear: 2 more
     monkeypatch.setattr(engine.judges, "fit", lambda *a: next(votes))
-    c = validate(_item(), Spec(max_parallel=1), _run)["candidates"][0]
+    c = validate(_item(), Spec(max_parallel=1, first_runs=5), _run)["candidates"][0]      # all 5 at once
     assert [r["category"] for r in c["runs"]] == ["match", "acceptable", "drift", "unclear", "match"]
     assert c["answers"] == {"match": 2, "acceptable": 1, "drift": 1, "unclear": 1}
 
@@ -329,12 +329,22 @@ def test_the_first_call_per_prompt_runs_before_the_rest():
 
 def test_a_pass_takes_one_vote_a_drift_three(monkeypatch):
     calls = []
-    for kept, want in ((True, 5), (False, 15)):
+    for kept, want in ((True, 3), (False, 15)):
         calls.clear()
         _judges(monkeypatch)
         monkeypatch.setattr(engine.judges, "fit", lambda *a, kept=kept: calls.append(1) or (kept, "why", 0.0))
         validate(_item(), Spec(), _run)
-        assert len(calls) == want                                # 5 answers: 1 vote each, or 3 when it isn't a pass
+        assert len(calls) == want                 # 3 passes: 1 vote each; drift: 3 votes each on 3 runs, then 2 more runs
+
+
+def test_a_candidate_answers_three_times_and_more_only_when_one_isnt_a_pass(monkeypatch):
+    for kept, want in ((True, 3), (False, 5)):
+        calls = []
+        _judges(monkeypatch)
+        monkeypatch.setattr(engine.judges, "fit", lambda *a, kept=kept: (kept, "why", 0.0))
+        counted = lambda trace, model: calls.append(model) or _run(trace, model)
+        c = validate(_item(), Spec(), counted)["candidates"][0]
+        assert calls.count("claude-haiku-4-5") == want and c["of"] == want
 
 
 def test_an_exact_copy_of_the_originals_answer_needs_no_judge(monkeypatch):
@@ -342,7 +352,7 @@ def test_an_exact_copy_of_the_originals_answer_needs_no_judge(monkeypatch):
     monkeypatch.setattr(engine.judges, "fit", lambda *a: pytest.fail("a copy was sent to the judge"))
     same = lambda trace, model: {**_run(trace, model), "output": " refunded order 1 \n"}
     c = validate(_item(recorded="refunded order 1"), Spec(), same)["candidates"][0]
-    assert c["verdict"] == "within" and c["answers"]["match"] == 5
+    assert c["verdict"] == "within" and c["answers"]["match"] == 3
     assert c["runs"][0]["reason"] == "identical to one of the original's answers" and c["runs"][0]["votes"] == ""
 
 

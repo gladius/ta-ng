@@ -27,7 +27,7 @@ from validation import jobs
 
 PRESETS = ("cheaper", "open_weight", "release", "custom", "auto")
 TRIGGERS = ("user", "release", "router", "api")
-DEFAULT_SAMPLES = 8
+DEFAULT_SAMPLES = 12
 
 checks = Table(
     "checks", db.metadata,
