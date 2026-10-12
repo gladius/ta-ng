@@ -8,13 +8,13 @@ import { AnswersBar, count, Failed, Legend, Loading, money, ms, Page, pct, Squar
 import { STRATEGY_NAME } from './How'
 
 export type Verdict = { requests: number; within: number; outside: number; unverified: number; pass_rate: number; cost_vs_original_pct: number | null; latency_vs_original_pct: number | null; fit_rate: number | null; verdict: 'passes' | 'drifts' | 'not verified' }
-export type Audit = {
-  id: string; created_at: string; trigger: string; usecase: string | null; site: string | null; strategy: string; candidates: string[]
-  samples: Record<string, { id: string; why: string; prompt_tokens: number; completion_tokens: number }[]>
-  job_id: string | null; max_budget_usd: number | null; status: string; error: string | null
-  summary: Record<string, Record<string, Verdict>> | null; finished_at: string | null
+export type Audit = Omit<JobStatus, 'status' | 'spec'> & {
+  status: 'sampling' | 'queued' | 'running' | 'done' | 'stopped' | 'failed'
+  trigger: string; scope: 'usecase' | 'site' | 'requests'; usecase: string | null; site: string | null; strategy: string; models: string[]
+  samples: Record<string, { id: string; why: string; prompt_tokens?: number; completion_tokens?: number }[]>
+  verdicts: Record<string, Record<string, Verdict>> | null; site_names: Record<string, string>
+  spec: JobStatus['spec'] | null
 }
-type AuditPage = Audit & { job: { id: string; status: string; items_total: number; items_done: number; spend_usd: number; stop_reason: string | null } | null; site_names: Record<string, string> }
 
 const OLD_STRATEGY: Record<string, string> = { cheaper: 'cheaper tier of each call-site\'s model', open_weight: 'open-weight swap in the same tier', release: 'a release', custom: 'chosen models', auto: 'Auto' }
 const STATUS: Record<string, string> = { sampling: 'Sampling', queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', stopped: 'Stopped' }
@@ -48,9 +48,9 @@ export function AuditDialog({ usecase, site, lockScope = false, initialOpen = fa
       return { usd: sums.reduce((a, b) => a + b.usd, 0) }
     } })
   const start = useMutation({
-    mutationFn: () => get<{ audits: string[] }>('/audit/models', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    mutationFn: () => get<{ audits: { id: string }[] }>('/audit/models', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ usecases: site ? [] : usecases, site, strategy, models, samples, ...(budget !== '' && { max_budget_usd: budget }) }) }),
-    onSuccess: (r) => { setOpen(false); onStarted?.(r.audits) },
+    onSuccess: (r) => { setOpen(false); onStarted?.(r.audits.map((a) => a.id)) },
   })
   if (!open) return <button className="btn primary" onClick={() => setOpen(true)}>New model audit…</button>
   const available = (served.data?.models ?? []).filter((m) => m.available)
@@ -106,7 +106,7 @@ export function ModelAudits() {
   const crumbs = [{ label: 'Model audit' }, { label: 'Model audits' }]
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>Model audits</h1><span className="muted">which models hold on a usecase's call-sites, and which is cheapest and fastest by measured cost? Started here, by the API, or by the router; each audit runs a validation and writes its findings on the call-sites. <Link to="/audit/models/how">How an audit works</Link>.</span></div>{!preset && <AuditDialog onStarted={() => q.refetch()} />}</div>
+      <div className="head"><div><h1>Model audits</h1><span className="muted">which models hold on a usecase's call-sites, and which is cheapest and fastest by measured cost? Started here, by the API, or by the router: on requests sampled from the log per call-site, or on requests you send. Findings are written on the call-sites. <Link to="/audit/models/how">How an audit works</Link>.</span></div>{!preset && <AuditDialog onStarted={() => q.refetch()} />}</div>
       {preset && <AuditDialog key={preset.usecase + (preset.site ?? '')} usecase={preset.usecase} site={preset.site} initialOpen onStarted={() => { setParams({}); q.refetch() }} />}
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No model audits yet: press "New model audit…", or "Audit models" on a usecase.</p> : (
         <section className="panel">
@@ -114,12 +114,12 @@ export function ModelAudits() {
             <thead><tr><th>Audit</th><th>Scope</th><th>Strategy</th><th>Status</th><th>Result</th><th>Started</th></tr></thead>
             <tbody>
               {q.data.map((c) => {
-                const vs = c.summary ? Object.values(c.summary).flatMap((by) => Object.values(by)) : []
+                const vs = c.verdicts ? Object.values(c.verdicts).flatMap((by) => Object.values(by)) : []
                 return (
                   <tr key={c.id}>
                     <td className="mono"><Link to={`/audit/models/${c.id}`}>{c.id}</Link><div className="muted">{c.trigger}</div></td>
-                    <td><Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}`}>{usecaseName(c.usecase)}</Link>{c.site && <div className="muted">one call-site</div>}</td>
-                    <td>{STRATEGY_NAME[c.strategy] ?? OLD_STRATEGY[c.strategy] ?? c.strategy}{c.candidates.length > 0 && <div className="mono muted">{c.candidates.join(', ')}</div>}</td>
+                    <td>{c.scope === 'requests' ? <span>{count(c.items_total, 'request')} sent</span> : <><Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}`}>{usecaseName(c.usecase)}</Link>{c.site && <div className="muted">one call-site</div>}</>}</td>
+                    <td>{STRATEGY_NAME[c.strategy] ?? OLD_STRATEGY[c.strategy] ?? c.strategy}{c.models.length > 0 && <div className="mono muted">{c.models.join(', ')}</div>}</td>
                     <td><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.error && <div className="muted">{c.error.slice(0, 80)}</div>}</td>
                     <td>{vs.length ? `${vs.filter((v) => v.verdict === 'passes').length} of ${vs.length} pass` : <span className="muted">—</span>}</td>
                     <td className="muted nowrap">{when(c.created_at)}</td>
@@ -140,28 +140,26 @@ export function ModelAudits() {
 export function ModelAuditDetail() {
   const { auditId = '' } = useParams()
   const qc = useQueryClient()
-  const q = useQuery({ queryKey: ['model-audits', auditId], queryFn: () => get<AuditPage>(`/audit/models/${auditId}`),
+  const q = useQuery({ queryKey: ['model-audits', auditId], queryFn: () => get<Audit>(`/audit/models/${auditId}`),
     refetchInterval: (query) => (['sampling', 'queued', 'running'].includes(query.state.data?.status ?? '') ? 5000 : false) })
-  const jobId = q.data?.job?.id
-  const job = useQuery({ queryKey: ['job', jobId], queryFn: () => get<JobStatus>(`/validations/${jobId}`), enabled: !!jobId,
-    refetchInterval: (query) => (query.state.data && ['queued', 'running'].includes(query.state.data.status) ? 5000 : false) })
-  const results = useQuery({ queryKey: ['results', jobId, 'audit', job.data?.items_done], queryFn: () => get<ResultsPage>(`/validations/${jobId}/results?per_page=200`), enabled: !!jobId })
+  const results = useQuery({ queryKey: ['results', auditId, q.data?.items_done], queryFn: () => get<ResultsPage>(`/audit/models/${auditId}/results?per_page=200`),
+    enabled: !!q.data && q.data.status !== 'sampling' })
   const crumbs = [{ label: 'Model audit' }, { label: 'Model audits', to: '/audit/models' }, { label: auditId }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const c = q.data
-  const j = job.data
+  const j = c
   const rows = results.data?.results ?? []
-  const spec = j?.spec
+  const spec = c.spec
   return (
     <Page crumbs={crumbs}>
       <div className="head">
-        <div><h1>Model audit {c.id}</h1><span className="muted">{usecaseName(c.usecase)} · {STRATEGY_NAME[c.strategy] ?? OLD_STRATEGY[c.strategy] ?? c.strategy}{c.candidates.length > 0 && ` (${c.candidates.join(', ')})`} · started {when(c.created_at)} by {c.trigger}</span></div>
-        <div className="row"><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.job && <Link className="btn" to={`/validations/${c.job.id}`}>Its validation {c.job.id}</Link>}</div>
+        <div><h1>Model audit {c.id}</h1><span className="muted">{c.scope === 'requests' ? count(c.items_total, 'sent request') : usecaseName(c.usecase)} · {STRATEGY_NAME[c.strategy] ?? OLD_STRATEGY[c.strategy] ?? c.strategy}{c.models.length > 0 && ` (${c.models.join(', ')})`} · started {when(c.created_at)} by {c.trigger}</span></div>
+        <div className="row"><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.status !== 'sampling' && <Link className="btn" to={`/audit/models/${c.id}/requests`}>All requests</Link>}<a className="btn" href={`/api/audit/models/${c.id}/results.csv`}>CSV</a></div>
       </div>
       {c.error && <p className="error" role="alert">{c.error}</p>}
-      {j && spec && (
-        <p className="muted">Each sampled request: the original re-run {spec.reference_runs}× beside its logged answer, each candidate {spec.first_runs}× (up to {spec.candidate_runs}× when one isn't a pass); judge {spec.judge_model}, {spec.votes} votes when an answer isn't a pass. {j.items_done} of {j.items_total} done · spent {money(j.spend_usd, 2)}{c.max_budget_usd != null && ` of ${money(c.max_budget_usd, 2)}`}{j.stop_reason && ` · ${j.stop_reason}`}</p>
+      {spec && (
+        <p className="muted">Each request: the original re-run {spec.reference_runs}× beside its logged answer, each candidate {spec.first_runs ?? spec.candidate_runs}×{spec.first_runs != null && spec.first_runs < spec.candidate_runs && ` (up to ${spec.candidate_runs}× when one isn't a pass)`}; judge {spec.judge_model}, {spec.votes} votes when an answer isn't a pass. {j.items_done} of {j.items_total} done · spent {money(j.spend_usd, 2)}{c.max_budget_usd != null && ` of ${money(c.max_budget_usd, 2)}`}{c.stop_reason && ` · ${c.stop_reason}`}</p>
       )}
       {Object.keys(c.samples).map((st) => {
         const ids = new Set(c.samples[st].map((s) => s.id))
@@ -183,7 +181,7 @@ export function ModelAuditDetail() {
         const consistency = cons.length ? cons.reduce((a, r) => a + (r.reference.consistency as number), 0) / cons.length : null
         return (
           <section key={st} className="panel">
-            <div className="panel-head"><b><Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}/callsites/${st}`}>{c.site_names[st]}</Link></b><span className="muted">{count(c.samples[st].length, 'sampled request')}</span></div>
+            <div className="panel-head"><b>{st ? <Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}/callsites/${st}`}>{c.site_names[st] ?? st}</Link> : 'Your requests'}</b><span className="muted">{count(c.samples[st].length, st ? 'sampled request' : 'request')}</span></div>
             {mine.length > 0 && (
               <>
                 <div className="scroll">
@@ -206,7 +204,7 @@ export function ModelAuditDetail() {
                     <thead><tr><th>Sampled request</th><th>Why picked</th><th>Original agrees</th>{labels.map((l) => <th key={l}>{l}</th>)}</tr></thead>
                     <tbody>
                       {mine.map((r) => {
-                        const url = `/validations/${c.job!.id}/requests/${encodeURIComponent(r.id)}`
+                        const url = `/audit/models/${c.id}/requests/${encodeURIComponent(r.id)}`
                         return (
                           <tr key={r.id}>
                             <td className="mono"><Link to={url}>{r.id.slice(0, 18)}</Link></td>
@@ -222,7 +220,7 @@ export function ModelAuditDetail() {
                 </div>
               </>
             )}
-            {!mine.length && <p className="muted pad">{c.status === 'done' ? 'No candidate was run for this call-site (no cheaper or open-weight model for its original in the catalog).' : 'Waiting for the job…'}</p>}
+            {!mine.length && <p className="muted pad">{c.status === 'done' ? 'No candidate was run for this call-site (no cheaper or open-weight model for its original in the catalog).' : c.status === 'sampling' ? 'Sampling requests from the log…' : 'Running…'}</p>}
           </section>
         )
       })}

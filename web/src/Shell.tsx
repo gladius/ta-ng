@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
-  ArrowUpRight, BookOpen, Braces, Database, Fingerprint, LayoutDashboard, Menu, Route as RouteIcon, ShieldCheck, TrendingDown, X,
+  ArrowUpRight, BookOpen, Braces, Database, Fingerprint, LayoutDashboard, Menu, Route as RouteIcon, TrendingDown, X,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -48,7 +48,6 @@ export default function Shell() {
         <div className="group">
           <span className="group-name">Model audit</span>
           <Entry icon={TrendingDown} label="Model audits" to="/audit/models" />
-          <Entry icon={ShieldCheck} label="Validations" to="/validations" />
         </div>
         <div className="group">
           <span className="group-name">Cache</span>

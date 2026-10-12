@@ -1,4 +1,4 @@
-"""Token Auditor FastAPI app: the validation API (/api/validations), the UI's JSON (/api/suite), the React UI (/app).
+"""Token Auditor FastAPI app: the public API (/api/audit/models), the UI's JSON (/api/suite, /api/audit/cache), the React UI (/app).
 
 Run:  python -m app.web.server   (http://127.0.0.1:8100, live reload)
 Build the UI with `npm ci && npm run build` in web/.
@@ -27,8 +27,7 @@ async def _lifespan(app):
 
 app = FastAPI(title="Token Auditor", lifespan=_lifespan)
 
-from app.web import cache, callsites, model_audits, profiles, suite, validations  # noqa: E402  the APIs and the downloads
-app.include_router(validations.api)
+from app.web import cache, callsites, model_audits, profiles, public, suite  # noqa: E402  the APIs and the downloads
 app.include_router(suite.api)
 app.include_router(cache.api)
 app.include_router(profiles.api)
@@ -37,12 +36,12 @@ app.include_router(model_audits.api)
 
 
 def _openapi():
-    """/openapi.json and /docs describe the public API: validations and model audits."""
+    """/openapi.json and /docs describe the public API: model audits."""
     if app.openapi_schema is None:
         from fastapi.openapi.utils import get_openapi
         app.openapi_schema = get_openapi(title="Token Auditor API", version="1",
-                                         description=validations.API_DOC,
-                                         routes=validations.api.routes + model_audits.api.routes)
+                                         description=public.API_DOC,
+                                         routes=model_audits.api.routes)
     return app.openapi_schema
 
 

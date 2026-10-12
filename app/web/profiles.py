@@ -1,7 +1,7 @@
 """Call-site profiles as a flat list (the records live in core.identity.store; this is a convenience listing)."""
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.web.validations import require_key
+from app.web.public import require_key
 from core.identity import store
 
 api = APIRouter(prefix="/api/suite/profiles", dependencies=[Depends(require_key)], include_in_schema=False)

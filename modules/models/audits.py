@@ -53,7 +53,9 @@ audits = Table(
     Column("max_budget_usd", Float),
     Column("status", String(12), nullable=False),   # sampling | queued | running | done | failed | stopped
     Column("error", Text),
-    Column("summary", Text),                        # JSON once done: {site: {candidate: verdict}}
+    Column("verdicts", Text),                       # JSON once done: {site: {candidate: verdict}}
+    Column("scope", String(10)),                    # usecase | site | requests
+    Column("callback_url", Text),
     Column("finished_at", DateTime),
 )
 COLS = [c.name for c in audits.columns]
@@ -177,8 +179,9 @@ def candidates_for(model, strategy, asked, auto=False, rec=None):
 # -------------------------------------------------------------------------------------------------------- checks
 def _row(r):
     d = dict(zip(COLS, r))
-    for k in ("candidates", "samples", "summary"):
+    for k in ("candidates", "samples", "verdicts"):
         d[k] = json.loads(d[k]) if d[k] else ([] if k == "candidates" else {} if k == "samples" else None)
+    d["scope"] = d["scope"] or ("site" if d["site"] else "usecase")
     for k in ("created_at", "finished_at"):
         d[k] = d[k].isoformat(timespec="seconds") if d[k] else None
     d["usecase"] = d["usecase"] or None
@@ -192,7 +195,7 @@ def get(audit_id):
     return _row(r) if r else None
 
 
-def recent(limit=50, usecase=None, site=None):
+def recent(limit=50, usecase=None, site=None, offset=0):
     eng = db.ready()
     stmt = select(*audits.columns)
     if usecase is not None:
@@ -200,7 +203,7 @@ def recent(limit=50, usecase=None, site=None):
     if site:
         stmt = stmt.where(audits.c.site == site)
     with eng.connect() as c:
-        rows = c.execute(stmt.order_by(audits.c.created_at.desc()).limit(limit)).all()
+        rows = c.execute(stmt.order_by(audits.c.created_at.desc()).offset(offset).limit(limit)).all()
     return [_row(r) for r in rows]
 
 
@@ -241,7 +244,8 @@ def start(**kw):
         c.execute(audits.insert().values(id=audit_id, created_at=_now(), trigger=kw.get("trigger", "user"),
                                          usecase=kw.get("usecase") or "", site=kw.get("site"), strategy=kw.get("strategy", "cheaper"),
                                          candidates=json.dumps(list(kw.get("asked") or [])), samples="{}",
-                                         max_budget_usd=kw.get("max_budget_usd"), status="sampling"))
+                                         max_budget_usd=kw.get("max_budget_usd"), status="sampling",
+                                         scope="site" if kw.get("site") else "usecase", callback_url=kw.get("callback_url")))
 
     def go():
         try:
@@ -252,11 +256,30 @@ def start(**kw):
     return get(audit_id)
 
 
+def start_requests(items, strategy="manual", asked=(), max_budget_usd=None, callback_url=None, trigger="api",
+                   judge_model=None):
+    """An audit of requests the caller sent (already parsed into engine items): queued at once, no sampling."""
+    from app.services.downgrade_refset import spec as app_spec
+    audit_id = "aud_" + secrets.token_hex(5)
+    spec = app_spec()
+    if judge_model:
+        spec = dataclasses.replace(spec, judge_model=judge_model)
+    samples = {"": [{"id": it["id"], "why": "sent"} for it in items]}
+    eng = db.ready()
+    with eng.begin() as c:
+        c.execute(audits.insert().values(id=audit_id, created_at=_now(), trigger=trigger, usecase="", site=None,
+                                         strategy=strategy, candidates=json.dumps(list(asked)), samples=json.dumps(samples),
+                                         max_budget_usd=max_budget_usd, status="queued", scope="requests",
+                                         callback_url=callback_url, job_id=audit_id))
+    jobs.create(items, spec, max_budget_usd, callback_url, job_id=audit_id)
+    return get(audit_id)
+
+
 def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_SAMPLES, max_budget_usd=None,
-          trigger="user", judge_model=None, days=30, auto=False):
+          trigger="user", judge_model=None, days=30, auto=False, callback_url=None):
     """Sample, build the items and queue the validation, for an audit row that already exists."""
     from app.services.downgrade_refset import spec as app_spec
-    from app.web.validations import _logged_bodies
+    from app.web.public import _logged_bodies
     from connectors.bigquery.source import to_trace
     try:
         if strategy not in STRATEGY_IDS:
@@ -285,7 +308,7 @@ def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_
         spec = app_spec()
         if judge_model:
             spec = dataclasses.replace(spec, judge_model=judge_model)
-        job = jobs.create(items, spec, max_budget_usd)
+        job = jobs.create(items, spec, max_budget_usd, callback_url, job_id=audit_id)
         _set(audit_id, samples=json.dumps(samples), job_id=job["id"], status="queued")
     except Exception as e:
         _set(audit_id, status="failed", error="%s: %s" % (type(e).__name__, e), finished_at=_now())
@@ -301,7 +324,7 @@ def _verdicts(audit):
                                                    "cost": [], "lat": [], "base_cost": [], "base_lat": [], "fit": []}))
     for r in jobs.results(audit["job_id"]):
         st = site_of.get(r["id"])
-        if not st:
+        if st is None:                                     # "" is the key of your requests
             continue
         base_lat, base_cost = jobs.original_averages(r)
         for cand in r["candidates"]:
@@ -330,15 +353,17 @@ def _verdicts(audit):
 
 def refresh_status(audit):
     """Follow the job; when it ends, write the verdicts (once). Returns the current audit."""
-    if audit["status"] in ("done", "failed", "stopped") or not audit["job_id"]:
+    if not audit["job_id"]:
         return audit
     job = jobs.get(audit["job_id"])
     if not job:
         return audit
-    if job["status"] in ("queued", "running"):
+    if job["status"] in ("queued", "running"):            # running, or resumed after it stopped
         if audit["status"] != job["status"]:
-            _set(audit["id"], status=job["status"])
+            _set(audit["id"], status=job["status"], finished_at=None)
         return get(audit["id"])
+    if audit["status"] == job["status"] and audit["finished_at"]:
+        return audit                                       # its verdicts are written
     verdicts = _verdicts(audit)
     at = _now()
     touched = set()
@@ -356,7 +381,7 @@ def refresh_status(audit):
         touched.add(rec["usecase"] or "")
     for uc in touched:
         store.set_usecase_decision(uc, "models", usecase_rollup(uc))
-    _set(audit["id"], status="done" if job["status"] == "done" else job["status"], summary=json.dumps(verdicts),
+    _set(audit["id"], status="done" if job["status"] == "done" else job["status"], verdicts=json.dumps(verdicts),
          finished_at=at, error=job.get("error"))
     return get(audit["id"])
 
@@ -402,3 +427,8 @@ def usecase_rollup(usecase):
             saving += cost * (-m["cheapest"]["cost_vs_original_pct"]) / 100
     return {"sites": sites, "with_cheaper": with_pick, "saving": round(saving, 2), "cost": round(base, 2),
             "picks": {r["site"]: r["decisions"]["models"]["cheapest"] for r in recs if (r["decisions"].get("models") or {}).get("cheapest")}}
+
+
+def for_job(job_id):
+    """The audit running under this job id, or None."""
+    return get(job_id)

@@ -33,7 +33,7 @@ function summarise(rows: LabelSummary[]): string[] {
 }
 
 export default function Batch() {
-  const { jobId = '' } = useParams()
+  const { auditId: jobId = '' } = useParams()
   const [params, setParams] = useSearchParams()
   const show = (SHOW.find(([k]) => k === params.get('show'))?.[0] ?? 'all') as Show
   const page = Math.max(1, Number(params.get('page')) || 1)
@@ -43,24 +43,24 @@ export default function Batch() {
 
   const job = useQuery({
     queryKey: ['job', jobId],
-    queryFn: () => get<JobStatus>(`/validations/${jobId}`),
+    queryFn: () => get<JobStatus>(`/audit/models/${jobId}`),
     refetchInterval: (query) => (query.state.data && ['queued', 'running'].includes(query.state.data.status) ? 5000 : false),
   })
   const live = !!job.data && ['queued', 'running'].includes(job.data.status)
   const results = useQuery({
     queryKey: ['results', jobId, show, page, q, job.data?.items_done],
-    queryFn: () => get<ResultsPage>(`/validations/${jobId}/results?show=${show}&page=${page}&per_page=${PER_PAGE}&q=${encodeURIComponent(q)}`),
+    queryFn: () => get<ResultsPage>(`/audit/models/${jobId}/results?show=${show}&page=${page}&per_page=${PER_PAGE}&q=${encodeURIComponent(q)}`),
     enabled: !!job.data,
   })
   const counts = useQueries({
     queries: SHOW.map(([k]) => ({
       queryKey: ['count', jobId, k, q, job.data?.items_done],
-      queryFn: () => get<ResultsPage>(`/validations/${jobId}/results?show=${k}&per_page=1&q=${encodeURIComponent(q)}`),
+      queryFn: () => get<ResultsPage>(`/audit/models/${jobId}/results?show=${k}&per_page=1&q=${encodeURIComponent(q)}`),
       enabled: !!job.data,
     })),
   })
 
-  const crumbs = [{ label: 'Model audit' }, { label: 'Validations', to: '/validations' }, { label: jobId }]
+  const crumbs = [{ label: 'Model audit' }, { label: 'Model audits', to: '/audit/models' }, { label: jobId, to: `/audit/models/${jobId}` }, { label: 'Requests' }]
   if (job.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (job.isError) return <Page crumbs={crumbs}><Failed error={job.error} /></Page>
   const j = job.data
@@ -80,8 +80,8 @@ export default function Batch() {
           </p>
         </div>
         <div className="row">
-          <a className="btn" href={`/api/validations/${j.id}/results.csv`}>Download CSV</a>
-          <a className="btn primary" href={`/api/validations/${j.id}/results.json`}>JSON</a>
+          <a className="btn" href={`/api/audit/models/${j.id}/results.csv`}>Download CSV</a>
+          <a className="btn primary" href={`/api/audit/models/${j.id}/results.json`}>JSON</a>
         </div>
       </div>
 
@@ -90,7 +90,7 @@ export default function Batch() {
           {j.stop_reason && <p>{j.stop_reason}</p>}
           {j.error && <p>{j.status === 'failed' ? 'Failed: ' : ''}{j.error}</p>}
           {(j.status === 'failed' || j.status === 'stopped') && j.items_done < j.items_total && (
-            <p>The {j.items_total - j.items_done} unfinished requests run again with <span className="mono">POST /api/validations/{j.id}/resume</span>, optionally with a higher <span className="mono">max_budget_usd</span>.</p>
+            <p>The {j.items_total - j.items_done} unfinished requests run again with <span className="mono">POST /api/audit/models/{j.id}/resume</span>, optionally with a higher <span className="mono">max_budget_usd</span>.</p>
           )}
           {j.callback?.error && <p>The callback could not be delivered: {j.callback.error}</p>}
           {j.unpriced_calls > 0 && <p>{j.unpriced_calls} model calls have no catalog price, so spend and costs are understated.</p>}
@@ -109,7 +109,7 @@ export default function Batch() {
         <Kpi label="Labels passing every request" value={`${cands.filter((s) => s.requests && s.within === s.requests).length} of ${cands.length}`}
           note={cands.map((s) => `${s.label} ${s.within}/${s.requests}`).join(' · ')} />
         <Kpi label="Largest saving" best value={saving ? change(saving.cost_vs_original_pct) : '—'} note={saving ? `${saving.label}, cost per call` : 'no prices yet'} />
-        <Kpi label="Spent on this validation" value={money(j.spend_usd, 2)} note={j.max_budget_usd == null ? 'no budget limit' : `of ${money(j.max_budget_usd, 2)}`} />
+        <Kpi label="Spent on this audit" value={money(j.spend_usd, 2)} note={j.max_budget_usd == null ? 'no budget limit' : `of ${money(j.max_budget_usd, 2)}`} />
       </div>
 
       {cands.length > 0 && (
@@ -192,7 +192,7 @@ export default function Batch() {
               <thead><tr><th>Request</th><th>Original agrees</th>{cands.map((s) => <th key={s.label}>{s.label}</th>)}</tr></thead>
               <tbody>
                 {results.data.results.map((r) => {
-                  const url = `/validations/${j.id}/requests/${encodeURIComponent(r.id)}`   // ids may hold / ? # %
+                  const url = `/audit/models/${j.id}/requests/${encodeURIComponent(r.id)}`   // ids may hold / ? # %
                   return (
                     <tr key={r.id}>
                       <td className="mono"><Link to={url}>{r.id}</Link></td>

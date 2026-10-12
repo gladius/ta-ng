@@ -1,4 +1,4 @@
-"""Real end-to-end check of bulk validation (paid: about $1 with the default gpt-5.4-mini judge).
+"""Real end-to-end check of model audits of sent requests (paid: about $1 with the default gpt-5.4-mini judge).
 
     E2E_DATABASE_URL=postgresql+psycopg://... .venv/bin/python tools/validation_e2e.py [--reset]
 
@@ -177,7 +177,7 @@ def spawn(name, port):
     procs[name] = (p, log, port)
     for _ in range(120):
         try:
-            if http("/api/validations", port=port)[0] == 200:
+            if http("/api/audit/models", port=port)[0] == 200:
                 up.append(port)
                 return
         except Exception:
@@ -264,17 +264,17 @@ def main():
         B = [dict(it, id="b-" + it["id"], candidates=[{"label": "cheap", "model": "gpt-5.4-nano"}]) for it in A[15:18]]
         say("job B: no BigQuery configured, so full-body requests (the request_id path is NOT tested)")
     spawn("i1", 8101)
-    s, _, ja = http("/api/validations", {"items": A, "judge_model": JUDGE, "max_budget_usd": 2.0,
+    s, _, ja = http("/api/audit/models", {"requests": A, "judge_model": JUDGE, "max_budget_usd": 2.0,
                                          "callback_url": "http://127.0.0.1:%d/cb/A" % CB_PORT}, port=8101)
     check(s == 202, "job A accepted by instance 1 (%d requests x 2 candidates)" % len(A))
-    a = ja["id"]
+    a = ja["audits"][0]["id"]
     wait_seen("i1")
     say("instance 1 up on :8101 with 2 workers; job %s submitted to it" % a)
     spawn("i2", 8102)
-    s, _, jb = http("/api/validations", {"items": B, "judge_model": JUDGE, "max_budget_usd": 1.0,
+    s, _, jb = http("/api/audit/models", {"requests": B, "judge_model": JUDGE, "max_budget_usd": 1.0,
                                          "callback_url": "http://127.0.0.1:%d/cb/B" % CB_PORT}, port=8102)
     check(s == 202, "job B accepted by instance 2 (%d requests x 1 candidate)" % len(B))
-    b = jb["id"]
+    b = jb["audits"][0]["id"]
     wait_seen("i2")
     say("instance 2 up on :8102 with 2 workers; job %s submitted to it" % b)
 
@@ -284,7 +284,7 @@ def main():
     while True:
         port = up[i % len(up)]                       # alternate instances: they must agree, ETag included
         i += 1
-        s, h, j = http("/api/validations/" + a, headers={"If-None-Match": etag} if etag else None, port=port)
+        s, h, j = http("/api/audit/models/" + a, headers={"If-None-Match": etag} if etag else None, port=port)
         if s == 304:
             n304[port] += 1
         else:
@@ -328,7 +328,7 @@ def main():
             break
         time.sleep(3)
     for _ in range(200):
-        if http("/api/validations/" + b)[2]["status"] not in ("queued", "running"):
+        if http("/api/audit/models/" + b)[2]["status"] not in ("queued", "running"):
             break
         time.sleep(3)
     for _ in range(20):
@@ -338,7 +338,7 @@ def main():
     time.sleep(3)
     say("both jobs ended")
     for job in (a, b):
-        j = http("/api/validations/" + job)[2]
+        j = http("/api/audit/models/" + job)[2]
         if j["status"] != "done":                    # e.g. out of credit: say why instead of failing every check
             check(False, "%s ended %s after %d/%d: %s" % (job, j["status"], j["items_done"], j["items_total"],
                                                            j["stop_reason"] or j["error"]))
@@ -396,8 +396,8 @@ def main():
                 resA = res
 
     print("\n== Status API and polling", flush=True)
-    s, h, st = http("/api/validations/" + a)
-    check(s == 200 and "results" not in st and st["results_url"] == "/api/validations/%s/results" % a,
+    s, h, st = http("/api/audit/models/" + a)
+    check(s == 200 and "results" not in st and st["results_url"] == "/api/audit/models/%s/results" % a,
           "status is light and points at the results")
     want = {}
     for r in resA:
@@ -406,7 +406,7 @@ def main():
     got = {x["label"]: {k: x[k] for k in ("within", "outside", "unverified")} for x in st["summary"] if x["label"] != "original"}
     check(all(got[l] == {k: want[l].get(k, 0) for k in ("within", "outside", "unverified")} for l in want),
           "summary counts match the results: %s" % got)
-    s2, _, _ = http("/api/validations/" + a, headers={"If-None-Match": h.get("etag") or h.get("ETag")})
+    s2, _, _ = http("/api/audit/models/" + a, headers={"If-None-Match": h.get("etag") or h.get("ETag")})
     check(s2 == 304, "a repeat poll of a finished job gets 304")
     check(sum(n304.values()) > 0, "polling during the run: %d full replies, %d '304 unchanged'"
           % (n200, sum(n304.values())))
@@ -414,14 +414,14 @@ def main():
     print("\n== Results API: paging, filters, search, one request", flush=True)
     seen, p = [], 1
     while True:
-        s, _, pg = http("/api/validations/%s/results?per_page=7&page=%d" % (a, p))
+        s, _, pg = http("/api/audit/models/%s/results?per_page=7&page=%d" % (a, p))
         seen += [r["id"] for r in pg["results"]]
         if p * 7 >= pg["total"]:
             break
         p += 1
     check(seen == [it["id"] for it in A], "%d pages of 7 return all %d requests once, in order" % (p, len(seen)))
     def ids(qs):
-        s, _, pg = http("/api/validations/%s/results?per_page=200&%s" % (a, qs))
+        s, _, pg = http("/api/audit/models/%s/results?per_page=200&%s" % (a, qs))
         return [r["id"] for r in pg["results"]], pg["total"]
     prob = [r["id"] for r in resA if any(c["verdict"] != "within" for c in r["candidates"])]
     split = [r["id"] for r in resA if len({c["verdict"] for c in r["candidates"]}) > 1]
@@ -432,17 +432,17 @@ def main():
     check(ids("q=REFUND")[0] == [it["id"] for it in A if "refund" in it["id"]], "search 'REFUND' finds the 5 refund requests")
     check(ids("q=%25")[0] == [], "search for '%' matches nothing (no wildcard leak)")
     odd = [it["id"] for it in A if any(ch in it["id"] for ch in "/ #?ü")]
-    ok = all(http("/api/validations/%s/results/%s" % (a, urllib.parse.quote(i, safe="")))[2].get("id") == i for i in odd)
+    ok = all(http("/api/audit/models/%s/results/%s" % (a, urllib.parse.quote(i, safe="")))[2].get("id") == i for i in odd)
     check(ok, "one-request endpoint works for all %d ids with / space # ? ü" % len(odd))
 
     print("\n== Status and downloads", flush=True)
-    check(all(http("/api/validations/%s" % a, port=p)[0] == 200 for p in up), "job status serves from every live instance")
-    check(len(http("/api/validations")[2]) >= 2, "job list returns the jobs")
-    req_ok = [http("/api/validations/%s/results/%s" % (a, urllib.parse.quote(it["id"], safe="")))[0] for it in A]
+    check(all(http("/api/audit/models/%s" % a, port=p)[0] == 200 for p in up), "job status serves from every live instance")
+    check(len(http("/api/audit/models")[2]) >= 2, "job list returns the jobs")
+    req_ok = [http("/api/audit/models/%s/results/%s" % (a, urllib.parse.quote(it["id"], safe="")))[0] for it in A]
     check(all(x == 200 for x in req_ok), "every one of the %d requests opens on its own" % len(A))
-    s, _, csv_txt = http("/api/validations/%s/results.csv" % a)
+    s, _, csv_txt = http("/api/audit/models/%s/results.csv" % a)
     check(s == 200 and len(list(csv.reader(io.StringIO(csv_txt)))) == 1 + len(A) * 2, "CSV: header + %d rows" % (len(A) * 2))
-    s, _, js = http("/api/validations/%s/results.json" % a)
+    s, _, js = http("/api/audit/models/%s/results.json" % a)
     js = json.loads(js) if isinstance(js, str) else js
     check(s == 200 and len(js["results"]) == len(A), "JSON download holds all %d results" % len(A))
 

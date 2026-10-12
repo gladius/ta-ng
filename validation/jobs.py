@@ -118,9 +118,10 @@ def _free():
 
 
 # ── submitting and reading ──────────────────────────────────────────────────────────────────────────────────────────
-def create(items, spec, max_budget_usd=None, callback_url=None):
-    """items: [{id, request (contract trace), model, recorded, candidates: [{label, model}]}]. Queued for workers."""
-    job_id, now = "val_" + secrets.token_hex(6), _now()
+def create(items, spec, max_budget_usd=None, callback_url=None, job_id=None):
+    """items: [{id, request (contract trace), model, recorded, candidates: [{label, model}]}]. Queued for workers.
+    `job_id`: the caller's id (a model audit runs its job under its own id)."""
+    job_id, now = job_id or "val_" + secrets.token_hex(6), _now()
     with _engine().begin() as c:
         c.execute(insert(_jobs).values(
             id=job_id, status="queued", created_at=now, updated_at=now, judge_model=spec.judge_model,
@@ -279,6 +280,9 @@ def _deliver(url, body):
     urllib.request.urlopen(req, timeout=10).close()     # a non-2xx reply raises, so it counts as a failed attempt
 
 
+callback_body = None          # job id -> the body to POST; set by the API (a model audit's status)
+
+
 def _notify():
     """POST each ended job's summary to its callback URL once: the worker whose UPDATE marks it sent delivers it.
     ponytail: 3 attempts inline; a receiver down for longer misses it (the error is kept on the row)."""
@@ -292,8 +296,8 @@ def _notify():
             if not c.execute(update(_callbacks).where(_callbacks.c.job_id == job_id, _callbacks.c.sent_at.is_(None))
                              .values(sent_at=_now())).rowcount:
                 continue
-        body = {**get(job_id), "summary": summary(job_id), "routing": routing(job_id),
-                "results_url": "/api/validations/%s/results" % job_id}
+        body = callback_body(job_id) if callback_body else {**get(job_id), "summary": summary(job_id),
+                                                             "routing": routing(job_id)}
         error = None
         for wait in (0,) + RETRY_S:
             time.sleep(wait)

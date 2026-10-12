@@ -155,3 +155,10 @@ Model audit (module): a run is a "model audit" (`modules/models/audits.py`, tabl
 ids `aud_`), public and documented at `/api/audit/models`; the UI at `/audit/models`, `/audit/models/:id`,
 `/audit/models/how`. Cache audit: UI `/audit/cache...`, JSON `/api/audit/cache` (not documented yet). A validation is
 the measurement underneath both, still `/api/validations` (public). /openapi.json = validations + model audits.
+
+## One public API: model audits (2026-10-12)
+`/api/validations` is gone: an audit's scope is usecases, a call-site, or requests you send (ids or bodies, optional
+per-request candidates); one id per audit, also its job's id; results, resume, downloads and the callback live under
+`/api/audit/models/{id}`. The UI's Validations pages became the audit's own pages (`/audit/models/:id/requests`,
+`.../requests/:request`). "Validation" is now only the internal name of the engine (validation/). The old batches
+were migrated into request-scope audits with their ids. Env names still say VALIDATION_* (deployment settings).

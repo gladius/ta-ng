@@ -2,7 +2,7 @@
 analysis (every usecase of the window) for the org view."""
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.web.validations import require_key
+from app.web.public import require_key
 from core.ledger import refresh
 from modules.cache import query
 

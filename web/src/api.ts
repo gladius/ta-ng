@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 
-// The /api calls the pages use. Shapes follow /openapi.json (app/web/validations.py), which a test keeps true to
+// The /api calls the pages use. Shapes follow /openapi.json (app/web/public.py, app/web/model_audits.py), which a test keeps true to
 // what the API returns.
 
 export type Verdict = 'within' | 'outside' | 'unverified'
@@ -67,7 +67,7 @@ export async function get<T>(path: string, init?: RequestInit): Promise<T> {
 type Routing = { label: string; served_model: string | null; requests: number; within: number; outside: number; unverified: number }
 
 export type JobStatus = Job & {
-  spec: { reference_runs: number; candidate_runs: number; first_runs: number; votes: number; judge_model: string }
+  spec: { reference_runs: number; candidate_runs: number; first_runs?: number; votes: number; judge_model: string }
   summary: LabelSummary[]
   routing: Routing[]
   callback: { sent_at: string | null; error: string | null } | null

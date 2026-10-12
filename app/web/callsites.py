@@ -4,7 +4,7 @@ import threading
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.web.validations import require_key
+from app.web.public import require_key
 from core.identity import store
 from core.ledger import refresh
 

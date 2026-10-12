@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 
 from app import registry
-from app.web.validations import require_key
+from app.web.public import require_key
 
 api = APIRouter(prefix="/api/suite", dependencies=[Depends(require_key)], include_in_schema=False)
 

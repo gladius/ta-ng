@@ -5,18 +5,18 @@ import { count, Failed, Loading, Page, PassRows } from '../ui'
 
 /** The suite at a glance: one tile per module. */
 export default function Home() {
-  const jobs = useQuery({ queryKey: ['batches', 'home'], queryFn: () => get<Job[]>('/validations?with_summary=1&per_page=4') })
+  const jobs = useQuery({ queryKey: ['model-audits', 'home'], queryFn: () => get<Job[]>('/audit/models?with_summary=1&per_page=4') })
   return (
     <Page crumbs={[{ label: 'Overview' }]}>
       <div className="head"><h1>Overview</h1></div>
       <div className="tiles">
         <section className="panel tile">
-          <div className="tile-head"><h2>Model validations</h2><Link to="/validations">All batches</Link></div>
+          <div className="tile-head"><h2>Recent model audits</h2><Link to="/audit/models">All audits</Link></div>
           {jobs.isPending ? <Loading /> : jobs.isError ? <Failed error={jobs.error} /> : !jobs.data.length ? (
             <p className="muted">No batches yet. Teams send them through the API.</p>
           ) : jobs.data.map((j) => (
             <div key={j.id} className="tile-row">
-              <div className="spread"><Link className="mono" to={`/validations/${j.id}`}>{j.id}</Link><span className="muted">{count(j.items_total, 'request')}</span></div>
+              <div className="spread"><Link className="mono" to={`/audit/models/${j.id}`}>{j.id}</Link><span className="muted">{count(j.items_total, 'request')}</span></div>
               <PassRows summary={j.summary} />
             </div>
           ))}

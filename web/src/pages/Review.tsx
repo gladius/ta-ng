@@ -18,16 +18,16 @@ function AnswerText({ output, error }: { output: string; error: string | null })
 
 /** Review a batch request by request: the list on the left, one request's evidence on the right. */
 export default function Review() {
-  const { jobId = '', '*': requestId = '' } = useParams()
+  const { auditId: jobId = '', '*': requestId = '' } = useParams()
   const [params, setParams] = useSearchParams()
   const [find, setFind] = useState('')
   const list = useQuery({
     queryKey: ['review-list', jobId, find],
-    queryFn: () => get<ResultsPage>(`/validations/${jobId}/results?per_page=200&q=${encodeURIComponent(find)}`),
+    queryFn: () => get<ResultsPage>(`/audit/models/${jobId}/results?per_page=200&q=${encodeURIComponent(find)}`),
   })
   const one = useQuery({
     queryKey: ['result', jobId, requestId],
-    queryFn: () => get<Result>(`/validations/${jobId}/results/${encodeURIComponent(requestId)}`),   // the route param comes back decoded
+    queryFn: () => get<Result>(`/audit/models/${jobId}/results/${encodeURIComponent(requestId)}`),   // the route param comes back decoded
   })
   const r = one.data
   const cand = r?.candidates.find((c) => c.label === params.get('cand')) ?? r?.candidates[0]
@@ -39,7 +39,7 @@ export default function Review() {
   const origLatency = r ? avg(r.reference.runs.map((x) => x.latency_ms)) : null
 
   return (
-    <Page fill crumbs={[{ label: 'Model audit' }, { label: 'Validations', to: '/validations' }, { label: jobId, to: `/validations/${jobId}` }, { label: requestId }]}>
+    <Page fill crumbs={[{ label: 'Model audit' }, { label: 'Model audits', to: '/audit/models' }, { label: jobId, to: `/audit/models/${jobId}` }, { label: requestId }]}>
       <div className="review">
         <section className="review-list" aria-label="Requests">
           <label htmlFor="review-find" className="sr">Find a request</label>
@@ -48,7 +48,7 @@ export default function Review() {
             <ul>
               {list.data.results.map((x) => (
                 <li key={x.id}>
-                  <Link to={`/validations/${jobId}/requests/${encodeURIComponent(x.id)}${cand ? '?cand=' + encodeURIComponent(cand.label) : ''}`}
+                  <Link to={`/audit/models/${jobId}/requests/${encodeURIComponent(x.id)}${cand ? '?cand=' + encodeURIComponent(cand.label) : ''}`}
                     aria-current={x.id === requestId ? 'page' : undefined}>
                     <span className="spread"><span className="mono">{x.id}</span><span className="muted">original {x.reference.agree ?? '?'}/{x.reference.of}</span></span>
                     <span className="row">{x.candidates.map((c) => <span key={c.label} className="mini-runs">{c.label} <Squares runs={c.runs} /></span>)}</span>

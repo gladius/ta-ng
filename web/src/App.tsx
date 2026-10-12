@@ -1,7 +1,6 @@
 import { Route, Routes } from 'react-router-dom'
 import Shell from './Shell'
 import Home from './pages/Home'
-import Batches from './pages/Batches'
 import Batch from './pages/Batch'
 import Review from './pages/Review'
 import { Migrations, Models } from './pages/Catalog'
@@ -16,9 +15,8 @@ export default function App() {
     <Routes>
       <Route element={<Shell />}>
         <Route index element={<Home />} />
-        <Route path="validations" element={<Batches />} />
-        <Route path="validations/:jobId" element={<Batch />} />
-        <Route path="validations/:jobId/requests/*" element={<Review />} />
+        <Route path="audit/models/:auditId/requests" element={<Batch />} />
+        <Route path="audit/models/:auditId/requests/*" element={<Review />} />
         <Route path="audit/models" element={<ModelAudits />} />
         <Route path="audit/models/how" element={<How />} />
         <Route path="audit/models/:auditId" element={<ModelAuditDetail />} />

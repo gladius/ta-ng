@@ -1,9 +1,10 @@
-"""The validation API, its jobs, workers and pages. Offline: the engine is replaced and workers are driven by hand
+"""The public API (model audits of sent requests), its jobs, workers and pages. Offline: the engine is replaced and workers are driven by hand
 (`_work`); the tables live in the test DB (SQLite by default, Postgres when TEST_DATABASE_URL is set)."""
 import pytest
 from fastapi.testclient import TestClient
 
 from app.web.server import app
+from modules.models import audits
 from validation import jobs
 
 KEY = {"X-API-Key": "test-key"}
@@ -45,7 +46,7 @@ def _empty_queue():
     """Each test starts with no jobs. On a slow database (Postgres over a WAN) a whole run takes minutes, so an
     earlier test's unfinished group goes stale and would be claimable in a later test."""
     with jobs._engine().begin() as c:
-        for t in (jobs._callbacks, jobs._cells, jobs._items, jobs._jobs):
+        for t in (jobs._callbacks, jobs._cells, jobs._items, jobs._jobs, audits.audits):
             c.execute(t.delete())
 
 
@@ -62,28 +63,36 @@ def _work(worker="w1"):
         jobs.run_group(*got)
 
 
+def _audit(payload):
+    """The old batch shape ({items: [...]}) as an audit of sent requests."""
+    out = dict(payload)
+    if "items" in out:
+        out["requests"] = out.pop("items")
+    return out
+
+
 def _post(client, payload):
-    r = client.post("/api/validations", headers=KEY, json=payload)
+    r = client.post("/api/audit/models", headers=KEY, json=_audit(payload))
     assert r.status_code == 202, r.text
-    return r.json()["id"]
+    return r.json()["audits"][0]["id"]
 
 
 def test_key_is_required(client, monkeypatch):
-    assert client.get("/api/validations").status_code == 401
-    assert client.get("/api/validations", headers={"X-API-Key": "wrong"}).status_code == 401
+    assert client.get("/api/audit/models").status_code == 401
+    assert client.get("/api/audit/models", headers={"X-API-Key": "wrong"}).status_code == 401
     monkeypatch.setenv("VALIDATION_API_KEY", "")
-    assert client.get("/api/validations", headers=KEY).status_code == 503          # not configured -> closed
+    assert client.get("/api/audit/models", headers=KEY).status_code == 503          # not configured -> closed
 
 
 def test_bad_batches_are_refused_whole(client):
-    assert client.post("/api/validations", headers=KEY, json={"items": []}).status_code == 422
-    assert client.post("/api/validations", headers=KEY, json={"items": [_item(i) for i in range(1001)]}).status_code == 422
+    assert client.post("/api/audit/models", headers=KEY, json=_audit({"items": []})).status_code == 422
+    assert client.post("/api/audit/models", headers=KEY, json=_audit({"items": [_item(i) for i in range(1001)]})).status_code == 422
     no_cands = dict(_item(1), candidates=[])
-    assert client.post("/api/validations", headers=KEY, json={"items": [no_cands]}).status_code == 422
+    assert client.post("/api/audit/models", headers=KEY, json=_audit({"items": [no_cands]})).status_code == 422
     dup = _item(1, candidates=(("a", "m1"), ("a", "m2")))
     no_user = dict(_item(2), request={"model": "gpt-5.4", "messages": [{"role": "system", "content": "s"}]})
     reserved = _item(3, candidates=(("original", "m1"),))
-    r = client.post("/api/validations", headers=KEY, json={"items": [dup, no_user, reserved]})
+    r = client.post("/api/audit/models", headers=KEY, json=_audit({"items": [dup, no_user, reserved]}))
     assert r.status_code == 422
     assert r.json()["detail"] == ["req-1: candidate labels must be unique", "req-2: request.messages needs a user message",
                                   "req-3: candidate label 'original' is reserved for the original model"]
@@ -91,9 +100,9 @@ def test_bad_batches_are_refused_whole(client):
 
 def test_job_runs_and_reports(client):
     job_id = _post(client, {"items": [_item(1), _item(2)], "judge_model": "claude-sonnet-5-5"})
-    assert client.get("/api/validations/" + job_id, headers=KEY).json()["status"] == "queued"
+    assert client.get("/api/audit/models/" + job_id, headers=KEY).json()["status"] == "queued"
     _work()
-    j = client.get("/api/validations/" + job_id, headers=KEY).json()
+    j = client.get("/api/audit/models/" + job_id, headers=KEY).json()
     assert (j["status"], j["items_done"], j["items_total"], j["judge_model"]) == ("done", 2, 2, "claude-sonnet-5-5")
     assert j["spend_usd"] == 2.0 and "results" not in j and "items" not in j and j["routing"] == []
     by = {s["label"]: s for s in j["summary"]}
@@ -102,32 +111,32 @@ def test_job_runs_and_reports(client):
     assert (by["router-a"]["avg_fit_rate"], by["router-b"]["avg_fit_rate"], by["original"]["avg_consistency"]) == (1.0, 0.2, 1.0)
     res = client.get(j["results_url"], headers=KEY).json()
     assert res["total"] == 2 and [r["id"] for r in res["results"]] == ["req-1", "req-2"]
-    assert job_id in [x["id"] for x in client.get("/api/validations", headers=KEY).json()]
+    assert job_id in [x["id"] for x in client.get("/api/audit/models", headers=KEY).json()]
     assert by["router-a"]["within_rate"] == 1.0 and by["router-a"]["cost_vs_original_pct"] == -80
-    assert client.get("/api/validations/%s/results?show=split" % job_id, headers=KEY).json()["total"] == 2
+    assert client.get("/api/audit/models/%s/results?show=split" % job_id, headers=KEY).json()["total"] == 2
 
 
 def test_one_request_and_the_downloads(client):
     job_id = _post(client, {"items": [_item(1), _item(2)]})
     _work()
     assert client.get("/", follow_redirects=False).headers["location"] == "/app/"   # the web UI
-    assert client.get("/api/validations/%s/results.csv" % job_id).status_code == 401  # downloads need sign-in too
-    one = client.get("/api/validations/%s/results/req-2" % job_id, headers=KEY).json()
+    assert client.get("/api/audit/models/%s/results.csv" % job_id).status_code == 401  # downloads need sign-in too
+    one = client.get("/api/audit/models/%s/results/req-2" % job_id, headers=KEY).json()
     assert "refund order 2" in one["request"]["messages"][1]["content"]       # what was sent comes with the result
-    assert client.get("/api/validations/%s/results/req-2" % job_id, headers=KEY).json()["id"] == "req-2"
-    assert client.get("/api/validations/%s/results/nope" % job_id, headers=KEY).status_code == 404
-    csv_rows = client.get("/api/validations/%s/results.csv" % job_id, headers=KEY).text.strip().splitlines()
+    assert client.get("/api/audit/models/%s/results/req-2" % job_id, headers=KEY).json()["id"] == "req-2"
+    assert client.get("/api/audit/models/%s/results/nope" % job_id, headers=KEY).status_code == 404
+    csv_rows = client.get("/api/audit/models/%s/results.csv" % job_id, headers=KEY).text.strip().splitlines()
     assert len(csv_rows) == 1 + 2 * 2
     assert csv_rows[1].startswith("req-1,gpt-5.4,5/5,300,0.01,router-a,gpt-5.4-mini,gpt-5.4-mini,within,5/5,1.0,100,0.002")
-    assert client.get("/api/validations/%s/results.json" % job_id, headers=KEY).json()["id"] == job_id
-    assert client.get("/api/validations/val_missing/results.csv", headers=KEY).status_code == 404
+    assert client.get("/api/audit/models/%s/results.json" % job_id, headers=KEY).json()["id"] == job_id
+    assert client.get("/api/audit/models/aud_missing/results.csv", headers=KEY).status_code == 404
 
 
 def test_budget_stops_between_chunks(client):
     items = [_item(i, candidates=(("router-a", "gpt-5.4-mini"),)) for i in range(12)]
     job_id = _post(client, {"items": items, "max_budget_usd": 3})
     _work()
-    j = client.get("/api/validations/" + job_id, headers=KEY).json()
+    j = client.get("/api/audit/models/" + job_id, headers=KEY).json()
     assert j["status"] == "stopped" and j["items_done"] == 5 and "budget of $3.00" in j["stop_reason"]
 
 
@@ -165,8 +174,8 @@ def test_dead_workers_group_is_taken_over_and_it_cannot_write_late(client):
     jobs.run_group(*again)
     assert jobs.run_group(*dead) == 0                                         # a comes back: writes nothing
     assert jobs.claim("a") is None
-    j = client.get("/api/validations/" + job_id, headers=KEY).json()
-    res = client.get("/api/validations/%s/results" % job_id, headers=KEY).json()
+    j = client.get("/api/audit/models/" + job_id, headers=KEY).json()
+    res = client.get("/api/audit/models/%s/results" % job_id, headers=KEY).json()
     assert (j["status"], j["items_done"], res["total"]) == ("done", 7, 7)
     assert [r["id"] for r in res["results"]] == ["req-%d" % i for i in range(7)]
     assert sum(s["requests"] for s in j["summary"] if s["label"] == "original") == 7      # no request counted twice
@@ -189,8 +198,8 @@ def test_engine_crash_fails_the_job_and_frees_the_group(client, monkeypatch):
 
 
 def test_unknown_job_is_404(client):
-    assert client.get("/api/validations/nope", headers=KEY).status_code == 404
-    assert client.get("/api/validations/nope/results", headers=KEY).status_code == 404
+    assert client.get("/api/audit/models/nope", headers=KEY).status_code == 404
+    assert client.get("/api/audit/models/nope/results", headers=KEY).status_code == 404
 
 
 def test_parallel_workers_run_each_request_exactly_once(client, monkeypatch):
@@ -241,13 +250,13 @@ def test_callback_is_posted_once_when_the_job_ends(client, monkeypatch):
     from sqlalchemy import select
     sent = []
     monkeypatch.setattr(jobs, "_deliver", lambda url, body: sent.append((url, body)))
-    assert client.post("/api/validations", headers=KEY, json={"items": [_item(1)], "callback_url": "ftp://x"}).status_code == 422
+    assert client.post("/api/audit/models", headers=KEY, json=_audit({"items": [_item(1)], "callback_url": "ftp://x"})).status_code == 422
     job_id = _post(client, {"items": [_item(1)], "callback_url": "https://hooks.example/ta"})
     _work()                                                                 # the last poll sees it done and posts
     jobs.claim("w2")                                                        # later polls never post it again
     mine = [b for u, b in sent if b["id"] == job_id]
     assert len(mine) == 1 and sent[0][0] == "https://hooks.example/ta"
-    assert mine[0]["status"] == "done" and mine[0]["results_url"] == "/api/validations/%s/results" % job_id
+    assert mine[0]["status"] == "done" and mine[0]["results_url"] == "/api/audit/models/%s/results" % job_id
     assert {s["label"] for s in mine[0]["summary"]} == {"original", "router-a", "router-b"}
 
     monkeypatch.setattr(jobs, "RETRY_S", (0, 0))
@@ -269,7 +278,7 @@ def test_unreachable_gateway_leaves_the_requests_queued(client, monkeypatch):
     j = jobs.get(job_id)
     assert (j["status"], j["items_done"], j["workers"]) == ("running", 0, 0)                     # waiting, not failed
     assert j["error"].startswith("Waiting: the model endpoint has been unreachable since")
-    assert client.get("/api/validations/" + job_id, headers=KEY).json()["error"].startswith("Waiting:")
+    assert client.get("/api/audit/models/" + job_id, headers=KEY).json()["error"].startswith("Waiting:")
     monkeypatch.setattr(jobs, "validate_many", _fake_engine)                                    # the gateway is back
     _work()
     j = jobs.get(job_id)
@@ -286,7 +295,7 @@ def test_results_are_paged_filtered_and_searchable(client, monkeypatch):
     monkeypatch.setattr(jobs, "validate_many", half)
     job_id = _post(client, {"items": [_item(i) for i in range(12)]})
     _work()
-    get = lambda q: client.get("/api/validations/%s/results?%s" % (job_id, q), headers=KEY).json()
+    get = lambda q: client.get("/api/audit/models/%s/results?%s" % (job_id, q), headers=KEY).json()
     p3 = get("page=3&per_page=5")
     assert (p3["total"], [r["id"] for r in p3["results"]]) == (12, ["req-10", "req-11"])
     outside = get("label=router-b&verdict=outside")
@@ -294,9 +303,9 @@ def test_results_are_paged_filtered_and_searchable(client, monkeypatch):
     assert get("label=router-a&verdict=outside")["total"] == 0 and get("verdict=within")["total"] == 12
     assert get("show=problems")["total"] == get("show=split")["total"] == 6
     assert get("q=REQ-1")["total"] == 3                                     # req-1, req-10, req-11; any case
-    assert client.get("/api/validations/%s/results?verdict=bad" % job_id, headers=KEY).status_code == 422
+    assert client.get("/api/audit/models/%s/results?verdict=bad" % job_id, headers=KEY).status_code == 422
     assert (get("q=req-1&show=problems")["total"], get("q=req-1&show=all")["total"]) == (2, 3)    # counts per filter
-    assert len(client.get("/api/validations?per_page=1", headers=KEY).json()) == 1
+    assert len(client.get("/api/audit/models?per_page=1", headers=KEY).json()) == 1
 
 
 def test_status_polling_says_unchanged_and_shows_router_choices(client, monkeypatch):
@@ -308,11 +317,11 @@ def test_status_polling_says_unchanged_and_shows_router_choices(client, monkeypa
         return out
     monkeypatch.setattr(jobs, "validate_many", routed)
     job_id = _post(client, {"items": [_item(i) for i in range(4)]})
-    first = client.get("/api/validations/" + job_id, headers=KEY)
+    first = client.get("/api/audit/models/" + job_id, headers=KEY)
     tag = first.headers["etag"]
-    assert client.get("/api/validations/" + job_id, headers={**KEY, "If-None-Match": tag}).status_code == 304
+    assert client.get("/api/audit/models/" + job_id, headers={**KEY, "If-None-Match": tag}).status_code == 304
     _work()
-    done = client.get("/api/validations/" + job_id, headers={**KEY, "If-None-Match": tag})
+    done = client.get("/api/audit/models/" + job_id, headers={**KEY, "If-None-Match": tag})
     assert done.status_code == 200 and done.json()["status"] == "done"
     routing = {(x["label"], x["served_model"]): x["requests"] for x in done.json()["routing"]}
     assert routing == {("router-a", "gpt-5.4-mini"): 2, ("router-a", "gpt-5.4-nano"): 2}   # router-b used one model
@@ -369,13 +378,13 @@ def test_a_failed_job_resumes_where_it_stopped(client, monkeypatch):
     monkeypatch.setattr(jobs, "_deliver", lambda url, body: sent.append(body["status"]))
     _work()                                                      # $1 per item: stops after the first group of 5
     assert jobs.get(job_id)["status"] == "stopped" and sent == ["stopped"]
-    assert client.post("/api/validations/%s/resume" % job_id, headers=KEY).status_code == 409   # budget already spent
-    assert client.post("/api/validations/%s/resume" % job_id, headers=KEY, json={"max_budget_usd": 50}).json()["status"] == "queued"
+    assert client.post("/api/audit/models/%s/resume" % job_id, headers=KEY).status_code == 409   # budget already spent
+    assert client.post("/api/audit/models/%s/resume" % job_id, headers=KEY, json={"max_budget_usd": 50}).json()["status"] == "queued"
     _work()
     j = jobs.get(job_id)
     assert (j["status"], j["items_done"], j["stop_reason"], j["max_budget_usd"]) == ("done", 7, None, 50)
     assert sent == ["stopped", "done"]                           # told again when it ends
-    assert client.post("/api/validations/%s/resume" % job_id, headers=KEY).status_code == 409   # only failed / stopped
+    assert client.post("/api/audit/models/%s/resume" % job_id, headers=KEY).status_code == 409   # only failed / stopped
 
 
 def test_a_dropped_connection_while_recording_does_not_lose_the_group(client, monkeypatch):
@@ -413,7 +422,7 @@ def test_items_can_name_logged_calls_by_request_id(client, monkeypatch):
                         "choices": [{"message": {"content": "Refunded."}}], "usage": {"prompt_tokens": 40}}),
         "chatcmpl-failed": ({"model": "gpt-5.4", "messages": [{"role": "user", "content": "x"}]}, None)})
     cands = [{"label": "router-a", "model": "gpt-5.4-mini"}]
-    r = client.post("/api/validations", headers=KEY, json={"items": [
+    r = client.post("/api/audit/models", headers=KEY, json={"requests": [
         {"request_id": "chatcmpl-1", "candidates": cands}, {"request_id": "chatcmpl-nope", "candidates": cands},
         {"request_id": "chatcmpl-failed", "candidates": cands}, {"candidates": cands}]})
     assert r.status_code == 422 and r.json()["detail"] == [
@@ -433,7 +442,7 @@ def test_items_can_name_logged_calls_by_request_id(client, monkeypatch):
 def test_request_ids_need_bigquery(client, monkeypatch):
     from connectors.bigquery import source
     monkeypatch.setattr(source, "_cfg", lambda: (None, None, None))
-    r = client.post("/api/validations", headers=KEY, json={"items": [
+    r = client.post("/api/audit/models", headers=KEY, json={"requests": [
         {"request_id": "chatcmpl-1", "candidates": [{"label": "a", "model": "m"}]}]})
     assert r.status_code == 422 and "need BigQuery" in r.json()["detail"][0]
 
@@ -443,7 +452,7 @@ def test_without_a_budget_a_job_runs_to_the_end(client):
     _work()
     j = jobs.get(job_id)
     assert (j["status"], j["items_done"], j["max_budget_usd"], j["stop_reason"]) == ("done", 12, None, None)
-    assert client.get("/api/validations/" + job_id, headers=KEY).json()["max_budget_usd"] is None
+    assert client.get("/api/audit/models/" + job_id, headers=KEY).json()["max_budget_usd"] is None
 
 
 def test_a_refused_account_stops_the_job_until_resumed(client, monkeypatch):
@@ -455,7 +464,7 @@ def test_a_refused_account_stops_the_job_until_resumed(client, monkeypatch):
     assert (j["status"], j["items_done"], j["workers"]) == ("stopped", 0, 0)
     assert "refused the account (insufficient_quota)" in j["stop_reason"]
     monkeypatch.setattr(jobs, "validate_many", _fake_engine)                      # credit added
-    client.post("/api/validations/%s/resume" % job_id, headers=KEY)
+    client.post("/api/audit/models/%s/resume" % job_id, headers=KEY)
     _work()
     assert jobs.get(job_id)["status"] == "done"
 
@@ -463,7 +472,7 @@ def test_a_refused_account_stops_the_job_until_resumed(client, monkeypatch):
 def test_a_model_that_is_not_a_name_is_refused_at_submit(client):
     bad = dict(_item(1), request={"model": ["gpt-5.4"], "messages": [{"role": "user", "content": "x"}]})
     long = dict(_item(2), request={"model": "m" * 121, "messages": [{"role": "user", "content": "x"}]})
-    r = client.post("/api/validations", headers=KEY, json={"items": [bad, long]})
+    r = client.post("/api/audit/models", headers=KEY, json=_audit({"items": [bad, long]}))
     assert r.status_code == 422 and r.json()["detail"] == [
         "req-1: request.model must be a model name of at most 120 characters",
         "req-2: request.model must be a model name of at most 120 characters"]
@@ -486,8 +495,8 @@ def test_the_callback_waits_for_groups_still_running(client, monkeypatch):
 def test_job_list_shows_each_candidates_result(client):
     job_id = _post(client, {"items": [_item(i) for i in range(2)]})
     _work()
-    assert "summary" not in client.get("/api/validations", headers=KEY).json()[0]
-    got = client.get("/api/validations?with_summary=1", headers=KEY).json()[0]
+    assert "summary" not in client.get("/api/audit/models", headers=KEY).json()[0]
+    got = client.get("/api/audit/models?with_summary=1", headers=KEY).json()[0]
     assert got["id"] == job_id
     assert [(s["label"], s.get("within_rate"), s.get("cost_vs_original_pct")) for s in got["summary"]] == [
         ("original", None, None), ("router-a", 1.0, -80), ("router-b", 0.0, -90)]
@@ -523,9 +532,9 @@ def test_a_new_optional_column_is_added_to_an_existing_table():
 
 
 def test_the_api_reference_matches_what_the_api_returns(client, monkeypatch):
-    """/openapi.json documents the public /api calls only (validations and model audits), with the key as their auth, and every documented response model
+    """/openapi.json documents the public /api calls only (model audits), with the key as their auth, and every documented response model
     takes a real response (the real engine, fake model calls) with no field missing or undocumented."""
-    from app.web import validations as v
+    from app.web import public as v
     from validation import engine
 
     def run(trace, model):                                       # router-a answers req-2 with another model
@@ -537,41 +546,41 @@ def test_the_api_reference_matches_what_the_api_returns(client, monkeypatch):
         "agree": len(outs), "of": len(outs), "divergent": set(), "reasons": {}, "cost_usd": 0.001})
     monkeypatch.setattr(jobs, "validate_many", lambda items, spec: engine.validate_many(items, spec, run))
     monkeypatch.setattr(jobs, "_deliver", lambda url, body: None)
-    r = client.post("/api/validations", headers=KEY, json={"items": [_item(1), _item(2)], "callback_url": "http://cb/x"})
+    r = client.post("/api/audit/models", headers=KEY, json=_audit({"items": [_item(1), _item(2)], "callback_url": "http://cb/x"}))
     v.Submitted.model_validate(r.json())
-    job_id = r.json()["id"]
+    assert v.Submitted.model_validate(r.json())
+    job_id = r.json()["audits"][0]["id"]
     _work()
-    got = v.Status.model_validate(client.get("/api/validations/" + job_id, headers=KEY).json())
+    got = v.Status.model_validate(client.get("/api/audit/models/" + job_id, headers=KEY).json())
     assert got.status == "done" and got.routing and got.callback.sent_at and got.summary[1].answers.match == 6   # 2 requests x 3 clear passes
-    page = v.ResultsPage.model_validate(client.get("/api/validations/%s/results" % job_id, headers=KEY).json())
+    page = v.ResultsPage.model_validate(client.get("/api/audit/models/%s/results" % job_id, headers=KEY).json())
     assert page.total == 2 and page.results[0].candidates[0].runs[0].judges[0].kept is True
-    one = v.Result.model_validate(client.get("/api/validations/%s/results/req-1" % job_id, headers=KEY).json())
+    one = v.Result.model_validate(client.get("/api/audit/models/%s/results/req-1" % job_id, headers=KEY).json())
     assert [m.role for m in one.request.messages] == ["system", "user"] and one.request.tools == []
     for q in ("", "?with_summary=1"):
-        [v.Listed.model_validate(x) for x in client.get("/api/validations" + q, headers=KEY).json()]
+        [v.Listed.model_validate(x) for x in client.get("/api/audit/models" + q, headers=KEY).json()]
 
     spec = client.get("/openapi.json").json()
-    assert set(spec["paths"]) == {"/api/validations", "/api/validations/{job_id}", "/api/validations/{job_id}/resume",
-                                  "/api/validations/{job_id}/results", "/api/validations/{job_id}/results/{request_id}",
-                                  "/api/audit/models", "/api/audit/models/{audit_id}", "/api/audit/models/strategies",
-                                  "/api/audit/models/estimate"}
+    assert set(spec["paths"]) == {"/api/audit/models", "/api/audit/models/{audit_id}", "/api/audit/models/{audit_id}/resume",
+                                  "/api/audit/models/{audit_id}/results", "/api/audit/models/{audit_id}/results/{request_id}",
+                                  "/api/audit/models/strategies", "/api/audit/models/estimate"}
     assert spec["components"]["securitySchemes"]["APIKeyHeader"] == {
         "type": "apiKey", "in": "header", "name": "X-API-Key", "description": "The server's VALIDATION_API_KEY"}
-    assert spec["paths"]["/api/validations/{job_id}"]["get"]["responses"]["200"]["content"]["application/json"][
+    assert spec["paths"]["/api/audit/models/{audit_id}"]["get"]["responses"]["200"]["content"]["application/json"][
         "schema"] == {"$ref": "#/components/schemas/Status"}
     assert client.get("/docs").status_code == 200
 
 
 def test_a_signed_in_browser_may_call_the_api(client, monkeypatch):
-    from app.web import validations as v
-    assert client.get("/api/validations").status_code == 401
+    from app.web import public as v
+    assert client.get("/api/audit/models").status_code == 401
     monkeypatch.setenv("VALIDATION_UI_OPEN", "1")                       # a developer's machine, for the web UI
-    assert client.get("/api/validations").status_code == 200
+    assert client.get("/api/audit/models").status_code == 200
     monkeypatch.setenv("K_SERVICE", "token-auditor")                    # never on Cloud Run
-    assert client.get("/api/validations").status_code == 401
+    assert client.get("/api/audit/models").status_code == 401
     monkeypatch.setattr(v, "_iap_user", lambda a: "someone@example.com" if a == "signed" else None)
-    assert client.get("/api/validations", headers={"x-goog-iap-jwt-assertion": "signed"}).status_code == 200
-    assert client.get("/api/validations", headers={"x-goog-iap-jwt-assertion": "forged"}).status_code == 401
+    assert client.get("/api/audit/models", headers={"x-goog-iap-jwt-assertion": "signed"}).status_code == 200
+    assert client.get("/api/audit/models", headers={"x-goog-iap-jwt-assertion": "forged"}).status_code == 401
 
 
 def test_iap_sign_in_is_checked_against_its_audience_and_issuer(monkeypatch):
@@ -579,7 +588,7 @@ def test_iap_sign_in_is_checked_against_its_audience_and_issuer(monkeypatch):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ec
     from google.auth import crypt, jwt
-    from app.web import validations as v
+    from app.web import public as v
     key = ec.generate_private_key(ec.SECP256R1())
     signer = crypt.ES256Signer.from_string(key.private_bytes(
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()), key_id="k1")
@@ -613,3 +622,16 @@ def test_the_web_ui_is_served_under_app(client, monkeypatch, tmp_path):
     assert r.text == "console.log(1)" and "immutable" in r.headers["cache-control"]
     assert "root" in client.get("/app/..%2f..%2fcredentials.py").text      # never a file outside the build
     assert client.get("/app", follow_redirects=False).headers["location"] == "/app/"
+
+
+def test_one_scope_and_the_audits_models_stand_in_for_missing_candidates(client):
+    req = {k: v for k, v in _item(1).items() if k != "candidates"}
+    assert client.post("/api/audit/models", headers=KEY, json={}).status_code == 422                     # no scope
+    two = {"requests": [req], "usecases": ["uc-x"], "models": ["gpt-5.4-mini"]}
+    assert client.post("/api/audit/models", headers=KEY, json=two).status_code == 422                    # two scopes
+    assert client.post("/api/audit/models", headers=KEY, json={"requests": [req]}).status_code == 422   # no models
+    aid = _post(client, {"requests": [req], "models": ["gpt-5.4-mini"]})
+    p, _ = jobs.request(aid, "req-1")
+    assert p["candidates"] == [{"label": "gpt-5.4-mini", "model": "gpt-5.4-mini"}]                       # labels are models
+    a = client.get("/api/audit/models/" + aid, headers=KEY).json()
+    assert (a["scope"], a["strategy"], a["models"], list(a["samples"])) == ("requests", "manual", ["gpt-5.4-mini"], [""])
