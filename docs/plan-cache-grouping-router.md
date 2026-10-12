@@ -138,3 +138,14 @@ state and roll-up. Opening a usecase runs the script scoped to it (`Build(days, 
 writes its call-site records (identity, per-model daily series as JSON, profile once, decisions). The org view sums
 the records of analysed usecases; "Analyse all usecases" runs the whole window (~65 s here). `ledger_daily` is gone:
 the series live on the records. Core tables: `usecases`, `callsites`.
+
+## Models module = Model checks (2026-10-12)
+The agent-audit flow (LangSmith snapshots, select/prove/report pages) is retired (branch `langsmith-audit-reference`
+keeps it). One pipeline: a check = scope (usecases, one check each, or a call-site) + a strategy (cheaper, better value,
+release, re-validate, drift watch, manual; `modules/models/checks.py`) + models named on top; 12 sampled requests per
+call-site by size; one validation job (engine unchanged except adaptive candidate runs: 3 first, up to 5 when one isn't
+a pass); verdicts per call-site x candidate on the check (history) and on the record (`decisions.models`: latest per
+candidate, valid 30 days and for the prompt version; the cheapest and fastest that pass by MEASURED cost and
+latency), roll-up on the usecase. Pages: Checks (list, detail with the validation evidence, the one dialog with
+chip multi-selects), `/how` explainer drawn from the engine's settings. Palette: black / white / warm greys / red /
+gold only, no green.
