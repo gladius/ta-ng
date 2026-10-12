@@ -18,13 +18,13 @@ import datetime
 import json
 import random
 import secrets
-import threading
 from collections import defaultdict
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, Table, Text, delete, select, update
 
 from app import catalog
 from app.services import db
+from core import tasks
 from core.identity import store
 from core.ledger import build
 from validation import jobs
@@ -279,7 +279,7 @@ def estimate(usecase, site=None, n=DEFAULT_SAMPLES, n_candidates=1):
 
 
 def start(**kw):
-    """Start an audit in the background (sampling takes ~30 s); returns the audit id at once."""
+    """Start an audit: the row now, its sampling as a task any worker runs (~30 s); returns the audit at once."""
     audit_id = "aud_" + secrets.token_hex(5)
     eng = db.ready()
     with eng.begin() as c:
@@ -289,12 +289,8 @@ def start(**kw):
                                          max_budget_usd=kw.get("max_budget_usd"), status="sampling",
                                          scope="site" if kw.get("site") else "usecase", callback_url=kw.get("callback_url")))
 
-    def go():
-        try:
-            _fill(audit_id, **kw)
-        except Exception:
-            pass
-    threading.Thread(target=go, daemon=True).start()
+    tasks.add("sample_audit", {"audit_id": audit_id, **{k: list(v) if isinstance(v, tuple) else v for k, v in kw.items()}},
+              key="sample:" + audit_id)
     return get(audit_id)
 
 
@@ -319,10 +315,17 @@ def start_requests(items, strategy="manual", asked=(), max_budget_usd=None, call
 
 def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_SAMPLES, max_budget_usd=None,
           trigger="user", judge_model=None, days=30, auto=False, callback_url=None):
-    """Sample, build the items and queue the validation, for an audit row that already exists."""
+    """Sample, build the items and queue the validation, for an audit row that already exists. Run again (its worker
+    died), it finishes what is missing and never queues the job twice."""
     from app.services.downgrade_refset import spec as app_spec
     from app.web.public import _logged_bodies
     from connectors.bigquery.source import to_trace
+    a = get(audit_id)
+    if not a or a["status"] != "sampling":
+        return
+    if jobs.get(audit_id):                                 # the job was queued; only the status write was lost
+        _set(audit_id, job_id=audit_id, status="queued")
+        return
     try:
         if strategy not in STRATEGY_IDS:
             raise ValueError("strategy must be one of %s" % ", ".join(STRATEGIES))
@@ -350,9 +353,13 @@ def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_
         spec = app_spec()
         if judge_model:
             spec = dataclasses.replace(spec, judge_model=judge_model)
+        _set(audit_id, samples=json.dumps(samples))          # before the job: a retry after a crash needs them
         job = jobs.create(items, spec, max_budget_usd, callback_url, job_id=audit_id)
-        _set(audit_id, samples=json.dumps(samples), job_id=job["id"], status="queued")
+        _set(audit_id, job_id=job["id"], status="queued")
     except Exception as e:
+        if jobs.get(audit_id):                             # another worker queued it first (a handed-back task)
+            _set(audit_id, job_id=audit_id, status="queued")
+            return
         _set(audit_id, status="failed", error="%s: %s" % (type(e).__name__, e), finished_at=_now())
         raise
 
@@ -396,6 +403,10 @@ def _verdicts(audit):
 def refresh_status(audit):
     """Follow the job; when it ends, write the verdicts (once). Returns the current audit."""
     if not audit["job_id"]:
+        t = tasks.last("sample:" + audit["id"]) if audit["status"] == "sampling" else None
+        if t and t["status"] == "failed":                  # its workers kept dying before it could say why
+            _set(audit["id"], status="failed", error=t["error"], finished_at=_now())
+            return get(audit["id"])
         return audit
     job = jobs.get(audit["job_id"])
     if not job:

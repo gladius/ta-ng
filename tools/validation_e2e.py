@@ -213,16 +213,46 @@ def logged_ids():
         return []
     table, q, r = source._cfg()
     rows = source._client(table.split(".")[0]).query(
-        "SELECT `{i}` FROM `{t}` WHERE `{q}` IS NOT NULL AND `{q}` != '[]' AND `{r}` IS NOT NULL LIMIT 3".format(
+        "SELECT `{i}` FROM `{t}` WHERE LENGTH(TO_JSON_STRING(`{q}`)) > 10 AND `{r}` IS NOT NULL LIMIT 3".format(
             i=os.environ.get("BQ_ID_COLUMN") or "request_id", t=table, q=q, r=r)).result(timeout=120)
     return [row[0] for row in rows]
+
+
+def usecase_audit(eng, rids):
+    """Job C: one usecase audit, sampled from the log by a task on the queue (3 requests, gpt-5.4-nano, $0.50 cap)."""
+    print("\n== A usecase audit (its sampling is a task any worker runs)", flush=True)
+    if not rids or os.environ.get("E2E_REQUEST_IDS"):
+        print("   skipped: needs BigQuery", flush=True)
+        return
+    for _ in range(60):                                  # a fresh database loads the usecases list first
+        listed = http("/api/suite/callsites/usecases?per_page=200")[2]
+        if listed["usecases"] and not listed["reloading"]:
+            break
+        time.sleep(2)
+    ucs = [u for u in listed["usecases"] if (u["calls"] or 0) >= 20 and not (u["usecase"] or "").startswith("jev-")]
+    uc = os.environ.get("E2E_USECASE") or min(ucs, key=lambda u: u["calls"])["usecase"]
+    s, _, jc = http("/api/audit/models", {"usecases": [uc], "strategy": "manual", "models": ["gpt-5.4-nano"],
+                                         "samples": 3, "judge_model": JUDGE, "max_budget_usd": 0.5})
+    check(s == 202 and jc["audits"][0]["status"] == "sampling", "job C accepted for usecase %s, sampling" % uc)
+    c_id = jc["audits"][0]["id"]
+    for _ in range(200):
+        j = http("/api/audit/models/" + c_id)[2]
+        if j["status"] not in ("sampling", "queued", "running"):
+            break
+        time.sleep(3)
+    check(j["status"] == "done", "%s: %s, %s/%s requests%s" % (c_id, j["status"], j.get("items_done"),
+                                                              j.get("items_total"), " (%s)" % j["error"] if j.get("error") else ""))
+    with eng.connect() as c:
+        t = c.execute(sa.text("select status, attempts from tasks where key=:k"), {"k": "sample:" + c_id}).one()
+    check(tuple(t) == ("done", 1), "its sampling task ran once and is done (%s, %d attempt(s))" % tuple(t))
 
 
 def main():
     eng = sa.create_engine(DB_URL, pool_pre_ping=True)
     if "--reset" in sys.argv:
         with eng.begin() as c:
-            for t in ("validation_callbacks", "validation_cells", "validation_items", "validation_jobs", "model_audits"):
+            for t in ("validation_callbacks", "validation_cells", "validation_items", "validation_jobs", "model_audits",
+                      "tasks"):
                 c.execute(sa.text("DROP TABLE IF EXISTS %s" % t))
         say("dropped the audit tables (--reset)")
     srv = ThreadingHTTPServer(("127.0.0.1", CB_PORT), CB)
@@ -344,6 +374,8 @@ def main():
                                                            j["stop_reason"] or j["error"]))
             print("\n%d CHECK(S) FAILED; fix the cause, then run again" % len(failures), flush=True)
             return
+
+    usecase_audit(eng, rids)
 
     # ---- checks --------------------------------------------------------------------------------------------------
     print("\n== Two instances, crash and redeploy", flush=True)

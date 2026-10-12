@@ -1,7 +1,7 @@
-"""Run validation jobs.  python -m validation.worker [--threads N]
+"""Run the queue: background tasks (core/tasks.py) and validation jobs.  python -m validation.worker [--threads N]
 
-Run any number, on any machines sharing DATABASE_URL: each thread claims the next group of any job, so every free
-worker helps with every batch. The web app runs VALIDATION_INPROCESS_WORKERS threads itself (default 2).
+Run any number, on any machines sharing DATABASE_URL: each thread claims the next task, else the next group of any
+job, so every free worker helps with every batch. The web app runs VALIDATION_INPROCESS_WORKERS threads itself (default 2).
 """
 import argparse
 import signal
@@ -9,23 +9,32 @@ import threading
 import traceback
 
 from app.services.llm_client import Unreachable
+from core import tasks
 from validation import jobs
 
 POLL_S = 2.0
 UNREACHABLE_WAIT_S = 30     # the model endpoint is down (its group went back to the queue): retry after this
 ERROR_WAIT_S = 10           # anything else (e.g. the database dropped): logged, then the thread carries on
-_held = {}                  # worker id -> token of the group it is running, handed back on shutdown
+_held = {}                  # worker id -> (release, token) of the task or group it runs, handed back on shutdown
 
 
 def loop(worker, stop):
     while not stop.is_set():
         try:
+            task = tasks.claim(worker)                 # first: sampling and analyses are short and unblock the rest
+            if task:
+                _held[worker] = (tasks.release, task[1])
+                try:
+                    tasks.run(*task)
+                finally:
+                    _held.pop(worker, None)
+                continue
             got = jobs.claim(worker)
             if not got:
                 stop.wait(POLL_S)
                 continue
             job_id, token, group = got
-            _held[worker] = token
+            _held[worker] = (jobs.release, token)
             try:
                 jobs.run_group(job_id, token, group)
             finally:
@@ -48,9 +57,9 @@ def start(n, stop):
 
 
 def release_all():
-    """Hand back every group this process still holds, so other workers take them over at once."""
-    for token in list(_held.values()):
-        jobs.release(token)
+    """Hand back every task and group this process still holds, so other workers take them over at once."""
+    for release, token in list(_held.values()):
+        release(token)
 
 
 def main():

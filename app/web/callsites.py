@@ -54,16 +54,15 @@ def usecase(usecase: str):
     u = store.get_usecase(uc)
     if not u:
         raise HTTPException(404, "unknown usecase")
-    if u["analysed_at"] is None and not u["analysing"] and not u["error"]:
-        refresh.start(uc or "")
-        u = store.get_usecase(uc)
+    if u["analysed_at"] is None and not u["error"]:
+        refresh.start(uc or "")                          # queued once: a pending one is not queued again
     sites = store.by_usecase(uc)
     from modules.models import audits
     for s in sites:
         s["decisions"] = {"models": audits.knowledge(s["site"], s), "router": s["choice"]}
     u = {**u, "decisions": {"models": audits.usecase_rollup(uc)}}
     return {**u, "sites": [{**_with_profile(s), "cache": _cache_decision(s["site"])} for s in sites],
-            "analysing": bool(u["analysing"]) or (uc or "") in refresh.running()}
+            "analysing": (uc or "") in refresh.running()}
 
 
 @api.post("/usecases/{usecase}/analyse")

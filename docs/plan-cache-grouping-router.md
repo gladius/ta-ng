@@ -173,3 +173,12 @@ chat-format analysed, other formats (prompt / non-embedding input) counted as no
 Strategies pick among served generative models (up to 3), with a preview; drift watch removed until the engine can
 compare with a previous audit's answers. catalog.canonical_model fixed: dashed dates and longest match
 (gpt-5.4-2026-03-05 was mapped, and priced, as gpt-5).
+
+## One queue for all background work (2026-10-12)
+An audit's sampling and a usecase's analysis are rows of `tasks` (core/tasks.py), no longer threads of the web
+process: any worker on any instance runs them, with the same claim token, heartbeat and stale takeover as request
+groups; a released task is claimable at once; a task whose workers kept dying is given up after 3 attempts and its
+audit shows failed. Workers take a task before a request group (tasks are short and unblock the rest). One analysis
+per usecase at a time (a task key); "analysing" is read from the queue, never stored. A sampling re-run after a crash
+finds its job and only finishes the status (samples are saved before the job is created). The usecases-list reload is
+still a thread: cheap, idempotent, nothing to lose.

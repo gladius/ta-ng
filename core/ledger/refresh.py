@@ -5,17 +5,16 @@
                              call-site records, a profile for each new one, the cache decision on each
   analyse(None, days)        the same for the whole window (every usecase)
 
-Opening a usecase analyses it when it never was; the router or any caller can POST the same."""
+Opening a usecase analyses it when it never was; the router or any caller can POST the same. An analysis is a task
+on the database queue (core/tasks.py): any worker runs it, a dead worker's is taken over, and one usecase is never
+analysed twice at once. "Analysing" is read from the queue, not stored."""
 import datetime
-import threading
 
-from core import profiler
+from core import profiler, tasks
 from core.identity import store
 from core.ledger import build
 
 STALE = datetime.timedelta(hours=12)
-_lock = threading.Lock()
-_running = set()
 
 
 def _texts(req):
@@ -39,14 +38,11 @@ def list_is_stale():
 
 
 def analyse(usecase=None, days=30):
-    """Analyse one usecase (or the whole window when None). Blocking; see start()."""
+    """Analyse one usecase (or the whole window when None). Blocking: the task start() queues runs it."""
     from modules.cache import report
-    key = usecase if usecase is not None else "*"
     b = None
     scoped = [usecase] if usecase is not None else None
     try:
-        for uc in scoped or []:
-            store.mark_analysing(uc, True)
         b = build.Build(days, usecase)
         sites = b.sites()
         ledger = b.ledger()
@@ -70,20 +66,17 @@ def analyse(usecase=None, days=30):
     finally:
         if b:
             b.close()
-        with _lock:
-            _running.discard(key)
 
 
 def start(usecase=None, days=30):
-    """Analyse in the background; False when that analysis is already running."""
+    """Queue the analysis; False when that one is already waiting or running."""
     key = usecase if usecase is not None else "*"
-    with _lock:
-        if key in _running:
-            return False
-        _running.add(key)
-    threading.Thread(target=analyse, args=(usecase, days), daemon=True).start()
+    if key in running():
+        return False
+    tasks.add("analyse_usecase", {"usecase": usecase, "days": days}, key="analyse:" + key)
     return True
 
 
 def running():
-    return sorted(_running)
+    """The usecases being analysed or waiting for it ("*" is the whole window)."""
+    return [k[len("analyse:"):] for k in tasks.pending("analyse:")]
