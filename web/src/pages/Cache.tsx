@@ -69,7 +69,7 @@ function BriefRow({ b }: { b: Brief }) {
   return (
     <div className="brief">
       <div className="spread">
-        <span><Link to={`/cache/sites/${b.site}`}><b>{b.name}</b></Link> <span className="muted">in {usecaseName(b.usecase)} · {count(b.calls, 'call')} · {pct(b.share)} reused</span></span>
+        <span><Link to={`/audit/cache/sites/${b.site}`}><b>{b.name}</b></Link> <span className="muted">in {usecaseName(b.usecase)} · {count(b.calls, 'call')} · {pct(b.share)} reused</span></span>
         {b.worth > 0 && <b className="nowrap">{usd(b.worth)}</b>}
       </div>
       <div className="row"><CauseChip cause={b.cause} proof={b.proof} />{b.trend && <TrendWord t={b.trend} />}</div>
@@ -85,9 +85,9 @@ export function CacheOverview() {
   const [find, setFind] = useState('')
   const [page, setPage] = useState(0)
   const PER = 25
-  const q = useQuery({ queryKey: ['cache', 'overview'], queryFn: () => get<Overview>('/suite/cache/overview'),
+  const q = useQuery({ queryKey: ['cache', 'overview'], queryFn: () => get<Overview>('/audit/cache/overview'),
     refetchInterval: (query) => (query.state.data?.status.running ? 5000 : false) })
-  const refresh = useMutation({ mutationFn: () => post<unknown>('/suite/cache/refresh'), onSuccess: () => qc.invalidateQueries({ queryKey: ['cache'] }) })
+  const refresh = useMutation({ mutationFn: () => post<unknown>('/audit/cache/refresh'), onSuccess: () => qc.invalidateQueries({ queryKey: ['cache'] }) })
   const crumbs = [{ label: 'Cache' }, { label: 'Cache audit' }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) {
@@ -139,7 +139,7 @@ export function CacheOverview() {
             <tbody>
               {pageRows.map((u) => (
                 <tr key={u.usecase}>
-                  <td><Link to={`/cache/usecases/${encodeURIComponent(u.usecase)}`}>{usecaseName(u.usecase)}</Link><div className="muted">{count(u.sites, 'call-site')}{u.unsure && ' · grouping unsure'}</div></td>
+                  <td><Link to={`/audit/cache/usecases/${encodeURIComponent(u.usecase)}`}>{usecaseName(u.usecase)}</Link><div className="muted">{count(u.sites, 'call-site')}{u.unsure && ' · grouping unsure'}</div></td>
                   <td className="num mono">{u.total.calls.toLocaleString('en-US')}</td>
                   <td><ShareBar share={reuse(u.total)} /></td>
                   <td><TrendWord t={u.trend} /></td>
@@ -176,7 +176,7 @@ function SiteCard({ s, usecase }: { s: Site; usecase: string | null }) {
   return (
     <section className="panel site-card">
       <div className="spread">
-        <div><Link to={`/cache/sites/${s.site}`}><b>{siteName(s)}</b></Link>{s.profile && <span className="muted"> · {s.profile.does}</span>} <Link className="muted" to={`/usecases/${encodeURIComponent(usecase ?? 'None')}/callsites/${s.site}`}>identity and profile</Link></div>
+        <div><Link to={`/audit/cache/sites/${s.site}`}><b>{siteName(s)}</b></Link>{s.profile && <span className="muted"> · {s.profile.does}</span>} <Link className="muted" to={`/usecases/${encodeURIComponent(usecase ?? 'None')}/callsites/${s.site}`}>identity and profile</Link></div>
         {s.story.worth > 0 && <b className="nowrap">{usd(s.story.worth)}</b>}
       </div>
       <div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} />{s.unsure && <span className="chip warn">grouping unsure</span>}<TrendWord t={s.trend} /></div>
@@ -190,8 +190,8 @@ function SiteCard({ s, usecase }: { s: Site; usecase: string | null }) {
 export function CacheUsecase() {
   const { usecase = '' } = useParams()
   const [n, setN] = useState<number>(30)
-  const q = useQuery({ queryKey: ['cache', 'usecase', usecase], queryFn: () => get<UsecasePage>(`/suite/cache/usecases/${encodeURIComponent(usecase)}`) })
-  const crumbs = [{ label: 'Cache' }, { label: 'Cache audit', to: '/cache' }, { label: usecaseName(usecase) }]
+  const q = useQuery({ queryKey: ['cache', 'usecase', usecase], queryFn: () => get<UsecasePage>(`/audit/cache/usecases/${encodeURIComponent(usecase)}`) })
+  const crumbs = [{ label: 'Cache' }, { label: 'Cache audit', to: '/audit/cache' }, { label: usecaseName(usecase) }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const u = q.data
@@ -283,8 +283,8 @@ function TtlTable({ t }: { t: Ttl }) {
 export function CacheSite() {
   const { site = '' } = useParams()
   const [n, setN] = useState<number>(30)
-  const q = useQuery({ queryKey: ['cache', 'site', site], queryFn: () => get<SitePage>(`/suite/cache/sites/${site}`) })
-  const crumbs = [{ label: 'Cache' }, { label: 'Cache audit', to: '/cache' }]
+  const q = useQuery({ queryKey: ['cache', 'site', site], queryFn: () => get<SitePage>(`/audit/cache/sites/${site}`) })
+  const crumbs = [{ label: 'Cache' }, { label: 'Cache audit', to: '/audit/cache' }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const s = q.data
@@ -292,7 +292,7 @@ export function CacheSite() {
   const main = Object.values(s.models).sort((a, b) => b.calls - a.calls)[0]
   const lifetimeMatters = main?.ttl && (Object.keys(main.ttl.options).length > 1 || s.story.cause === 'gaps' || s.story.cause === 'sparse')
   return (
-    <Page crumbs={[...crumbs, { label: usecaseName(s.usecase), to: `/cache/usecases/${encodeURIComponent(s.usecase)}` }, { label: siteName(s) }]}>
+    <Page crumbs={[...crumbs, { label: usecaseName(s.usecase), to: `/audit/cache/usecases/${encodeURIComponent(s.usecase)}` }, { label: siteName(s) }]}>
       <div className="head">
         <div>
           <h1>{siteName(s)}</h1>

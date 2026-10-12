@@ -1,4 +1,4 @@
-// The cache module's JSON (/api/suite/cache, app/web/cache.py).
+// The cache module's JSON (/api/audit/cache, app/web/cache.py).
 
 export type Totals = {
   calls: number; prompt_tokens: number; cached_tokens: number; written_tokens: number; completion_tokens: number

@@ -37,12 +37,12 @@ app.include_router(model_audits.api)
 
 
 def _openapi():
-    """/openapi.json and /docs describe the validation API only."""
+    """/openapi.json and /docs describe the public API: validations and model audits."""
     if app.openapi_schema is None:
         from fastapi.openapi.utils import get_openapi
-        app.openapi_schema = get_openapi(title="Token Auditor validation API", version="1",
+        app.openapi_schema = get_openapi(title="Token Auditor API", version="1",
                                          description=validations.API_DOC,
-                                         routes=validations.api.routes)
+                                         routes=validations.api.routes + model_audits.api.routes)
     return app.openapi_schema
 
 

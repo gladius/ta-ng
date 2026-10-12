@@ -6,7 +6,7 @@ from app.web.validations import require_key
 from core.ledger import refresh
 from modules.cache import query
 
-api = APIRouter(prefix="/api/suite/cache", dependencies=[Depends(require_key)], include_in_schema=False)
+api = APIRouter(prefix="/api/audit/cache", dependencies=[Depends(require_key)], include_in_schema=False)
 
 
 def _status():

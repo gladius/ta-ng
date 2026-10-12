@@ -41,9 +41,16 @@ MAX_ITEMS = 1000
 MAX_CANDIDATES = 5
 
 
-API_DOC = """Check whether cheaper models or routers behave like the original model, on your own logged requests.
+API_DOC = """Whether other models behave like the original, on your own logged requests: cheaper, newer, open-weight or
+routers. Two ways in.
 
-**Flow**
+**Model audits** (`/api/audit/models`): name usecases (or one call-site) and a strategy; the server samples requests
+per call-site from the gateway log, runs a validation and writes the verdicts on each call-site: which candidates
+drift, and the cheapest and fastest that pass by measured cost and latency. Strategies: `cheaper`, `better_value`,
+`release`, `revalidate`, `drift_watch`, `manual` (`GET /api/audit/models/strategies`). Verdicts are valid 30 days and
+for the call-site's prompt version.
+
+**Validations** (`/api/validations`): send the requests yourself.
 1. `POST /api/validations` with up to 1000 items. Each item is a logged call, named by `request_id` (looked up in
    BigQuery) or sent as its OpenAI-format `request` and `response`, with up to 5 `candidates`: your `label` for each
    and the `model` to call. Returns `202` and the job `id`.
@@ -56,20 +63,22 @@ API_DOC = """Check whether cheaper models or routers behave like the original mo
    each with every answer and the judge's reasons.
 
 **How a request is judged.** The original model is re-run 4 times; with its logged answer, these 5 answers show how
-much the original itself varies. Each candidate answers 5 times, and each answer is judged 3 times against them.
+much the original itself varies. Each candidate answers 3 times, and 2 more when one of those isn't a pass. Each
+answer gets one judge vote, and 2 more when that vote isn't a pass; an answer identical to one of the original's needs
+no judge.
 - Each answer: `match` (same behaviour), `acceptable` (differs only where the original itself varies), `drift`
-  (changed a decision, value or action, or made something up) or `unclear`.
+  (changed a decision, value or action, left something out, or made something up) or `unclear`.
 - Each request, per candidate: `within` (passes: its answers stay within the original's own consistency), `outside`
   (drifts) or `unverified` (could not be judged; `reason` says why).
 
-No winner is picked: decide per label, e.g. from `within_rate`, `cost_vs_original_pct` and `latency_vs_original_pct`.
-Run one batch per agent to get results per agent.
+No winner is picked in a validation: decide per label, e.g. from `within_rate`, `cost_vs_original_pct` and
+`latency_vs_original_pct`. (A model audit does pick: the cheapest and fastest that pass.)
 
 **Re-runs** send the logged request as it was (messages, tools, tool_choice, response_format, temperature ...); only
 the model changes. They are not served from a cache and are not logged as production traffic.
 
-**Spend.** Per request: 4 re-runs of the original, 5 answers per candidate, and 15 judge calls per candidate (3 per
-answer) plus 1. `max_budget_usd` caps a job (no cap unless given); `spend_usd` is what it used.
+**Spend.** Per request: 4 re-runs of the original, 3 to 5 answers per candidate, 1 to 3 judge calls per answer, and
+one more judge call. `max_budget_usd` caps a job or an audit (no cap unless given); `spend_usd` is what it used.
 
 **Auth.** Every call needs the `X-API-Key` header.
 """

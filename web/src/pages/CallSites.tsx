@@ -73,7 +73,7 @@ function CacheLine({ c, site }: { c: CacheDecision; site: string }) {
   if (!c) return <span className="muted">cache: not analysed yet</span>
   return (
     <span>
-      <Link to={`/cache/sites/${site}`}>cache</Link>: {c.cause ? <span className={'chip cause-' + c.cause}>{CAUSE[c.cause]}</span> : null} {pct(c.share)} reused
+      <Link to={`/audit/cache/sites/${site}`}>cache</Link>: {c.cause ? <span className={'chip cause-' + c.cause}>{CAUSE[c.cause]}</span> : null} {pct(c.share)} reused
       {c.worth > 0 && <> · <b>{money(c.worth, 2)}</b> possible{c.proof === 'proof' && ', needs proof'}</>}
     </span>
   )
@@ -93,7 +93,7 @@ export function CallSiteUsecase() {
     <Page crumbs={crumbs}>
       <div className="head">
         <div><h1>{usecaseName(u.usecase)}</h1><span className="muted">{u.calls.toLocaleString('en-US')} calls in the window{u.sites.length > 0 && <> · made of {count(u.sites.length, 'call-site')}{calls !== u.calls && ` (${calls.toLocaleString('en-US')} of them chat calls)`}</>} · derived from the log, no source code needed{u.analysed_at && <> · analysed {when(u.analysed_at)}</>}</span></div>
-        <div className="row"><Link className="btn primary" to={`/model-audits?usecase=${encodeURIComponent(u.usecase ?? 'None')}`}>Audit models</Link><button className="btn" disabled={u.analysing} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? 'Analysing…' : 'Analyse again'}</button></div>
+        <div className="row"><Link className="btn primary" to={`/audit/models?usecase=${encodeURIComponent(u.usecase ?? 'None')}`}>Audit models</Link><button className="btn" disabled={u.analysing} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? 'Analysing…' : 'Analyse again'}</button></div>
       </div>
       {u.analysing && !u.sites.length && <p className="empty">Analysing this usecase from the log: finding its call-sites, naming them, reading their cache behaviour. Usually under a minute.</p>}
       {u.error && <p className="error" role="alert">The last analysis failed: {u.error}</p>}
@@ -153,7 +153,7 @@ export function CallSite() {
             {s.unsure && <span className="chip warn">grouping unsure</span>}
           </div>
         </div>
-        <Link className="btn primary" to={`/model-audits?usecase=${encodeURIComponent(s.usecase ?? 'None')}&site=${s.site}`}>Audit models</Link>
+        <Link className="btn primary" to={`/audit/models?usecase=${encodeURIComponent(s.usecase ?? 'None')}&site=${s.site}`}>Audit models</Link>
       </div>
       <div className="kpis">
         <Kpi label="Calls" value={s.calls.toLocaleString('en-US')} note={`last ${s.window_days} days, ${s.first_day} → ${s.last_day}`} />
@@ -193,7 +193,7 @@ export function CallSite() {
           {s.decisions.cache?.action && <p className="muted">{s.decisions.cache.action}</p>}
           {s.decisions.models?.cheapest && <p><b>Cheapest that passes: <span className="mono">{s.decisions.models.cheapest.model}</span></b> at {s.decisions.models.cheapest.cost_vs_original_pct}% cost{s.decisions.models.fastest && <>; fastest that passes: <span className="mono">{s.decisions.models.fastest.model}</span> at {s.decisions.models.fastest.latency_vs_original_pct}% latency</>}.</p>}
           <p><b>Models</b> · {s.decisions.models ? Object.entries(s.decisions.models.candidates).map(([cand, v]) => (
-            <span key={cand} className="row"><span className="mono">{cand}</span> <VerdictChip v={v} />{v.cost_vs_original_pct != null && <span className="muted">{v.cost_vs_original_pct}% cost</span>}<Link className="muted" to={`/model-audits/${v.audit}`}>audit {when(v.at)}</Link>{v.valid === false && <span className="chip warn">stale: expired or an older prompt version</span>}</span>
+            <span key={cand} className="row"><span className="mono">{cand}</span> <VerdictChip v={v} />{v.cost_vs_original_pct != null && <span className="muted">{v.cost_vs_original_pct}% cost</span>}<Link className="muted" to={`/audit/models/${v.audit}`}>audit {when(v.at)}</Link>{v.valid === false && <span className="chip warn">stale: expired or an older prompt version</span>}</span>
           )) : <span className="muted">no model checked for this call-site yet</span>}</p>
           <p><b>Router</b> · <span className="muted">no pin</span></p>
         </div>

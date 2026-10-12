@@ -149,3 +149,9 @@ candidate, valid 30 days and for the prompt version; the cheapest and fastest th
 latency), roll-up on the usecase. Pages: Checks (list, detail with the validation evidence, the one dialog with
 chip multi-selects), `/how` explainer drawn from the engine's settings. Palette: black / white / warm greys / red /
 gold only, no green.
+
+## Names and paths (2026-10-12)
+Model audit (module): a run is a "model audit" (`modules/models/audits.py`, table `model_audits`, column `strategy`,
+ids `aud_`), public and documented at `/api/audit/models`; the UI at `/audit/models`, `/audit/models/:id`,
+`/audit/models/how`. Cache audit: UI `/audit/cache...`, JSON `/api/audit/cache` (not documented yet). A validation is
+the measurement underneath both, still `/api/validations` (public). /openapi.json = validations + model audits.

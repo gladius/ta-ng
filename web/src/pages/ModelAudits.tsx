@@ -33,7 +33,7 @@ export function AuditDialog({ usecase, site, lockScope = false, initialOpen = fa
   const [usecases, setUsecases] = useState<string[]>(usecase !== undefined ? [usecase ?? 'None'] : [])
   const [models, setModels] = useState<string[]>([])
   const [strategy, setStrategy] = useState('cheaper')
-  const strategies = useQuery({ queryKey: ['strategies'], queryFn: () => get<{ strategies: { id: string; does: string }[] }>('/suite/model-audits/strategies'), enabled: open })
+  const strategies = useQuery({ queryKey: ['strategies'], queryFn: () => get<{ strategies: { id: string; does: string }[] }>('/audit/models/strategies'), enabled: open })
   const [advanced, setAdvanced] = useState(false)
   const [samples, setSamples] = useState(12)
   const [budget, setBudget] = useState<number | ''>('')
@@ -44,11 +44,11 @@ export function AuditDialog({ usecase, site, lockScope = false, initialOpen = fa
     queryFn: async () => {
       const n = Math.max(1, models.length + (auto ? 1 : 0))
       const scopes: (string | null)[] = site ? [null] : usecases
-      const sums = await Promise.all(scopes.map((u) => get<{ usd: number }>(`/suite/model-audits/estimate?${new URLSearchParams({ ...(u != null && { usecase: u }), ...(site && { site }), samples: String(samples), candidates: String(n) })}`)))
+      const sums = await Promise.all(scopes.map((u) => get<{ usd: number }>(`/audit/models/estimate?${new URLSearchParams({ ...(u != null && { usecase: u }), ...(site && { site }), samples: String(samples), candidates: String(n) })}`)))
       return { usd: sums.reduce((a, b) => a + b.usd, 0) }
     } })
   const start = useMutation({
-    mutationFn: () => get<{ audits: string[] }>('/suite/model-audits', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    mutationFn: () => get<{ audits: string[] }>('/audit/models', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ usecases: site ? [] : usecases, site, strategy, models, samples, ...(budget !== '' && { max_budget_usd: budget }) }) }),
     onSuccess: (r) => { setOpen(false); onStarted?.(r.audits) },
   })
@@ -75,7 +75,7 @@ export function AuditDialog({ usecase, site, lockScope = false, initialOpen = fa
           value={{ value: strategy, label: STRATEGY_NAME[strategy] ?? strategy }}
           onChange={(v) => v && setStrategy(v.value)}
           formatOptionLabel={(o: { label: string; hint?: string }, m) => m.context === 'menu' ? <span>{o.label} <span className="muted">· {o.hint}</span></span> : o.label} />
-        <span className="muted">{strategies.data?.strategies.find((x) => x.id === strategy)?.does} · <Link to="/model-audits/how">how an audit works</Link></span>
+        <span className="muted">{strategies.data?.strategies.find((x) => x.id === strategy)?.does} · <Link to="/audit/models/how">how an audit works</Link></span>
       </label>
       <label>{strategy === 'manual' || strategy === 'release' ? 'Models' : 'Models to add'}
         <Select isMulti classNamePrefix="rs" placeholder={strategy === 'manual' || strategy === 'release' ? 'Choose models… (type to search)' : 'Optional: more models to try alongside the strategy\'s picks'} closeMenuOnSelect={false}
@@ -101,12 +101,12 @@ export function AuditDialog({ usecase, site, lockScope = false, initialOpen = fa
 export function ModelAudits() {
   const [params, setParams] = useSearchParams()
   const preset = params.get('usecase') || params.get('site') ? { usecase: params.get('usecase') ?? undefined, site: params.get('site') ?? undefined } : null
-  const q = useQuery({ queryKey: ['model-audits'], queryFn: () => get<Audit[]>('/suite/model-audits'),
+  const q = useQuery({ queryKey: ['model-audits'], queryFn: () => get<Audit[]>('/audit/models'),
     refetchInterval: (query) => (query.state.data?.some((c) => ['sampling', 'queued', 'running'].includes(c.status)) ? 5000 : false) })
   const crumbs = [{ label: 'Model audit' }, { label: 'Model audits' }]
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>Model audits</h1><span className="muted">which models hold on a usecase's call-sites, and which is cheapest and fastest by measured cost? Started here, by the API, or by the router; each audit runs a validation and writes its findings on the call-sites. <Link to="/model-audits/how">How an audit works</Link>.</span></div>{!preset && <AuditDialog onStarted={() => q.refetch()} />}</div>
+      <div className="head"><div><h1>Model audits</h1><span className="muted">which models hold on a usecase's call-sites, and which is cheapest and fastest by measured cost? Started here, by the API, or by the router; each audit runs a validation and writes its findings on the call-sites. <Link to="/audit/models/how">How an audit works</Link>.</span></div>{!preset && <AuditDialog onStarted={() => q.refetch()} />}</div>
       {preset && <AuditDialog key={preset.usecase + (preset.site ?? '')} usecase={preset.usecase} site={preset.site} initialOpen onStarted={() => { setParams({}); q.refetch() }} />}
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No model audits yet: press "New model audit…", or "Audit models" on a usecase.</p> : (
         <section className="panel">
@@ -117,7 +117,7 @@ export function ModelAudits() {
                 const vs = c.summary ? Object.values(c.summary).flatMap((by) => Object.values(by)) : []
                 return (
                   <tr key={c.id}>
-                    <td className="mono"><Link to={`/model-audits/${c.id}`}>{c.id}</Link><div className="muted">{c.trigger}</div></td>
+                    <td className="mono"><Link to={`/audit/models/${c.id}`}>{c.id}</Link><div className="muted">{c.trigger}</div></td>
                     <td><Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}`}>{usecaseName(c.usecase)}</Link>{c.site && <div className="muted">one call-site</div>}</td>
                     <td>{STRATEGY_NAME[c.strategy] ?? OLD_STRATEGY[c.strategy] ?? c.strategy}{c.candidates.length > 0 && <div className="mono muted">{c.candidates.join(', ')}</div>}</td>
                     <td><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.error && <div className="muted">{c.error.slice(0, 80)}</div>}</td>
@@ -140,13 +140,13 @@ export function ModelAudits() {
 export function ModelAuditDetail() {
   const { auditId = '' } = useParams()
   const qc = useQueryClient()
-  const q = useQuery({ queryKey: ['model-audits', auditId], queryFn: () => get<AuditPage>(`/suite/model-audits/${auditId}`),
+  const q = useQuery({ queryKey: ['model-audits', auditId], queryFn: () => get<AuditPage>(`/audit/models/${auditId}`),
     refetchInterval: (query) => (['sampling', 'queued', 'running'].includes(query.state.data?.status ?? '') ? 5000 : false) })
   const jobId = q.data?.job?.id
   const job = useQuery({ queryKey: ['job', jobId], queryFn: () => get<JobStatus>(`/validations/${jobId}`), enabled: !!jobId,
     refetchInterval: (query) => (query.state.data && ['queued', 'running'].includes(query.state.data.status) ? 5000 : false) })
   const results = useQuery({ queryKey: ['results', jobId, 'audit', job.data?.items_done], queryFn: () => get<ResultsPage>(`/validations/${jobId}/results?per_page=200`), enabled: !!jobId })
-  const crumbs = [{ label: 'Model audit' }, { label: 'Model audits', to: '/model-audits' }, { label: auditId }]
+  const crumbs = [{ label: 'Model audit' }, { label: 'Model audits', to: '/audit/models' }, { label: auditId }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const c = q.data

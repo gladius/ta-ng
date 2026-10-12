@@ -47,12 +47,12 @@ export default function Shell() {
         </div>
         <div className="group">
           <span className="group-name">Model audit</span>
-          <Entry icon={TrendingDown} label="Model audits" to="/model-audits" />
+          <Entry icon={TrendingDown} label="Model audits" to="/audit/models" />
           <Entry icon={ShieldCheck} label="Validations" to="/validations" />
         </div>
         <div className="group">
           <span className="group-name">Cache</span>
-          <Entry icon={Database} label="Cache audit" to="/cache" />
+          <Entry icon={Database} label="Cache audit" to="/audit/cache" />
         </div>
         <div className="group">
           <span className="group-name">Router</span>

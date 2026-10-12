@@ -19,15 +19,15 @@ export default function App() {
         <Route path="validations" element={<Batches />} />
         <Route path="validations/:jobId" element={<Batch />} />
         <Route path="validations/:jobId/requests/*" element={<Review />} />
-        <Route path="model-audits" element={<ModelAudits />} />
-        <Route path="model-audits/how" element={<How />} />
-        <Route path="model-audits/:auditId" element={<ModelAuditDetail />} />
+        <Route path="audit/models" element={<ModelAudits />} />
+        <Route path="audit/models/how" element={<How />} />
+        <Route path="audit/models/:auditId" element={<ModelAuditDetail />} />
         <Route path="usecases" element={<CallSiteUsecases />} />
         <Route path="usecases/:usecase" element={<CallSiteUsecase />} />
         <Route path="usecases/:usecase/callsites/:site" element={<CallSite />} />
-        <Route path="cache" element={<CacheOverview />} />
-        <Route path="cache/usecases/:usecase" element={<CacheUsecase />} />
-        <Route path="cache/sites/:site" element={<CacheSite />} />
+        <Route path="audit/cache" element={<CacheOverview />} />
+        <Route path="audit/cache/usecases/:usecase" element={<CacheUsecase />} />
+        <Route path="audit/cache/sites/:site" element={<CacheSite />} />
         <Route path="models" element={<Models />} />
         <Route path="models/migrations/:provider" element={<Migrations />} />
         <Route path="*" element={<Page crumbs={[]}><p className="empty">No such page.</p></Page>} />

@@ -523,7 +523,7 @@ def test_a_new_optional_column_is_added_to_an_existing_table():
 
 
 def test_the_api_reference_matches_what_the_api_returns(client, monkeypatch):
-    """/openapi.json documents the /api calls only, with the key as their auth, and every documented response model
+    """/openapi.json documents the public /api calls only (validations and model audits), with the key as their auth, and every documented response model
     takes a real response (the real engine, fake model calls) with no field missing or undocumented."""
     from app.web import validations as v
     from validation import engine
@@ -552,7 +552,9 @@ def test_the_api_reference_matches_what_the_api_returns(client, monkeypatch):
 
     spec = client.get("/openapi.json").json()
     assert set(spec["paths"]) == {"/api/validations", "/api/validations/{job_id}", "/api/validations/{job_id}/resume",
-                                  "/api/validations/{job_id}/results", "/api/validations/{job_id}/results/{request_id}"}
+                                  "/api/validations/{job_id}/results", "/api/validations/{job_id}/results/{request_id}",
+                                  "/api/audit/models", "/api/audit/models/{audit_id}", "/api/audit/models/strategies",
+                                  "/api/audit/models/estimate"}
     assert spec["components"]["securitySchemes"]["APIKeyHeader"] == {
         "type": "apiKey", "in": "header", "name": "X-API-Key", "description": "The server's VALIDATION_API_KEY"}
     assert spec["paths"]["/api/validations/{job_id}"]["get"]["responses"]["200"]["content"]["application/json"][

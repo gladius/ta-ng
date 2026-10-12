@@ -1,4 +1,5 @@
-"""Model audits: one way to start them (usecases or a call-site, the models to try, Auto), list them, follow one."""
+"""Model audits, part of the documented API: start one (usecases or a call-site, a strategy, models), list them,
+follow one. The UI, the router and release pipelines all use these routes."""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,12 +9,12 @@ from app.web.validations import require_key
 from core.identity import store
 from modules.models import audits
 
-api = APIRouter(prefix="/api/suite/model-audits", dependencies=[Depends(require_key)], include_in_schema=False)
+api = APIRouter(prefix="/api/audit/models", dependencies=[Depends(require_key)], tags=["model audits"])
 
 
 class AuditIn(BaseModel):
     """Scope: `usecases` (one check each), or one `site`. Strategy: how candidates are chosen per call-site (see
-    GET /api/suite/model-audits/strategies); `models` are added to the strategy's picks (required for release and manual)."""
+    GET /api/audit/models/strategies); `models` are added to the strategy's picks (required for release and manual)."""
     usecases: list[str] = Field(default_factory=list)       # "None" names the untagged usecase
     site: Optional[str] = None
     strategy: str = "cheaper"
@@ -29,7 +30,7 @@ def _uc(u):
     return None if u in (None, "None") else u
 
 
-@api.get("/strategies")
+@api.get("/strategies", summary="The strategies and the engine's settings")
 def strategies():
     """The strategies and the engine's settings, for the dialog and the explainer."""
     from app.services.downgrade_refset import spec as app_spec
@@ -40,12 +41,12 @@ def strategies():
             "samples": audits.DEFAULT_SAMPLES, "valid_days": audits.VALID_DAYS}
 
 
-@api.get("/estimate")
+@api.get("/estimate", summary="A rough cost before starting")
 def estimate(usecase: Optional[str] = None, site: Optional[str] = None, samples: int = audits.DEFAULT_SAMPLES, candidates: int = 1):
     return {"usd": audits.estimate(_uc(usecase), site, samples, max(1, candidates))}
 
 
-@api.post("", status_code=202)
+@api.post("", status_code=202, summary="Start model audits (one per usecase, or one call-site)")
 def start(body: AuditIn):
     strategy = "cheaper" if body.auto and body.strategy == "manual" and not body.models else body.strategy
     if strategy not in audits.STRATEGIES:
@@ -73,12 +74,12 @@ def start(body: AuditIn):
     return {"audits": started}
 
 
-@api.get("")
+@api.get("", summary="Recent model audits")
 def listing(usecase: Optional[str] = None, site: Optional[str] = None, limit: int = 50):
     return [audits.refresh_status(c) for c in audits.recent(min(200, limit), _uc(usecase) if usecase else None, site)]
 
 
-@api.get("/{audit_id}")
+@api.get("/{audit_id}", summary="One model audit, with its verdicts per call-site")
 def one(audit_id: str):
     c = audits.get(audit_id)
     if not c:

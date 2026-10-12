@@ -23,7 +23,7 @@ function Step({ n, title, children, wide = false }: { n: number; title: string; 
 /** How a model audit works, drawn from the engine's real settings and the chosen strategy. */
 export default function How({ strategy: initial = 'cheaper', spec: given, samples: givenSamples, embedded = false }: { strategy?: string; spec?: Strategies['spec']; samples?: number; embedded?: boolean }) {
   const [strategy, setStrategy] = useState(initial)
-  const q = useQuery({ queryKey: ['strategies'], queryFn: () => get<Strategies>('/suite/model-audits/strategies') })
+  const q = useQuery({ queryKey: ['strategies'], queryFn: () => get<Strategies>('/audit/models/strategies') })
   if (q.isPending) return embedded ? <Loading /> : <Page crumbs={[{ label: 'Model audit' }, { label: 'How a model audit works' }]}><Loading /></Page>
   if (q.isError) return embedded ? <Failed error={q.error} /> : <Page crumbs={[{ label: 'Model audit' }, { label: 'How a model audit works' }]}><Failed error={q.error} /></Page>
   const s = given ?? q.data.spec
@@ -49,8 +49,8 @@ export default function How({ strategy: initial = 'cheaper', spec: given, sample
         <Step n={7} title="Verdict per request">A candidate passes when its answers fit the original's range at least as often as the original agrees with itself, minus a margin of {Math.round(100 * s.margin)} points. Cost and latency are measured on the same calls.</Step>
         <Step n={8} title="Verdict per call-site, written on the record">Pass rate, fit, cost and latency against the original, per candidate; then the cheapest and the fastest that pass, by measured numbers. Valid for {q.data.valid_days} days and for this prompt version; after that, or after a prompt change, it is re-earned. Every audit keeps its history and links to the evidence (its validation).</Step>
       </div>
-      {!embedded && <p className="muted">Start one from <Link to="/model-audits">Model audits</Link> (a usecase or call-site page links there with it selected), or with <span className="mono">POST /api/suite/model-audits</span>.</p>}
+      {!embedded && <p className="muted">Start one from <Link to="/audit/models">Model audits</Link> (a usecase or call-site page links there with it selected), or with <span className="mono">POST /api/audit/models</span>.</p>}
     </>
   )
-  return embedded ? <div className="flow-wrap">{body}</div> : <Page crumbs={[{ label: 'Model audit' }, { label: 'Model audits', to: '/model-audits' }, { label: 'How it works' }]}>{body}</Page>
+  return embedded ? <div className="flow-wrap">{body}</div> : <Page crumbs={[{ label: 'Model audit' }, { label: 'Model audits', to: '/audit/models' }, { label: 'How it works' }]}>{body}</Page>
 }
