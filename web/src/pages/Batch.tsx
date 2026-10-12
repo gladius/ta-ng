@@ -60,7 +60,7 @@ export default function Batch() {
     })),
   })
 
-  const crumbs = [{ label: 'Models' }, { label: 'Validations', to: '/validations' }, { label: jobId }]
+  const crumbs = [{ label: 'Model audit' }, { label: 'Validations', to: '/validations' }, { label: jobId }]
   if (job.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (job.isError) return <Page crumbs={crumbs}><Failed error={job.error} /></Page>
   const j = job.data

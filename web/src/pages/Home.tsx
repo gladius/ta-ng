@@ -22,12 +22,12 @@ export default function Home() {
           ))}
         </section>
         <section className="panel tile">
-          <div className="tile-head"><h2>Model checks</h2><Link to="/checks">All checks</Link></div>
+          <div className="tile-head"><h2>Model audit</h2><Link to="/model-audits">All audits</Link></div>
           <p className="muted">Would a cheaper, open-weight or newly released model hold on a usecase's call-sites? Sampled from the log, re-run and judged with evidence.</p>
           <div className="row"><Link className="btn primary" to="/usecases">Pick a usecase</Link><Link className="btn" to="/models">Model catalog</Link></div>
         </section>
         <section className="panel tile">
-          <div className="tile-head"><h2>Cache</h2><Link to="/cache">Cache analysis</Link></div>
+          <div className="tile-head"><h2>Cache audit</h2><Link to="/cache">Cache audit</Link></div>
           <p className="muted">What caching saves today per usecase and call-site, why it isn't more, and what each fix is worth.</p>
         </section>
       </div>

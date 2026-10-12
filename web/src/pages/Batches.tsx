@@ -15,7 +15,7 @@ export default function Batches() {
     refetchInterval: (query) => (query.state.data?.some((j) => j.status === 'queued' || j.status === 'running') ? 5000 : false),
   })
   return (
-    <Page crumbs={[{ label: 'Models' }, { label: 'Validations' }]}>
+    <Page crumbs={[{ label: 'Model audit' }, { label: 'Validations' }]}>
       <div className="head">
         <h1>Validations</h1>
         <a className="btn" href="/docs" target="_blank" rel="noopener">API reference ↗</a>

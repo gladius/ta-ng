@@ -88,12 +88,12 @@ export function CacheOverview() {
   const q = useQuery({ queryKey: ['cache', 'overview'], queryFn: () => get<Overview>('/suite/cache/overview'),
     refetchInterval: (query) => (query.state.data?.status.running ? 5000 : false) })
   const refresh = useMutation({ mutationFn: () => post<unknown>('/suite/cache/refresh'), onSuccess: () => qc.invalidateQueries({ queryKey: ['cache'] }) })
-  const crumbs = [{ label: 'Cache' }, { label: 'Cache analysis' }]
+  const crumbs = [{ label: 'Cache' }, { label: 'Cache audit' }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) {
     return (
       <Page crumbs={crumbs}>
-        <div className="head"><h1>Cache analysis</h1><button className="btn primary" onClick={() => refresh.mutate()} disabled={refresh.isPending}>Analyse all usecases</button></div>
+        <div className="head"><h1>Cache audit</h1><button className="btn primary" onClick={() => refresh.mutate()} disabled={refresh.isPending}>Analyse all usecases</button></div>
         <Failed error={q.error} />
       </Page>
     )
@@ -106,7 +106,7 @@ export function CacheOverview() {
   return (
     <Page crumbs={crumbs}>
       <div className="head">
-        <div><h1>Cache analysis</h1><Built at={o.built_at} /></div>
+        <div><h1>Cache audit</h1><Built at={o.built_at} /></div>
         <div className="row"><WindowPick n={n} set={setN} max={o.window} /><button className="btn" onClick={() => refresh.mutate()} disabled={refresh.isPending || o.status.running} title="Analyse every usecase of the window; single usecases are analysed when opened">{o.status.running ? 'Analysing all…' : 'Analyse all usecases'}</button></div>
       </div>
       {o.status.error && <p className="error" role="alert">The last refresh failed: {o.status.error}</p>}
@@ -191,7 +191,7 @@ export function CacheUsecase() {
   const { usecase = '' } = useParams()
   const [n, setN] = useState<number>(30)
   const q = useQuery({ queryKey: ['cache', 'usecase', usecase], queryFn: () => get<UsecasePage>(`/suite/cache/usecases/${encodeURIComponent(usecase)}`) })
-  const crumbs = [{ label: 'Cache' }, { label: 'Cache analysis', to: '/cache' }, { label: usecaseName(usecase) }]
+  const crumbs = [{ label: 'Cache' }, { label: 'Cache audit', to: '/cache' }, { label: usecaseName(usecase) }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const u = q.data
@@ -284,7 +284,7 @@ export function CacheSite() {
   const { site = '' } = useParams()
   const [n, setN] = useState<number>(30)
   const q = useQuery({ queryKey: ['cache', 'site', site], queryFn: () => get<SitePage>(`/suite/cache/sites/${site}`) })
-  const crumbs = [{ label: 'Cache' }, { label: 'Cache analysis', to: '/cache' }]
+  const crumbs = [{ label: 'Cache' }, { label: 'Cache audit', to: '/cache' }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const s = q.data

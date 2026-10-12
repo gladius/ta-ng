@@ -46,13 +46,13 @@ export default function Shell() {
           <Entry icon={Fingerprint} label="Usecases" to="/usecases" />
         </div>
         <div className="group">
-          <span className="group-name">Models</span>
-          <Entry icon={TrendingDown} label="Checks" to="/checks" />
+          <span className="group-name">Model audit</span>
+          <Entry icon={TrendingDown} label="Model audits" to="/model-audits" />
           <Entry icon={ShieldCheck} label="Validations" to="/validations" />
         </div>
         <div className="group">
           <span className="group-name">Cache</span>
-          <Entry icon={Database} label="Cache analysis" to="/cache" />
+          <Entry icon={Database} label="Cache audit" to="/cache" />
         </div>
         <div className="group">
           <span className="group-name">Router</span>

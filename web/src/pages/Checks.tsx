@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import Select from 'react-select'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { get, type JobStatus, type ResultsPage } from '../api'
 import { usecaseName } from '../cache'
 import { AnswersBar, count, Failed, Legend, Loading, money, ms, Page, pct, Squares, verdictWord, VsBar, when } from '../ui'
@@ -28,8 +28,8 @@ type UsecaseOpt = { usecase: string | null; sites: number | null; analysed_at: s
 
 /** The one way to start a check: which usecases (or the one call-site this page is on), which models (any the
     gateway serves, several at once) and/or Auto; samples and budget under "advanced". */
-export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { usecase?: string | null; site?: string; lockScope?: boolean; onStarted?: (ids: string[]) => void }) {
-  const [open, setOpen] = useState(false)
+export function CheckDialog({ usecase, site, lockScope = false, initialOpen = false, onStarted }: { usecase?: string | null; site?: string; lockScope?: boolean; initialOpen?: boolean; onStarted?: (ids: string[]) => void }) {
+  const [open, setOpen] = useState(initialOpen)
   const [usecases, setUsecases] = useState<string[]>(usecase !== undefined ? [usecase ?? 'None'] : [])
   const [models, setModels] = useState<string[]>([])
   const [strategy, setStrategy] = useState('cheaper')
@@ -52,11 +52,11 @@ export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { u
       body: JSON.stringify({ usecases: site ? [] : usecases, site, strategy, models, samples, ...(budget !== '' && { max_budget_usd: budget }) }) }),
     onSuccess: (r) => { setOpen(false); onStarted?.(r.checks) },
   })
-  if (!open) return <button className="btn primary" onClick={() => setOpen(true)}>Check models…</button>
+  if (!open) return <button className="btn primary" onClick={() => setOpen(true)}>New model audit…</button>
   const available = (served.data?.models ?? []).filter((m) => m.available)
   return (
     <div className="panel pad dialog">
-      <h2>Check models {site ? 'on this call-site' : lockScope ? 'on this usecase' : ''}</h2>
+      <h2>New model audit {site ? 'of one call-site' : lockScope ? 'of this usecase' : ''}</h2>
       <p className="muted">Each call-site's requests are sampled by size; the current model and every candidate answer them again; a judge compares the answers with evidence. You get, per call-site: which candidates drift, and the cheapest and fastest that don't, by measured cost and latency. Nothing in production changes.</p>
       {!site && !lockScope && (
         <label>Usecases
@@ -75,7 +75,7 @@ export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { u
           value={{ value: strategy, label: STRATEGY_NAME[strategy] ?? strategy }}
           onChange={(v) => v && setStrategy(v.value)}
           formatOptionLabel={(o: { label: string; hint?: string }, m) => m.context === 'menu' ? <span>{o.label} <span className="muted">· {o.hint}</span></span> : o.label} />
-        <span className="muted">{strategies.data?.strategies.find((x) => x.id === strategy)?.does} · <Link to="/how">how a check works</Link></span>
+        <span className="muted">{strategies.data?.strategies.find((x) => x.id === strategy)?.does} · <Link to="/model-audits/how">how an audit works</Link></span>
       </label>
       <label>{strategy === 'manual' || strategy === 'release' ? 'Models' : 'Models to add'}
         <Select isMulti classNamePrefix="rs" placeholder={strategy === 'manual' || strategy === 'release' ? 'Choose models… (type to search)' : 'Optional: more models to try alongside the strategy\'s picks'} closeMenuOnSelect={false}
@@ -90,7 +90,7 @@ export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { u
           <label>Budget per check, $ (optional) <input className="input" type="number" min={1} step={1} value={budget} onChange={(e) => setBudget(e.target.value === '' ? '' : Number(e.target.value))} /></label>
         </div>
       )}
-      <p className="muted">Estimated cost: {est.data ? money(est.data.usd, 2) : '…'} · {site ? '1 check' : `${usecases.length} check${usecases.length === 1 ? '' : 's'}, one per usecase`}</p>
+      <p className="muted">Estimated cost: {est.data ? money(est.data.usd, 2) : '…'} · {site ? '1 audit' : `${usecases.length} audit${usecases.length === 1 ? '' : 's'}, one per usecase`}</p>
       {start.isError && <p className="error" role="alert">{start.error instanceof Error ? start.error.message : String(start.error)}</p>}
       <div className="row"><button className="btn primary" disabled={start.isPending || (!site && !usecases.length) || ((strategy === 'manual' || strategy === 'release') && !models.length)} onClick={() => start.mutate()}>Start</button><button className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
     </div>
@@ -99,22 +99,25 @@ export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { u
 
 /** Every check, newest first. */
 export function Checks() {
+  const [params, setParams] = useSearchParams()
+  const preset = params.get('usecase') || params.get('site') ? { usecase: params.get('usecase') ?? undefined, site: params.get('site') ?? undefined } : null
   const q = useQuery({ queryKey: ['checks'], queryFn: () => get<Check[]>('/suite/checks'),
     refetchInterval: (query) => (query.state.data?.some((c) => ['sampling', 'queued', 'running'].includes(c.status)) ? 5000 : false) })
-  const crumbs = [{ label: 'Models' }, { label: 'Checks' }]
+  const crumbs = [{ label: 'Model audit' }, { label: 'Model audits' }]
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>Model checks</h1><span className="muted">would a cheaper, open-weight or newly released model hold on a usecase's call-sites? Started from a usecase or call-site page, here for a release, by the API, or by the router. <Link to="/how">How a check works</Link>.</span></div><CheckDialog onStarted={() => q.refetch()} /></div>
-      {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No checks yet. Open a usecase and press "Check models…".</p> : (
+      <div className="head"><div><h1>Model audits</h1><span className="muted">which models hold on a usecase's call-sites, and which is cheapest and fastest by measured cost? Started here, by the API, or by the router; each audit runs a validation and writes its findings on the call-sites. <Link to="/model-audits/how">How an audit works</Link>.</span></div>{!preset && <CheckDialog onStarted={() => q.refetch()} />}</div>
+      {preset && <CheckDialog key={preset.usecase + (preset.site ?? '')} usecase={preset.usecase} site={preset.site} initialOpen onStarted={() => { setParams({}); q.refetch() }} />}
+      {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No model audits yet: press "New model audit…", or "Audit models" on a usecase.</p> : (
         <section className="panel">
           <table className="grid">
-            <thead><tr><th>Check</th><th>Scope</th><th>Candidates</th><th>Status</th><th>Result</th><th>Started</th></tr></thead>
+            <thead><tr><th>Audit</th><th>Scope</th><th>Strategy</th><th>Status</th><th>Result</th><th>Started</th></tr></thead>
             <tbody>
               {q.data.map((c) => {
                 const vs = c.summary ? Object.values(c.summary).flatMap((by) => Object.values(by)) : []
                 return (
                   <tr key={c.id}>
-                    <td className="mono"><Link to={`/checks/${c.id}`}>{c.id}</Link><div className="muted">{c.trigger}</div></td>
+                    <td className="mono"><Link to={`/model-audits/${c.id}`}>{c.id}</Link><div className="muted">{c.trigger}</div></td>
                     <td><Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}`}>{usecaseName(c.usecase)}</Link>{c.site && <div className="muted">one call-site</div>}</td>
                     <td>{STRATEGY_NAME[c.preset] ?? PRESET[c.preset] ?? c.preset}{c.candidates.length > 0 && <div className="mono muted">{c.candidates.join(', ')}</div>}</td>
                     <td><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.error && <div className="muted">{c.error.slice(0, 80)}</div>}</td>
@@ -143,7 +146,7 @@ export function CheckDetail() {
   const job = useQuery({ queryKey: ['job', jobId], queryFn: () => get<JobStatus>(`/validations/${jobId}`), enabled: !!jobId,
     refetchInterval: (query) => (query.state.data && ['queued', 'running'].includes(query.state.data.status) ? 5000 : false) })
   const results = useQuery({ queryKey: ['results', jobId, 'check', job.data?.items_done], queryFn: () => get<ResultsPage>(`/validations/${jobId}/results?per_page=200`), enabled: !!jobId })
-  const crumbs = [{ label: 'Models' }, { label: 'Checks', to: '/checks' }, { label: checkId }]
+  const crumbs = [{ label: 'Model audit' }, { label: 'Model audits', to: '/model-audits' }, { label: checkId }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const c = q.data
@@ -153,8 +156,8 @@ export function CheckDetail() {
   return (
     <Page crumbs={crumbs}>
       <div className="head">
-        <div><h1>Check {c.id}</h1><span className="muted">{usecaseName(c.usecase)} · {STRATEGY_NAME[c.preset] ?? PRESET[c.preset] ?? c.preset}{c.candidates.length > 0 && ` (${c.candidates.join(', ')})`} · started {when(c.created_at)} by {c.trigger}</span></div>
-        <div className="row"><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.job && <Link className="btn" to={`/validations/${c.job.id}`}>Validation batch {c.job.id}</Link>}</div>
+        <div><h1>Model audit {c.id}</h1><span className="muted">{usecaseName(c.usecase)} · {STRATEGY_NAME[c.preset] ?? PRESET[c.preset] ?? c.preset}{c.candidates.length > 0 && ` (${c.candidates.join(', ')})`} · started {when(c.created_at)} by {c.trigger}</span></div>
+        <div className="row"><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.job && <Link className="btn" to={`/validations/${c.job.id}`}>Its validation {c.job.id}</Link>}</div>
       </div>
       {c.error && <p className="error" role="alert">{c.error}</p>}
       {j && spec && (
