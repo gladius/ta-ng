@@ -388,3 +388,11 @@ tr.dim { opacity: 0.45; }
 .rs__group-heading { font-size: 11px !important; color: var(--ink-2) !important; }
 .rs__placeholder { color: var(--ink-2) !important; }
 .dialog label .rs__control { min-width: 420px; }
+
+/* the explainer: a flow of numbered steps */
+.flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.step { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start; position: relative; }
+.step.wide { grid-column: 1 / -1; border-color: var(--gold); }
+.step-n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: #fff; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+.step p { margin: 4px 0 0; font-size: 13px; }
+.flow-wrap { display: flex; flex-direction: column; gap: 12px; }

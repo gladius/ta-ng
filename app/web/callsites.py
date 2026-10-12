@@ -58,6 +58,9 @@ def usecase(usecase: str):
         refresh.start(uc or "")
         u = store.get_usecase(uc)
     sites = store.by_usecase(uc)
+    from modules.models import checks
+    for s in sites:
+        s["decisions"] = {**s["decisions"], "models": checks.with_validity(s["decisions"].get("models"), s)}
     return {**u, "sites": [{**_with_profile(s), "cache": _cache_decision(s["site"])} for s in sites],
             "analysing": bool(u["analysing"]) or (uc or "") in refresh.running()}
 
@@ -75,5 +78,6 @@ def one(site: str):
     s = store.get(site)
     if not s:
         raise HTTPException(404, "unknown call-site")
-    return {**_with_profile(s), "decisions": {"cache": _cache_decision(site), "models": s["decisions"].get("models"),
+    from modules.models import checks
+    return {**_with_profile(s), "decisions": {"cache": _cache_decision(site), "models": checks.with_validity(s["decisions"].get("models"), s),
                                               "router": s["decisions"].get("router")}}

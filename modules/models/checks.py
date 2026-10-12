@@ -25,9 +25,19 @@ from core.identity import store
 from core.ledger import build
 from validation import jobs
 
-PRESETS = ("cheaper", "open_weight", "release", "custom", "auto")
-TRIGGERS = ("user", "release", "router", "api")
+STRATEGIES = {
+    "cheaper": "per call-site, the catalog's next cheaper tier and the open-weight swap of its current model",
+    "better_value": "per call-site, one tier up and the same-tier model of another provider: a stronger model can be "
+                    "cheaper per call when it answers tightly",
+    "release": "the named models, against every call-site in scope",
+    "revalidate": "the models of each call-site's current verdicts, before they expire",
+    "drift_watch": "each call-site's own current model against itself: has its behaviour moved since the last check",
+    "manual": "exactly the models you name",
+}
+PRESETS = tuple(STRATEGIES) + ("open_weight", "custom", "auto")      # the last three: older rows
+TRIGGERS = ("user", "release", "router", "api", "schedule")
 DEFAULT_SAMPLES = 12
+VALID_DAYS = 30                 # a verdict is re-earned after this, or when the call-site's prompt version changes
 
 checks = Table(
     "checks", db.metadata,
@@ -102,15 +112,38 @@ def sample(usecase, site=None, n=DEFAULT_SAMPLES, days=30):
 
 
 # --------------------------------------------------------------------------------------------------- candidates
+def _tier_rank(m):
+    return catalog._TIER_RANK.get((catalog._ORDER.get(m) or {}).get("tier"), 99)
+
+
 def auto_candidates(model):
-    """What Auto tries for a call-site on `model`: the catalog's next cheaper tier and its open-weight swap. The
-    measurement decides; these are only the seeds. ponytail: add one tier up and the cross-provider peer once the
-    conclusion can rank them by measured cost."""
+    """Strategy "cheaper": the catalog's next cheaper tier and its open-weight swap. Seeds only; the measurement decides."""
     out = []
     for c in (catalog.next_cheaper(model), catalog.open_weight_target(model)):
         if c and c != model and c not in out:
             out.append(c)
     return out
+
+
+def better_value_candidates(model):
+    """Strategy "better value": the nearest tier UP of the same provider (newest there) and the same-tier model of
+    another provider (cheapest input price). A stronger or different model can be cheaper per call than the price
+    list suggests when it answers tightly; only the measured cost tells."""
+    m = catalog.canonical_model(model) or model
+    info = catalog._ORDER.get(m)
+    if not info:
+        return []
+    out = []
+    cur = _tier_rank(m)
+    up = [s for s in info["siblings"] if _tier_rank(s) < cur and catalog.is_callable(s)]
+    if up:
+        nearest = max(_tier_rank(s) for s in up)
+        out.append(max((s for s in up if _tier_rank(s) == nearest), key=lambda s: catalog._ORDER[s].get("release") or ""))
+    peers = [s for s in catalog.PRICE if s != m and catalog.provider_of(s) != catalog.provider_of(m) and _tier_rank(s) == cur
+             and catalog.is_callable(s) and not catalog._ORDER.get(s, {}).get("open_weight")]
+    if peers:
+        out.append(min(peers, key=lambda s: catalog.PRICE[s]["input"]))
+    return [c for c in out if c != model]
 
 
 def served(models):
@@ -124,17 +157,21 @@ def served(models):
         return list(models)
 
 
-def candidates_for(model, preset, asked, auto=False):
-    """The candidate models for a call-site sent to `model`: the ones asked for, plus Auto's seeds."""
-    if preset == "cheaper":
-        return served(auto_candidates(model)[:1])
-    if preset == "open_weight":
+def candidates_for(model, strategy, asked, auto=False, rec=None):
+    """The candidate models for a call-site sent to `model`, by strategy, plus any models named on top."""
+    named = [m for m in asked if m and m != model]
+    if strategy in ("cheaper", "auto") or auto:
+        named += [m for m in auto_candidates(model) if m not in named]
+    if strategy == "open_weight":
         c = catalog.open_weight_target(model)
-        return served([c] if c else [])
-    out = [m for m in asked if m and m != model]
-    if auto or preset == "auto":
-        out += [m for m in auto_candidates(model) if m not in out]
-    return served(out)
+        named += [c] if c and c not in named else []
+    if strategy == "better_value":
+        named += [m for m in better_value_candidates(model) if m not in named]
+    if strategy == "revalidate" and rec:
+        named += [m for m in ((rec["decisions"].get("models") or {}).get("candidates") or {}) if m not in named and m != model]
+    if strategy == "drift_watch":
+        return served([model])                       # the model against itself, labelled "<model> now"
+    return served(named)
 
 
 # -------------------------------------------------------------------------------------------------------- checks
@@ -223,9 +260,9 @@ def _fill(check_id, usecase, site=None, preset="cheaper", asked=(), n=DEFAULT_SA
     from connectors.bigquery.source import to_trace
     try:
         if preset not in PRESETS:
-            raise ValueError("preset must be one of %s" % ", ".join(PRESETS))
-        if preset in ("release", "custom") and not asked and not auto:
-            raise ValueError("%s needs candidate models" % preset)
+            raise ValueError("strategy must be one of %s" % ", ".join(STRATEGIES))
+        if preset in ("release", "manual", "custom") and not asked and not auto:
+            raise ValueError("%s needs model names" % preset)
         samples = sample(usecase, site, n, days)
         if not samples:
             raise ValueError("no requests to sample for this scope")
@@ -237,12 +274,12 @@ def _fill(check_id, usecase, site=None, preset="cheaper", asked=(), n=DEFAULT_SA
                 if s["id"] not in bodies or not bodies[s["id"]][1]:
                     continue
                 req, resp = bodies[s["id"]]
-                cands = candidates_for(req.get("model"), preset, asked, auto)
+                cands = candidates_for(req.get("model"), preset, asked, auto, store.get(st))
                 if not cands:
                     continue
                 trace = to_trace(req, resp, usecase or "log")
                 items.append({"id": s["id"], "request": trace, "model": req.get("model"), "recorded": trace["output"] or None,
-                              "candidates": [{"label": m, "model": m} for m in cands]})
+                              "candidates": [{"label": (m + " now") if preset == "drift_watch" else m, "model": m} for m in cands]})
         if not items:
             raise ValueError("no candidate for these call-sites' models (nothing cheaper / no open-weight swap in the catalog)")
         spec = app_spec()
@@ -310,15 +347,35 @@ def refresh_status(check):
         if not rec:
             continue
         cur = (rec["decisions"].get("models") or {}).get("candidates", {})
+        version = rec["versions"][-1]["version"] if rec["versions"] else None
         for cand, v in by.items():
-            cur[cand] = {**v, "check": check["id"], "at": at.isoformat(timespec="seconds"), "trigger": check["trigger"]}
-        store.set_decision(st, "models", {"candidates": cur, **conclusion(cur)})
+            cur[cand] = {**v, "check": check["id"], "at": at.isoformat(timespec="seconds"), "trigger": check["trigger"],
+                         "valid_until": (at + datetime.timedelta(days=VALID_DAYS)).isoformat(timespec="seconds"),
+                         "site_version": version}
+        store.set_decision(st, "models", {"candidates": cur, **conclusion(current(cur, rec))})
         touched.add(rec["usecase"] or "")
     for uc in touched:
         store.set_usecase_decision(uc, "models", usecase_rollup(uc))
     _set(check["id"], status="done" if job["status"] == "done" else job["status"], summary=json.dumps(verdicts),
          finished_at=at, error=job.get("error"))
     return get(check["id"])
+
+
+def current(cands, rec):
+    """The verdicts still valid for this call-site: not expired, and measured on its current prompt version."""
+    now = _now().isoformat(timespec="seconds")
+    version = rec["versions"][-1]["version"] if rec.get("versions") else None
+    return {m: v for m, v in cands.items()
+            if (v.get("valid_until") or "9999") > now and (v.get("site_version") in (None, version))}
+
+
+def with_validity(models, rec):
+    """A record's models decision with `valid` on each verdict and the conclusion over the valid ones only."""
+    if not models:
+        return None
+    cands = models.get("candidates") or {}
+    cur = current(cands, rec)
+    return {"candidates": {m: {**v, "valid": m in cur} for m, v in cands.items()}, **conclusion(cur)}
 
 
 def conclusion(cands):

@@ -5,6 +5,7 @@ import { Link, useParams } from 'react-router-dom'
 import { get, type JobStatus, type ResultsPage } from '../api'
 import { usecaseName } from '../cache'
 import { AnswersBar, count, Failed, Legend, Loading, money, ms, Page, pct, Squares, verdictWord, VsBar, when } from '../ui'
+import { STRATEGY_NAME } from './How'
 
 export type Verdict = { requests: number; within: number; outside: number; unverified: number; pass_rate: number; cost_vs_original_pct: number | null; latency_vs_original_pct: number | null; fit_rate: number | null; verdict: 'passes' | 'drifts' | 'not verified' }
 export type Check = {
@@ -31,12 +32,14 @@ export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { u
   const [open, setOpen] = useState(false)
   const [usecases, setUsecases] = useState<string[]>(usecase !== undefined ? [usecase ?? 'None'] : [])
   const [models, setModels] = useState<string[]>([])
-  const [auto, setAuto] = useState(true)
+  const [strategy, setStrategy] = useState('cheaper')
+  const strategies = useQuery({ queryKey: ['strategies'], queryFn: () => get<{ strategies: { id: string; does: string }[] }>('/suite/checks/strategies'), enabled: open })
   const [advanced, setAdvanced] = useState(false)
   const [samples, setSamples] = useState(12)
   const [budget, setBudget] = useState<number | ''>('')
   const served = useQuery({ queryKey: ['served-models'], queryFn: () => get<Served>('/suite/models'), enabled: open })
   const opts = useQuery({ queryKey: ['usecase-options'], queryFn: () => get<{ usecases: UsecaseOpt[] }>('/suite/callsites/usecases?per_page=200'), enabled: open && !site && !lockScope })
+  const auto = strategy !== 'manual' && strategy !== 'release'
   const est = useQuery({ queryKey: ['check-estimate', usecases, site, samples, models.length + (auto ? 1 : 0)], enabled: open && (!!site || usecases.length > 0),
     queryFn: async () => {
       const n = Math.max(1, models.length + (auto ? 1 : 0))
@@ -46,7 +49,7 @@ export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { u
     } })
   const start = useMutation({
     mutationFn: () => get<{ checks: string[] }>('/suite/checks', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ usecases: site ? [] : usecases, site, models, auto, samples, ...(budget !== '' && { max_budget_usd: budget }) }) }),
+      body: JSON.stringify({ usecases: site ? [] : usecases, site, strategy, models, samples, ...(budget !== '' && { max_budget_usd: budget }) }) }),
     onSuccess: (r) => { setOpen(false); onStarted?.(r.checks) },
   })
   if (!open) return <button className="btn primary" onClick={() => setOpen(true)}>Check models…</button>
@@ -66,12 +69,19 @@ export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { u
           <span className="row"><button type="button" className="btn small" onClick={() => setUsecases((opts.data?.usecases ?? []).filter((u) => u.analysed_at && u.sites).map((u) => u.usecase ?? 'None'))}>all analysed</button></span>
         </label>
       )}
-      <label>Models to try
-        <Select isMulti classNamePrefix="rs" placeholder="Choose models… (type to search)" closeMenuOnSelect={false}
-          options={[{ label: 'Auto', options: [{ value: '__auto', label: 'Auto: per call-site, the cheaper tier and the open-weight swap of its current model' }] },
-            ...Object.entries(available.reduce<Record<string, { value: string; label: string }[]>>((g, m) => { (g[m.provider] ??= []).push({ value: m.model, label: `${m.model}${m.tier ? ` · ${m.tier}` : ''}${m.open_weight ? ' · open-weight' : ''}` }); return g }, {})).map(([provider, options]) => ({ label: provider, options }))]}
-          value={[...(auto ? [{ value: '__auto', label: 'Auto' }] : []), ...models.map((m) => ({ value: m, label: m }))]}
-          onChange={(v) => { setAuto(v.some((o) => o.value === '__auto')); setModels(v.map((o) => o.value).filter((x) => x !== '__auto')) }} />
+      <label>Strategy
+        <Select classNamePrefix="rs" isSearchable={false}
+          options={(strategies.data?.strategies ?? []).map((x) => ({ value: x.id, label: STRATEGY_NAME[x.id] ?? x.id, hint: x.does }))}
+          value={{ value: strategy, label: STRATEGY_NAME[strategy] ?? strategy }}
+          onChange={(v) => v && setStrategy(v.value)}
+          formatOptionLabel={(o: { label: string; hint?: string }, m) => m.context === 'menu' ? <span>{o.label} <span className="muted">· {o.hint}</span></span> : o.label} />
+        <span className="muted">{strategies.data?.strategies.find((x) => x.id === strategy)?.does} · <Link to="/how">how a check works</Link></span>
+      </label>
+      <label>{strategy === 'manual' || strategy === 'release' ? 'Models' : 'Models to add'}
+        <Select isMulti classNamePrefix="rs" placeholder={strategy === 'manual' || strategy === 'release' ? 'Choose models… (type to search)' : 'Optional: more models to try alongside the strategy\'s picks'} closeMenuOnSelect={false}
+          options={Object.entries(available.reduce<Record<string, { value: string; label: string }[]>>((g, m) => { (g[m.provider] ??= []).push({ value: m.model, label: `${m.model}${m.tier ? ` · ${m.tier}` : ''}${m.open_weight ? ' · open-weight' : ''}` }); return g }, {})).map(([provider, options]) => ({ label: provider, options }))}
+          value={models.map((m) => ({ value: m, label: m }))}
+          onChange={(v) => setModels(v.map((o) => o.value))} />
       </label>
       <button className="btn small" onClick={() => setAdvanced(!advanced)}>{advanced ? 'Hide advanced' : 'Advanced'}</button>
       {advanced && (
@@ -82,7 +92,7 @@ export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { u
       )}
       <p className="muted">Estimated cost: {est.data ? money(est.data.usd, 2) : '…'} · {site ? '1 check' : `${usecases.length} check${usecases.length === 1 ? '' : 's'}, one per usecase`}</p>
       {start.isError && <p className="error" role="alert">{start.error instanceof Error ? start.error.message : String(start.error)}</p>}
-      <div className="row"><button className="btn primary" disabled={start.isPending || (!site && !usecases.length) || (!models.length && !auto)} onClick={() => start.mutate()}>Start</button><button className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
+      <div className="row"><button className="btn primary" disabled={start.isPending || (!site && !usecases.length) || ((strategy === 'manual' || strategy === 'release') && !models.length)} onClick={() => start.mutate()}>Start</button><button className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
     </div>
   )
 }
@@ -94,7 +104,7 @@ export function Checks() {
   const crumbs = [{ label: 'Models' }, { label: 'Checks' }]
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>Model checks</h1><span className="muted">would a cheaper, open-weight or newly released model hold on a usecase's call-sites? Started from a usecase or call-site page, here for a release, by the API, or by the router.</span></div><CheckDialog onStarted={() => q.refetch()} /></div>
+      <div className="head"><div><h1>Model checks</h1><span className="muted">would a cheaper, open-weight or newly released model hold on a usecase's call-sites? Started from a usecase or call-site page, here for a release, by the API, or by the router. <Link to="/how">How a check works</Link>.</span></div><CheckDialog onStarted={() => q.refetch()} /></div>
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No checks yet. Open a usecase and press "Check models…".</p> : (
         <section className="panel">
           <table className="grid">
@@ -106,7 +116,7 @@ export function Checks() {
                   <tr key={c.id}>
                     <td className="mono"><Link to={`/checks/${c.id}`}>{c.id}</Link><div className="muted">{c.trigger}</div></td>
                     <td><Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}`}>{usecaseName(c.usecase)}</Link>{c.site && <div className="muted">one call-site</div>}</td>
-                    <td>{PRESET[c.preset]}{c.candidates.length > 0 && <div className="mono muted">{c.candidates.join(', ')}</div>}</td>
+                    <td>{STRATEGY_NAME[c.preset] ?? PRESET[c.preset] ?? c.preset}{c.candidates.length > 0 && <div className="mono muted">{c.candidates.join(', ')}</div>}</td>
                     <td><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.error && <div className="muted">{c.error.slice(0, 80)}</div>}</td>
                     <td>{vs.length ? `${vs.filter((v) => v.verdict === 'passes').length} of ${vs.length} pass` : <span className="muted">—</span>}</td>
                     <td className="muted nowrap">{when(c.created_at)}</td>
@@ -143,7 +153,7 @@ export function CheckDetail() {
   return (
     <Page crumbs={crumbs}>
       <div className="head">
-        <div><h1>Check {c.id}</h1><span className="muted">{usecaseName(c.usecase)} · {PRESET[c.preset]}{c.candidates.length > 0 && ` (${c.candidates.join(', ')})`} · started {when(c.created_at)} by {c.trigger}</span></div>
+        <div><h1>Check {c.id}</h1><span className="muted">{usecaseName(c.usecase)} · {STRATEGY_NAME[c.preset] ?? PRESET[c.preset] ?? c.preset}{c.candidates.length > 0 && ` (${c.candidates.join(', ')})`} · started {when(c.created_at)} by {c.trigger}</span></div>
         <div className="row"><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.job && <Link className="btn" to={`/validations/${c.job.id}`}>Validation batch {c.job.id}</Link>}</div>
       </div>
       {c.error && <p className="error" role="alert">{c.error}</p>}

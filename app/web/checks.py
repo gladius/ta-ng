@@ -12,12 +12,13 @@ api = APIRouter(prefix="/api/suite/checks", dependencies=[Depends(require_key)],
 
 
 class CheckIn(BaseModel):
-    """Scope: `usecases` (one check each), or one `site`. Candidates: `models` (any served models) and/or `auto`
-    (per call-site, the catalog's cheaper tier and open-weight swap of its current model)."""
+    """Scope: `usecases` (one check each), or one `site`. Strategy: how candidates are chosen per call-site (see
+    GET /api/suite/checks/strategies); `models` are added to the strategy's picks (required for release and manual)."""
     usecases: list[str] = Field(default_factory=list)       # "None" names the untagged usecase
     site: Optional[str] = None
+    strategy: str = "cheaper"
     models: list[str] = Field(default_factory=list)
-    auto: bool = False
+    auto: bool = False                                      # older clients: same as strategy "cheaper"
     samples: int = Field(default=checks.DEFAULT_SAMPLES, ge=1, le=50)
     max_budget_usd: Optional[float] = Field(default=None, gt=0, description="per check; none when left out")
     trigger: str = "user"
@@ -28,6 +29,17 @@ def _uc(u):
     return None if u in (None, "None") else u
 
 
+@api.get("/strategies")
+def strategies():
+    """The strategies and the engine's settings, for the dialog and the explainer."""
+    from app.services.downgrade_refset import spec as app_spec
+    sp = app_spec()
+    return {"strategies": [{"id": k, "does": v} for k, v in checks.STRATEGIES.items()],
+            "spec": {"reference_runs": sp.reference_runs, "first_runs": sp.first_runs, "candidate_runs": sp.candidate_runs,
+                     "votes": sp.votes, "margin": sp.margin, "coherence_floor": sp.coherence_floor, "judge_model": sp.judge_model},
+            "samples": checks.DEFAULT_SAMPLES, "valid_days": checks.VALID_DAYS}
+
+
 @api.get("/estimate")
 def estimate(usecase: Optional[str] = None, site: Optional[str] = None, samples: int = checks.DEFAULT_SAMPLES, candidates: int = 1):
     return {"usd": checks.estimate(_uc(usecase), site, samples, max(1, candidates))}
@@ -35,12 +47,14 @@ def estimate(usecase: Optional[str] = None, site: Optional[str] = None, samples:
 
 @api.post("", status_code=202)
 def start(body: CheckIn):
-    if not body.models and not body.auto:
-        raise HTTPException(422, "name at least one model, or choose Auto")
+    strategy = "cheaper" if body.auto and body.strategy == "manual" and not body.models else body.strategy
+    if strategy not in checks.STRATEGIES:
+        raise HTTPException(422, "strategy must be one of %s" % ", ".join(checks.STRATEGIES))
+    if strategy in ("release", "manual") and not body.models:
+        raise HTTPException(422, "%s needs model names" % strategy)
     if body.trigger not in checks.TRIGGERS:
         raise HTTPException(422, "trigger must be one of %s" % ", ".join(checks.TRIGGERS))
-    preset = "auto" if body.auto and not body.models else "custom"
-    kw = dict(preset=preset, asked=body.models, auto=body.auto, n=body.samples, max_budget_usd=body.max_budget_usd,
+    kw = dict(preset=strategy, asked=body.models, auto=False, n=body.samples, max_budget_usd=body.max_budget_usd,
               trigger=body.trigger, judge_model=body.judge_model)
     if body.site:
         rec = store.get(body.site)

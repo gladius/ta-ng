@@ -23,8 +23,21 @@ def test_pick_with_fewer_rows_than_asked_returns_them_all_once():
     assert checks.pick([], n=8) == []
 
 
-def test_presets_resolve_from_the_catalog_and_custom_skips_the_original():
-    assert checks.candidates_for("gpt-5.4", "custom", ["gpt-5.4", "gpt-5.4-mini"]) == ["gpt-5.4-mini"]
+def test_strategies_resolve_candidates_and_never_the_original_itself():
+    assert checks.candidates_for("gpt-5.4", "manual", ["gpt-5.4", "gpt-5.4-mini"]) == ["gpt-5.4-mini"]
     assert checks.candidates_for("gpt-5.4", "release", ["gpt-5.5"]) == ["gpt-5.5"]
-    cheaper = checks.candidates_for("gpt-5.4", "cheaper", [])
-    assert cheaper == [] or (len(cheaper) == 1 and cheaper[0] != "gpt-5.4")
+    assert "gpt-5.4" not in checks.candidates_for("gpt-5.4", "cheaper", [])
+    assert "gpt-5.4" not in checks.candidates_for("gpt-5.4", "better_value", [])
+    assert checks.candidates_for("gpt-5.4", "drift_watch", []) == ["gpt-5.4"]        # itself, labelled "now"
+    rec = {"decisions": {"models": {"candidates": {"gpt-5.4-mini": {}, "gpt-5.4": {}}}}, "versions": []}
+    assert checks.candidates_for("gpt-5.4", "revalidate", [], rec=rec) == ["gpt-5.4-mini"]
+
+
+def test_verdicts_expire_and_are_tied_to_the_prompt_version():
+    rec = {"versions": [{"version": "v2"}]}
+    cands = {"a": {"valid_until": "2999-01-01T00:00:00", "site_version": "v2", "verdict": "passes", "cost_vs_original_pct": -50, "check": "c1"},
+             "b": {"valid_until": "2000-01-01T00:00:00", "site_version": "v2", "verdict": "passes", "cost_vs_original_pct": -90, "check": "c0"},
+             "c": {"valid_until": "2999-01-01T00:00:00", "site_version": "v1", "verdict": "passes", "cost_vs_original_pct": -95, "check": "c0"}}
+    out = checks.with_validity({"candidates": cands}, rec)
+    assert [m for m, v in out["candidates"].items() if v["valid"]] == ["a"]
+    assert out["cheapest"]["model"] == "a"                     # the expired and the old-version verdicts don't count
