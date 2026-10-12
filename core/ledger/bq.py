@@ -6,27 +6,31 @@ creates nothing in the customer's dataset. A refresh runs one script in a BigQue
     BQ_REQUEST_COLUMN   the request body (messages, tools, model)
     BQ_RESPONSE_COLUMN  the chat completion (model, usage)
     BQ_ID_COLUMN        the call's id
-    BQ_AGENT_COLUMN     the usecase
+    BQ_USECASE_COLUMN   the usecase
     BQ_TIME_COLUMN      the call's timestamp (partition column)
+    BQ_LATENCY_COLUMN   the call's duration in ms
+
+All are required, with no defaults: a guessed column silently reads the wrong data.
 """
 import datetime
 
 import credentials
 from connectors.bigquery.source import _client
 
+SETTINGS = {"table": "BQ_TABLE", "req": "BQ_REQUEST_COLUMN", "resp": "BQ_RESPONSE_COLUMN", "id": "BQ_ID_COLUMN",
+            "usecase": "BQ_USECASE_COLUMN", "time": "BQ_TIME_COLUMN", "latency": "BQ_LATENCY_COLUMN"}
+
+
+def configured():
+    return all(credentials.get_config(k) for k in SETTINGS.values())
+
 
 def cfg():
-    table = credentials.get_config("BQ_TABLE")
-    if not table:
-        raise RuntimeError("BQ_TABLE is not set")
-    project = table.split(".")[0]
-    return {"table": table, "project": project,
-            "req": credentials.get_config("BQ_REQUEST_COLUMN", "request_payload"),
-            "resp": credentials.get_config("BQ_RESPONSE_COLUMN", "response_payload"),
-            "id": credentials.get_config("BQ_ID_COLUMN", "request_id"),
-            "usecase": credentials.get_config("BQ_AGENT_COLUMN", "vegas_usecase_name"),
-            "time": credentials.get_config("BQ_TIME_COLUMN", "created_timestamp_utc"),
-            "latency": credentials.get_config("BQ_LATENCY_COLUMN", "duration_ms")}      # ms per call, when the log has it
+    c = {k: credentials.get_config(v) for k, v in SETTINGS.items()}
+    missing = [SETTINGS[k] for k, v in c.items() if not v]
+    if missing:
+        raise RuntimeError("BigQuery settings missing: " + ", ".join(missing))
+    return {**c, "project": c["table"].split(".")[0]}
 
 
 _clients = {}

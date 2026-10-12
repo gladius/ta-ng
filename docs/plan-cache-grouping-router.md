@@ -102,7 +102,7 @@ Step 2 DONE on the replica: core/ledger/gaps.py, modules/cache/{rules,ttl,diagno
 app/web/cache.py, web/src/pages/Cache.tsx (org / usecase / call-site pages). Now run it on the real log:
 1. Deploy branch `cache-module` to the production environment with `.env`:
    BQ_TABLE=<project.dataset.vegas_table> BQ_REQUEST_COLUMN=request_payload BQ_RESPONSE_COLUMN=response_payload
-   BQ_ID_COLUMN=vegas_common_services_txn_id BQ_AGENT_COLUMN=vegas_usecase_name BQ_TIME_COLUMN=created_timestamp_utc
+   BQ_ID_COLUMN=vegas_common_services_txn_id BQ_USECASE_COLUMN=vegas_usecase_name BQ_TIME_COLUMN=created_timestamp_utc
    BQ_WORK_DATASET=<a dataset the service account may create tables in> (unset = the log's dataset)
 2. `POST /api/suite/cache/refresh?days=1` first (sizes the scan: the two JSON columns over ~8M rows/day), then 14.
 3. Read the usecase pages: "grouping unsure" chips, the number of call-sites per usecase against the counts in

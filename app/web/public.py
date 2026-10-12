@@ -361,12 +361,12 @@ def _logged_bodies(ids):
 def _logged(items):
     """{request_id: (request, response)} for the requests sent by request_id only: one BigQuery lookup."""
     from connectors.bigquery import source
+    from core.ledger import bq
     wanted = {it.request_id for it in items if it.request is None and it.request_id}
     if not wanted:
         return {}
-    if not source.SOURCE.configured():
-        raise HTTPException(422, ["items sent by request_id need BigQuery: set BQ_TABLE, BQ_REQUEST_COLUMN and "
-                                  "BQ_RESPONSE_COLUMN on the server"])
+    if not bq.configured():
+        raise HTTPException(422, ["items sent by request_id need BigQuery: set %s on the server" % ", ".join(bq.SETTINGS.values())])
     try:
         return source.lookup(wanted)
     except Exception as e:
@@ -376,6 +376,7 @@ def _logged(items):
 def parse_requests(requests, default_candidates):
     """Validated items in the engine's shape; every problem is reported at once, nothing is started.
     `default_candidates(model)` gives [{label, model}] for a request that names no candidates of its own."""
+    from connectors.bigquery import source
     from connectors.bigquery.source import to_trace         # OpenAI request/response -> contract trace
     out, problems, ids = [], [], set()
     logged = _logged(requests)
@@ -386,7 +387,7 @@ def parse_requests(requests, default_candidates):
                 problems.append("item %d: send request (and response) or request_id" % (n + 1))
                 continue
             if it.request_id not in logged:
-                problems.append("%s: request_id not found in BigQuery" % it.id)
+                problems.append("%s: request_id not found in the log's last %d days" % (it.id, source.LOOKUP_DAYS))
                 continue
             it.request, it.response = logged[it.request_id]
             if it.response is None:

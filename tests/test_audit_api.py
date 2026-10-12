@@ -405,8 +405,9 @@ def test_a_dropped_connection_while_recording_does_not_lose_the_group(client, mo
 
 def _bigquery(monkeypatch, rows):
     from connectors.bigquery import source
+    from core.ledger import bq
     asked = []
-    monkeypatch.setattr(source, "_cfg", lambda: ("p.litellm.v_requests", "messages", "response"))
+    monkeypatch.setattr(bq, "configured", lambda: True)
     monkeypatch.setattr(source, "lookup", lambda ids: asked.append(sorted(ids)) or
                         {i: rows[i] for i in ids if i in rows})
     return asked
@@ -426,7 +427,7 @@ def test_items_can_name_logged_calls_by_request_id(client, monkeypatch):
         {"request_id": "chatcmpl-1", "candidates": cands}, {"request_id": "chatcmpl-nope", "candidates": cands},
         {"request_id": "chatcmpl-failed", "candidates": cands}, {"candidates": cands}]})
     assert r.status_code == 422 and r.json()["detail"] == [
-        "chatcmpl-nope: request_id not found in BigQuery", "chatcmpl-failed: the logged call has no response (it failed)",
+        "chatcmpl-nope: request_id not found in the log's last 30 days", "chatcmpl-failed: the logged call has no response (it failed)",
         "item 4: send request (and response) or request_id"]
     job_id = _post(client, {"items": [{"request_id": "chatcmpl-1", "candidates": cands},     # mixed with a full item
                                       dict(_item(2), candidates=cands)]})
@@ -440,8 +441,8 @@ def test_items_can_name_logged_calls_by_request_id(client, monkeypatch):
 
 
 def test_request_ids_need_bigquery(client, monkeypatch):
-    from connectors.bigquery import source
-    monkeypatch.setattr(source, "_cfg", lambda: (None, None, None))
+    from core.ledger import bq
+    monkeypatch.setattr(bq, "configured", lambda: False)
     r = client.post("/api/audit/models", headers=KEY, json={"requests": [
         {"request_id": "chatcmpl-1", "candidates": [{"label": "a", "model": "m"}]}]})
     assert r.status_code == 422 and "need BigQuery" in r.json()["detail"][0]

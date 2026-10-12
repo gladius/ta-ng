@@ -208,13 +208,11 @@ def logged_ids():
     """3 request_ids for job B, or [] without BigQuery."""
     if os.environ.get("E2E_REQUEST_IDS"):
         return os.environ["E2E_REQUEST_IDS"].split(",")
-    from connectors.bigquery import source
-    if not source.SOURCE.configured():
+    from core.ledger import bq
+    if not bq.configured():
         return []
-    table, q, r = source._cfg()
-    rows = source._client(table.split(".")[0]).query(
-        "SELECT `{i}` FROM `{t}` WHERE LENGTH(TO_JSON_STRING(`{q}`)) > 10 AND `{r}` IS NOT NULL LIMIT 3".format(
-            i=os.environ.get("BQ_ID_COLUMN") or "request_id", t=table, q=q, r=r)).result(timeout=120)
+    rows = bq.query("SELECT `{id}` FROM `{table}` WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) "
+                    "AND LENGTH(TO_JSON_STRING(`{req}`)) > 10 AND `{resp}` IS NOT NULL LIMIT 3".format(**bq.cfg()))
     return [row[0] for row in rows]
 
 

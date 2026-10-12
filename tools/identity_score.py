@@ -1,6 +1,6 @@
 """Score core.identity's grouping on the synthetic log, whose `synthetic` column holds the true call-site.
 
-    BQ_TABLE=trust-router-sandbox.litellm.llm_log BQ_AGENT_COLUMN=vegas_usecase_name BQ_ID_COLUMN=vegas_common_services_txn_id \\
+    BQ_TABLE=trust-router-sandbox.litellm.llm_log BQ_USECASE_COLUMN=vegas_usecase_name BQ_ID_COLUMN=vegas_common_services_txn_id \\
       .venv/bin/python tools/identity_score.py [--days 14] [--build]
 
 The script always runs the refresh build (temp tables in a BigQuery session), then scores call_rows. Truth: the orchestrator's roles are distinct
