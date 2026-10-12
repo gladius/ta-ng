@@ -4,11 +4,6 @@ import Home from './pages/Home'
 import Batches from './pages/Batches'
 import Batch from './pages/Batch'
 import Review from './pages/Review'
-import { Agents, Sources, Workspaces } from './pages/Browse'
-import { Analyze, Audit, Build } from './pages/Progress'
-import Select from './pages/Select'
-import Report from './pages/Report'
-import Profile from './pages/Profile'
 import { Migrations, Models } from './pages/Catalog'
 import { CacheOverview, CacheSite, CacheUsecase } from './pages/Cache'
 import { CallSite, CallSiteUsecase, CallSiteUsecases } from './pages/CallSites'
@@ -23,15 +18,6 @@ export default function App() {
         <Route path="validations" element={<Batches />} />
         <Route path="validations/:jobId" element={<Batch />} />
         <Route path="validations/:jobId/requests/*" element={<Review />} />
-        <Route path="sources" element={<Sources />} />
-        <Route path="sources/:source" element={<Workspaces />} />
-        <Route path="sources/:source/:ws" element={<Agents />} />
-        <Route path="agents/:source/:ws/:project/build" element={<Build />} />
-        <Route path="agents/:source/:ws/:project/select" element={<Select />} />
-        <Route path="agents/:source/:ws/:project/audit" element={<Audit />} />
-        <Route path="agents/:source/:ws/:project/report" element={<Report />} />
-        <Route path="agents/:source/:ws/:project/profile" element={<Profile />} />
-        <Route path="agents/:source/:ws/:project/analyze" element={<Analyze />} />
         <Route path="checks" element={<Checks />} />
         <Route path="checks/:checkId" element={<CheckDetail />} />
         <Route path="usecases" element={<CallSiteUsecases />} />

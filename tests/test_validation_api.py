@@ -611,12 +611,3 @@ def test_the_web_ui_is_served_under_app(client, monkeypatch, tmp_path):
     assert r.text == "console.log(1)" and "immutable" in r.headers["cache-control"]
     assert "root" in client.get("/app/..%2f..%2fcredentials.py").text      # never a file outside the build
     assert client.get("/app", follow_redirects=False).headers["location"] == "/app/"
-
-
-def test_agent_names_with_a_slash_or_any_language_reach_their_routes(client):
-    from app.web import suite
-    r = client.get("/api/suite/agents/recorded/recorded/team%2Fagent/select?snap=nope", headers=KEY)
-    assert (r.status_code, r.json()["detail"]) == (404, "no such snapshot: build one first")   # routed, not "Not Found"
-    header = suite._attachment("token-audit-équipe/agent.zip")
-    header.encode("latin-1")                                             # a valid header for any name
-    assert 'filename="token-audit-_quipe_agent.zip"' in header and "%C3%A9quipe%2Fagent" in header

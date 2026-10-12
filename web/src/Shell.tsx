@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
-  ArrowUpRight, BookOpen, Braces, Database, Fingerprint, LayoutDashboard, Menu, PackageOpen, Route as RouteIcon, ShieldCheck, TrendingDown, X,
+  ArrowUpRight, BookOpen, Braces, Database, Fingerprint, LayoutDashboard, Menu, Route as RouteIcon, ShieldCheck, TrendingDown, X,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -26,7 +26,6 @@ export default function Shell() {
   const { pathname, search } = useLocation()
   const [menu, setMenu] = useState(false)
   useEffect(() => { setMenu(false) }, [pathname, search])               // a phone's menu closes once you go somewhere
-  const auditing = pathname.startsWith('/sources') || pathname.startsWith('/agents')
   const brand = <div className="brand"><span className="mark" aria-hidden="true"><i /><b /></span><span>Token Auditor</span></div>
 
   return (
@@ -50,7 +49,6 @@ export default function Shell() {
           <span className="group-name">Models</span>
           <Entry icon={TrendingDown} label="Checks" to="/checks" />
           <Entry icon={ShieldCheck} label="Validations" to="/validations" />
-          <Entry icon={PackageOpen} label="Audit an agent (LangSmith)" to="/sources" active={auditing} />
         </div>
         <div className="group">
           <span className="group-name">Cache</span>
