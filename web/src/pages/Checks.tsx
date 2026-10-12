@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import Select from 'react-select'
 import { Link, useParams } from 'react-router-dom'
 import { get, type JobStatus, type ResultsPage } from '../api'
 import { usecaseName } from '../cache'
@@ -49,32 +50,29 @@ export function CheckDialog({ usecase, site, lockScope = false, onStarted }: { u
     onSuccess: (r) => { setOpen(false); onStarted?.(r.checks) },
   })
   if (!open) return <button className="btn primary" onClick={() => setOpen(true)}>Check models…</button>
-  const toggle = (list: string[], v: string, set: (l: string[]) => void) => set(list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
   const available = (served.data?.models ?? []).filter((m) => m.available)
   return (
     <div className="panel pad dialog">
       <h2>Check models {site ? 'on this call-site' : lockScope ? 'on this usecase' : ''}</h2>
       <p className="muted">Each call-site's requests are sampled by size; the current model and every candidate answer them again; a judge compares the answers with evidence. You get, per call-site: which candidates drift, and the cheapest and fastest that don't, by measured cost and latency. Nothing in production changes.</p>
       {!site && !lockScope && (
-        <div>
-          <div className="muted">Usecases ({usecases.length} chosen) <button className="btn small" onClick={() => setUsecases((opts.data?.usecases ?? []).filter((u) => u.analysed_at && u.sites).map((u) => u.usecase ?? 'None'))}>all analysed</button> <button className="btn small" onClick={() => setUsecases([])}>none</button></div>
-          <div className="picks">
-            {(opts.data?.usecases ?? []).map((u) => { const id = u.usecase ?? 'None'; const ok = !!u.analysed_at && !!u.sites; return (
-              <label key={id} className={'pick' + (ok ? '' : ' off')} title={ok ? `${u.calls.toLocaleString('en-US')} calls` : 'not analysed yet: open it first'}>
-                <input type="checkbox" disabled={!ok} checked={usecases.includes(id)} onChange={() => toggle(usecases, id, setUsecases)} /> {usecaseName(u.usecase)}
-              </label>) })}
-          </div>
-        </div>
+        <label>Usecases
+          <Select isMulti classNamePrefix="rs" placeholder="Choose usecases… (type to search)" closeMenuOnSelect={false}
+            options={(opts.data?.usecases ?? []).map((u) => ({ value: u.usecase ?? 'None', label: usecaseName(u.usecase), isDisabled: !(u.analysed_at && u.sites),
+              hint: u.analysed_at && u.sites ? `${u.calls.toLocaleString('en-US')} calls` : 'not analysed yet' }))}
+            value={usecases.map((id) => ({ value: id, label: usecaseName(id === 'None' ? null : id) }))}
+            onChange={(v) => setUsecases(v.map((o) => o.value))}
+            formatOptionLabel={(o: { label: string; hint?: string }, m) => m.context === 'menu' ? <span>{o.label} <span className="muted">{o.hint}</span></span> : o.label} />
+          <span className="row"><button type="button" className="btn small" onClick={() => setUsecases((opts.data?.usecases ?? []).filter((u) => u.analysed_at && u.sites).map((u) => u.usecase ?? 'None'))}>all analysed</button></span>
+        </label>
       )}
-      <div>
-        <div className="muted">Models to try ({models.length} chosen{auto && ' + Auto'})</div>
-        <div className="picks">
-          <label className="pick"><input type="checkbox" checked={auto} onChange={() => setAuto(!auto)} /> <b>Auto</b> <span className="muted">per call-site: the cheaper tier and the open-weight swap of its current model</span></label>
-          {available.map((m) => (
-            <label key={m.model} className="pick"><input type="checkbox" checked={models.includes(m.model)} onChange={() => toggle(models, m.model, setModels)} /> <span className="mono">{m.model}</span> <span className="muted">{m.provider}{m.tier ? ` · ${m.tier}` : ''}{m.open_weight ? ' · open-weight' : ''}</span></label>
-          ))}
-        </div>
-      </div>
+      <label>Models to try
+        <Select isMulti classNamePrefix="rs" placeholder="Choose models… (type to search)" closeMenuOnSelect={false}
+          options={[{ label: 'Auto', options: [{ value: '__auto', label: 'Auto: per call-site, the cheaper tier and the open-weight swap of its current model' }] },
+            ...Object.entries(available.reduce<Record<string, { value: string; label: string }[]>>((g, m) => { (g[m.provider] ??= []).push({ value: m.model, label: `${m.model}${m.tier ? ` · ${m.tier}` : ''}${m.open_weight ? ' · open-weight' : ''}` }); return g }, {})).map(([provider, options]) => ({ label: provider, options }))]}
+          value={[...(auto ? [{ value: '__auto', label: 'Auto' }] : []), ...models.map((m) => ({ value: m, label: m }))]}
+          onChange={(v) => { setAuto(v.some((o) => o.value === '__auto')); setModels(v.map((o) => o.value).filter((x) => x !== '__auto')) }} />
+      </label>
       <button className="btn small" onClick={() => setAdvanced(!advanced)}>{advanced ? 'Hide advanced' : 'Advanced'}</button>
       {advanced && (
         <div className="row">
