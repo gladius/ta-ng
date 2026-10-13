@@ -62,8 +62,8 @@ def jaccard(a, b):
 
 
 def site_id(usecase, template):
-    """A new call-site's id: from its usecase and the smallest hashes of its template (the same text, the same id)."""
-    key = (usecase or "") + "\x1f" + ",".join(str(h) for h in sorted(template)[:build.TOP_K])
+    """A new call-site's id: from its usecase and its template's first phrases (the same text, the same id)."""
+    key = (usecase or "") + "\x1f" + "|".join(sorted(template)[:build.TOP_K])
     return str(int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "big", signed=True))
 
 
@@ -89,7 +89,8 @@ def group_leftovers(calls):
             continue
         n = Counter(h for i in ids for h in calls[i])
         t = {h for h, k in n.items() if k >= build.CORE * len(ids)}
-        out.append((t, [i for i in ids if len(calls[i] & t) >= build.CONTAIN * len(t)]))
+        markers = sorted(t, key=lambda h: (-n[h], h))[:build.MARKERS]
+        out.append((t, markers, [i for i in ids if len(set(markers) & calls[i]) >= build.HITS]))
     return out
 
 
@@ -106,15 +107,15 @@ def _version(rec, template, day):
     rec["template"] = sorted(template)
 
 
-def _new_site(site, usecase, template, req):
-    return {"site": site, "usecase": usecase, "template": sorted(template), "versions": [],
+def _new_site(site, usecase, template, markers, req):
+    return {"site": site, "usecase": usecase, "template": sorted(template), "markers": list(markers), "versions": [],
             "signature": [l for l in (_texts(req or {})[0][:300]).split("\n") if l], "request": req}
 
 
 def process_day(day):
     """Process one day (ISO date) for every usecase. Blocking: the task start() queues runs it."""
     day = str(day)
-    b = build.Build(day, day)
+    b = build.Build(day, day, store.fingerprints())
     try:
         day_sites, ledger, gaps, layout, pool = b.day_sites(), b.ledger(), b.gaps(), b.layout(), b.pool()
         leftover, n_left = b.leftover()
@@ -128,15 +129,20 @@ def process_day(day):
             known = store.templates(uc)
             recs.update({r["site"]: r for r in store.by_usecase(uc)})
             for d in sorted(ds, key=lambda d: d["site"]):
-                t = {int(h) for h in d["template"]}
-                site = link(t, known)
+                t = set(d["template"] or [])
+                site = d["site"] if d["site"] in known else link(t, known)   # placed by a known fingerprint, or learned
                 if site is None:
                     site = site_id(uc, t)
-                    recs[site] = _new_site(site, uc, t, b.sample_request(site=d["site"]))
-                known[site] = t
+                    recs[site] = _new_site(site, uc, t, d["markers"], b.sample_request(site=d["site"]))
                 mapping[d["site"]] = site
                 rec = recs[site]
-                _version(rec, t, day)
+                if site != d["site"]:                      # learned this day: follow its template
+                    known[site] = t
+                    _version(rec, t, day)
+                elif not rec["versions"]:
+                    rec["versions"].append({"version": site_id("v", t), "first": day, "last": day})
+                else:
+                    rec["versions"][-1]["last"] = max(rec["versions"][-1]["last"], day)
                 if d["site"] in layout:
                     rec.update({k: layout[d["site"]][k] for k in ("static_chars", "dynamic_chars", "static_after", "tool_sets")})
         # the day's numbers, by call-site
@@ -172,21 +178,22 @@ def _place_leftovers(leftover, recs, rows, day, b):
             by_uc[uc].setdefault(r["id"], r)
     for uc, calls in by_uc.items():
         known = {r["site"]: set(r["template"]) for r in recs.values() if (r["usecase"] or "") == uc}
+        markers_of = {r["site"]: set(r.get("markers") or []) for r in recs.values() if (r["usecase"] or "") == uc}
         rest = {}
         for i, r in calls.items():
             w = set(r["template"])
-            site = next((s for s, t in known.items() if t and len(w & t) >= build.CONTAIN * len(t)), None)
+            site = next((s for s, m in markers_of.items() if len(w & m) >= build.HITS), None)
             if site:
                 placed[i] = site
             elif w:
                 rest[i] = w
-        for t, ids in group_leftovers(rest):
+        for t, markers, ids in group_leftovers(rest):
             site = link(t, known)
             if site is None:
                 site = site_id(uc, t)
-                recs[site] = _new_site(site, uc, t, b.sample_request(call_id=ids[0]))
+                recs[site] = _new_site(site, uc, t, markers, b.sample_request(call_id=ids[0]))
                 recs[site]["versions"] = [{"version": site_id("v", t), "first": min(str(calls[i]["day"]) for i in ids), "last": day}]
-                known[site] = t
+                known[site], markers_of[site] = t, set(markers)
             for i in ids:
                 placed[i] = site
         for i, r in calls.items():

@@ -17,7 +17,7 @@ unplaced        calls the day script could not place (no template text in common
                 with their window hashes: grouped across days by the processing, capped per usecase and day.
 processed_days  which days of the log have been processed, and when.
 
-A request belongs to a call-site when it holds most of the call-site's template (its window hashes)."""
+A request belongs to a call-site when its system prompt holds HITS of the call-site's marker phrases."""
 import datetime
 import json
 from collections import defaultdict
@@ -44,7 +44,8 @@ callsites = Table(
     Column("site", String(32), primary_key=True),
     Column("usecase", Text, nullable=False, default=""),
     # identity
-    Column("template", Text, nullable=False),                  # JSON list of window hashes (as strings)
+    Column("template", Text, nullable=False),                  # JSON list of phrases its calls share (linking, versions)
+    Column("markers", Text),                                   # JSON list of MARKERS phrases: the fingerprint (placement, router)
     Column("signature", Text, nullable=False),                 # JSON: the first lines of a sample prompt
     Column("calls", Integer, nullable=False),
     Column("first_day", String(10)),
@@ -185,18 +186,28 @@ def usecase_list(q=None, page=1, per_page=50):
 
 # --------------------------------------------------------------------------------------------------- callsites
 def templates(usecase):
-    """{site: set of window hashes} of the usecase's known call-sites."""
+    """{site: set of template phrases} of the usecase's known call-sites."""
     eng = db.ready()
     with eng.connect() as c:
         rows = c.execute(select(callsites.c.site, callsites.c.template).where(callsites.c.usecase == (usecase or ""))).all()
-    return {r[0]: {int(h) for h in json.loads(r[1] or "[]")} for r in rows}
+    return {r[0]: set(json.loads(r[1] or "[]")) for r in rows}
+
+
+def fingerprints():
+    """Every call-site's fingerprint, for the day script's placement: [{usecase, site, markers, template}], the
+    phrases joined by '|'."""
+    eng = db.ready()
+    with eng.connect() as c:
+        rows = c.execute(select(callsites.c.usecase, callsites.c.site, callsites.c.markers, callsites.c.template)).all()
+    return [{"usecase": r[0], "site": r[1], "markers": "|".join(json.loads(r[2] or "[]")), "template": "|".join(json.loads(r[3] or "[]"))}
+            for r in rows if r[2]]
 
 
 def save_identity(rec, window):
     """Upsert a call-site's identity part (the processing's). rec: site, usecase, template, signature, calls,
     first_day, last_day, versions, static_chars, dynamic_chars, static_after, tool_sets."""
     eng = db.ready()
-    vals = {"usecase": rec["usecase"] or "", "template": json.dumps([str(h) for h in sorted(rec["template"])]),
+    vals = {"usecase": rec["usecase"] or "", "template": json.dumps(sorted(rec["template"])), "markers": json.dumps(rec.get("markers") or []),
             "signature": json.dumps(rec.get("signature") or []), "calls": int(rec["calls"]),
             "first_day": rec["first_day"], "last_day": rec["last_day"], "versions": json.dumps(rec["versions"]),
             "static_chars": rec.get("static_chars"), "dynamic_chars": rec.get("dynamic_chars"),
@@ -243,7 +254,8 @@ def set_choice(site, value):
 
 def _row(r):
     d = dict(zip([c.name for c in callsites.columns], r))
-    d["template"] = [int(h) for h in json.loads(d["template"] or "[]")]
+    d["template"] = json.loads(d["template"] or "[]")
+    d["markers"] = json.loads(d["markers"] or "[]")
     d["signature"] = json.loads(d["signature"] or "[]")
     d["versions"] = json.loads(d["versions"] or "[]")
     d["cache"] = json.loads(d["cache_findings"]) if d["cache_findings"] else None
@@ -358,7 +370,7 @@ def replace_unplaced(days, rows):
         for i in range(0, len(rows), 500):
             c.execute(unplaced.insert(), [{**{k: r.get(k) for k in ("id", "usecase", "day", "model", "prompt_tokens", "cached_tokens",
                                                                    "written_tokens", "completion_tokens", "cost", "cost_nocache")},
-                                           "usecase": r["usecase"] or "", "template": json.dumps([str(h) for h in r["template"]])}
+                                           "usecase": r["usecase"] or "", "template": json.dumps(list(r["template"]))}
                                           for r in rows[i:i + 500]])
 
 
@@ -366,7 +378,7 @@ def unplaced_rows(usecase):
     eng = db.ready()
     with eng.connect() as c:
         rows = c.execute(select(unplaced).where(unplaced.c.usecase == (usecase or ""))).all()
-    return [{**r._mapping, "template": [int(h) for h in json.loads(r.template)]} for r in rows]
+    return [{**r._mapping, "template": json.loads(r.template)} for r in rows]
 
 
 def drop_unplaced(ids):

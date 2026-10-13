@@ -222,3 +222,14 @@ usecase, keeps unplaced calls (capped) and groups them across days, writes site_
 task per new call-site, redoes cache findings. Usecases list reads the usecase and time columns only. Audits sample
 from site_samples and fetch bodies by id for those days. Scores: hard bench 24/24, synthetic log exact, 0 unplaced.
 Versions are coarse (1-in-8 windows): a revision needs >= 3 windows and 10% of the template to change.
+
+## Placement by fingerprint (2026-10-13, after the scale review)
+A call-site's fingerprint = 5 phrases (5-word windows, lower case, numbers masked) nearly all its calls hold and its
+siblings don't; stored on the call-site (markers) and passed to the day script (@known). Every call is placed by
+substring search of its usecase's fingerprints, one pass, row-local, no row explosion; only the calls nothing matched
+are learned from (sampled rounds, windows on the sample only). Slot time grows in a straight line with calls:
+7 days of the synthetic log (90k calls, learning from nothing) 125 s wall, 434 slot-s, 3.2 GB. Scores unchanged:
+synthetic log exact, hard bench 24/24 (the 15-call site left to the app's cross-day grouping). The same phrases serve
+a router: a substring check on an incoming request. Found and fixed: BigQuery evaluates SELECT expressions before
+QUALIFY (sample first, then compute), and carrying an array into UNNEST rows copies it per row (quadratic).
+Next: hourly split and a per-statement byte cap; the router contract (fingerprints to Redis).
