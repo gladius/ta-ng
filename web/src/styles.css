@@ -357,8 +357,7 @@ tr.dim { opacity: 0.45; }
 .story > div + div { border-top: 1px solid var(--line-soft); }
 .story p { max-width: 90ch; }
 
-.sig { margin: 8px 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
-.sig code { font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.sig { margin: 8px 0 12px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
 .facts dt { color: var(--ink-2); }
 .facts dd { margin: 0; }

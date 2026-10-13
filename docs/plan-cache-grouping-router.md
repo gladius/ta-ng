@@ -182,3 +182,43 @@ audit shows failed. Workers take a task before a request group (tasks are short 
 per usecase at a time (a task key); "analysing" is read from the queue, never stored. A sampling re-run after a crash
 finds its job and only finishes the status (samples are saved before the job is created). The usecases-list reload is
 still a thread: cheap, idempotent, nothing to lose.
+
+## Word windows and the scheduler (2026-10-13)
+Call-sites now come from five-word windows (numbers masked, 1 in 8 kept by the first word's hash, shares on a sample of
+5,000 per usecase, groups merged when their cores overlap 80%); the cache prefix from consecutive calls compared word
+by word (30 pairs per call-site, median); fixed vs changing text from windows as written. The log is read once per
+analysis (temp table src). Hard bench (tools/grouping_bench.py, sandbox table litellm.grouping_bench): 21/21 call-sites,
+prefix within 2 words; lines got 20/21 with one-paragraph prompts merged and their prefix off by 1,270 words. Synthetic
+log: 17/17. Whole window, 182k calls: 174 s, 17 GB billed.
+Scheduler (core/schedule.py, page /schedules): jobs on our own database, one instance wins each due run by a
+conditional UPDATE, the run is a task on the queue. Usecases list every 12 h (on); analyse every usecase every 24 h
+(off until production's cost is known). The last background thread (list reload) is a task now.
+Open: production's table size per day, clustering, table or view (the dry run); then a nightly pass over one new day.
+
+## Next: rounds + daily incremental (agreed 2026-10-13)
+Why: BigQuery has no index; a usecase filter does not cut the bill (only the day partitions do), so the log is read
+once per run for all usecases, never per usecase. The 5%-of-sample rule hides call-sites under ~5% of a usecase.
+1. Rounds (peeling), per usecase, all usecases in the same SQL step: sample the calls not yet placed; windows seen in
+   >= a minimum COUNT of them (not a share) are candidate template text; group, merge; each group's template = the
+   windows nearly all its calls share (the per-group histogram); place every call that contains most of a template;
+   repeat on the leftovers (3 rounds). Rare call-sites become common among the leftovers. Calls never placed are shown
+   as "not placed: N", never hidden. Windows stay; the histogram moves from the whole usecase to each group.
+2. Daily incremental: each night BigQuery reads only yesterday (all usecases, one read) and returns day-groups with
+   their templates (window hashes) and numbers. Our database links each day-group to a known call-site by template
+   overlap (same / new version / new call-site); known call-sites can't live in BigQuery (production is read-only).
+   Calls left unplaced in a day keep their window hashes in our DB, and are grouped across days there (rare call-sites
+   with a few calls a day). History = one row per call-site per day; a 30-day view is a sum. Backfill: last 30 days,
+   one day at a time. Daily vs weekly: same bytes in total; daily is fresher and smaller.
+3. Model audits pick sample ids stored per call-site per day and fetch only those days. Output audit (later) reads the
+   same nightly pass: answer length, length-limit hits, max_tokens use, format validity, per call-site.
+Test first in the sandbox (tools/grouping_bench.py): add call-sites of ~150 and ~15 calls; rounds vs today's method;
+then day by day with linking, including across a revision. Build into the app only if both hold.
+
+## Done (2026-10-13): rounds, daily processing, scheduler
+core/ledger/build.py is the day script (rounds over word windows; key = a call's most common windows, split by
+20..80% windows, merge by core overlap; prefix from consecutive calls); core/ledger/refresh.py processes the missing
+days of the window (ANALYSIS_WINDOW_DAYS, default 7) in order as one task, links day-groups to known call-sites per
+usecase, keeps unplaced calls (capped) and groups them across days, writes site_days / site_samples, queues a profile
+task per new call-site, redoes cache findings. Usecases list reads the usecase and time columns only. Audits sample
+from site_samples and fetch bodies by id for those days. Scores: hard bench 24/24, synthetic log exact, 0 unplaced.
+Versions are coarse (1-in-8 windows): a revision needs >= 3 windows and 10% of the template to change.

@@ -1,67 +1,63 @@
-"""Score core.identity's grouping on the synthetic log, whose `synthetic` column holds the true call-site.
+"""Score the day script's grouping on the synthetic log, whose `synthetic` column holds the true call-site.
 
-    BQ_TABLE=trust-router-sandbox.litellm.llm_log BQ_USECASE_COLUMN=vegas_usecase_name BQ_ID_COLUMN=vegas_common_services_txn_id \\
-      .venv/bin/python tools/identity_score.py [--days 14] [--build]
+    BQ_TABLE=trust-router-sandbox.litellm.llm_log .venv/bin/python tools/identity_score.py [--days 7]
 
-The script always runs the refresh build (temp tables in a BigQuery session), then scores call_rows. Truth: the orchestrator's roles are distinct
-call-sites; every other usecase is one call-site (its versions are versions of it). Purity = share of a found site's
-rows that belong to its majority true site; completeness = share of a true site's rows in its majority found site.
-"""
+Runs the day script over the last --days days at once (one BigQuery session) and scores call_rows against the truth:
+the orchestrator's roles are distinct call-sites; every other usecase is one. Purity = share of a found site's calls
+from its majority true site; completeness = share of a true site's calls in its majority found site. Sites found per
+day are linked across days the way the app does (core.ledger.refresh.link)."""
 import argparse
+import datetime
 import os
 import sys
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.ledger import build, bq  # noqa: E402
+from core.ledger import build, bq, refresh  # noqa: E402
 
 _SQL = """
-SELECT a.usecase, CAST(a.site AS STRING) AS site, FALSE AS unsure,
-       COALESCE(JSON_VALUE(l.synthetic, '$.role'), 'main') AS truth, COUNT(*) AS n
+SELECT a.usecase, CAST(a.site AS STRING) AS site, COALESCE(JSON_VALUE(l.synthetic, '$.role'), 'main') AS truth, COUNT(*) AS n
 FROM call_rows a JOIN `{table}` l ON CAST(l.`{id}` AS STRING) = a.id AND a.day = DATE(l.`{time}`)
-GROUP BY 1, 2, 3, 4
+GROUP BY 1, 2, 3
 """
-_TOTAL = """
-SELECT `{usecase}` AS usecase, COUNT(*) AS n FROM `{table}`
-WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL
-GROUP BY 1
-"""
+_LEFT = "SELECT s.usecase, COUNT(*) AS n FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL GROUP BY 1"
 
 
-def main(days, _build):
+def main(days):
     c = bq.cfg()
-    b = build.Build(days)                                  # the refresh script, in a session: call_rows is its temp table
-    print("%d sites" % len(b.sites()))
-    rows = b.s.query(_SQL.format(**c))
-    totals = {r["usecase"]: r["n"] for r in b.s.query(_TOTAL.format(**c), {"days": days})}
-    b.close()
+    today = datetime.date.today()
+    b = build.Build(today - datetime.timedelta(days), today - datetime.timedelta(1))
+    try:
+        known, link = {}, {}
+        for d in sorted(b.day_sites(), key=lambda d: (str(d["day"]), d["site"])):
+            k = known.setdefault(d["usecase"] or "", {})
+            t = {int(h) for h in d["template"]}
+            site = refresh.link(t, k) or refresh.site_id(d["usecase"], t)
+            k[site] = t
+            link[d["site"]] = site
+        rows = b.s.query(_SQL.format(**c))
+        left = {r["usecase"] or "": r["n"] for r in b.s.query(_LEFT)}
+    finally:
+        b.close()
     by = {}
     for r in rows:
-        by.setdefault(r["usecase"], []).append(r)
-    print("%-24s %5s %7s %8s %7s %6s %6s" % ("usecase", "sites", "truth", "assigned", "purity", "compl", "unsure"))
-    for uc in sorted(by, key=lambda u: -totals.get(u, 0)):
-        rs = by[uc]
-        found = {}
-        truth = Counter()
-        for r in rs:
-            found.setdefault(r["site"], Counter())[r["truth"]] += r["n"]
+        by.setdefault(r["usecase"] or "", []).append(r)
+    print("%-24s %5s %7s %7s %6s %6s %8s" % ("usecase", "sites", "truth", "purity", "compl", "calls", "unplaced"))
+    for uc in sorted(by, key=lambda u: -sum(r["n"] for r in by[u])):
+        found, truth = {}, Counter()
+        for r in by[uc]:
+            found.setdefault(link[r["site"]], Counter())[r["truth"]] += r["n"]
             truth[r["truth"]] += r["n"]
-        assigned = sum(truth.values())
-        purity = sum(max(cnt.values()) for cnt in found.values()) / assigned
-        # completeness: for each true site, its rows in the found site holding most of them
-        compl = sum(max(cnt[t] for cnt in found.values()) for t in truth) / assigned
-        unsure = sum(r["n"] for r in rs if r["unsure"]) / assigned
-        print("%-24s %5d %7d %7d%% %6.0f%% %5.0f%% %5.0f%%" % (uc, len(found), len(truth),
-              round(100 * assigned / totals.get(uc, assigned)), 100 * purity, 100 * compl, 100 * unsure))
-    missing = [u for u in totals if u not in by]
-    if missing:
-        print("no rows assigned:", missing)
+        n = sum(truth.values())
+        purity = sum(max(cnt.values()) for cnt in found.values()) / n
+        compl = sum(max(cnt[t] for cnt in found.values()) for t in truth) / n
+        print("%-24s %5d %7d %5.0f%% %5.0f%% %6d %8d" % (uc, len(found), len(truth), 100 * purity, 100 * compl, n, left.get(uc, 0)))
 
 
 if __name__ == "__main__":
+    import credentials
+    credentials.load()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days", type=int, default=14)
-    ap.add_argument("--build", action="store_true")
-    a = ap.parse_args()
-    main(a.days, a.build)
+    ap.add_argument("--days", type=int, default=7)
+    main(ap.parse_args().days)

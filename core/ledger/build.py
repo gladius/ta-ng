@@ -1,117 +1,166 @@
-"""The refresh script: one BigQuery session, temporary tables only, results into the app's database.
+"""The day script: one BigQuery session, temporary tables only, for a range of days and every usecase at once. Its
+results land in the app's database (core/ledger/refresh.py links each day's call-sites to the known ones).
 
-Call-site identity (core idea, scored exact on the synthetic log by tools/identity_score.py): a call-site is one
-prompt template. Split each system prompt into lines, mask numbers, and count in what share of the usecase's prompts
-each line appears. A STABLE line is in >= STABLE of them; a TEMPLATE line in >= TEMPLATE. A prompt's signature is
-its TOP_K longest stable lines of MIN_LEN+ characters (instructions, not `Plan: Gold`); a prompt with none belongs
-to a minority template and uses its template lines. The hash of the signature is the call-site id. Per-call context,
-retrieved passages and short slot lines never reach it, wherever they sit. A version is the set of long template
-lines the prompt holds that are stable or live for a limited run of days (a revision, not a repeating slot value).
+The log is read once (temp table src). BigQuery bills the columns it reads for every day in the range, whatever the
+usecase filter (it has no index), so a run covers all usecases: one usecase alone would cost the same.
 
-Temp tables the script leaves in the session: site_lines, call_rows, sites_daily, site_layout, ledger_daily,
-cache_gaps (per site and model). The fetch_* functions read them; nothing is written to the customer's dataset.
+Call-sites, per usecase and day (a unit), in rounds: sample up to SAMPLE calls of the unit not placed yet; cut their
+system prompts into windows of WINDOW words (numbers masked, kept only at anchor words: 1 in ANCHOR, chosen by the
+word's own hash, so every prompt keeps the same windows); windows in >= MIN_CALLS sampled calls are candidate template
+text; group calls by their TOP_K most common windows and merge groups whose cores overlap >= SAME; a group of >= MIN_CALLS
+calls has a template: the windows in >= CORE of its calls. Every unplaced call holding >= CONTAIN of a template is placed
+(the best one), and the next round samples what is left, where a rare call-site is common. Calls no round places are
+returned with their windows: the app groups those across days. Names, dates and retrieved passages of any length don't
+matter, wherever they sit; there is no share threshold to hide a small call-site.
+
+Cache layout per day-site: the prefix as a provider's cache sees it (each call against the previous one of its
+call-site, word by word, raw: a changed number breaks it; PAIRS pairs, the median); fixed vs changing text from windows
+as written. Scored by tools/grouping_bench.py: 24/24 call-sites, including ones of 150 and 15 calls among 4,000.
 """
 from core.ledger import bq
 
-MIN_LEN = 40
-STABLE = 0.5
-TEMPLATE = 0.05
+WINDOW = 5
+ANCHOR = 8
+MIN_CALLS = 5
+CORE = 0.9
+SAME = 0.8
+CONTAIN = 0.8
 TOP_K = 10
-SAMPLE = 5000           # prompts per usecase (and per site) the shares are counted on, inside BigQuery
+SAMPLE = 5000           # calls per unit and round the groups are learned on
+ROUNDS = 3
+PAIRS = 30              # consecutive-call pairs per day-site for the prefix
+POOL = 5                # request ids kept per day-site and model for model audits (plus the extremes)
+LEFTOVER = 500          # unplaced calls returned per usecase and day
 BUCKETS = [("1m", 60), ("5m", 300), ("15m", 900), ("1h", 3600), ("6h", 21600), ("24h", 86400)]
 
-_LINES = """ARRAY(SELECT TRIM(REGEXP_REPLACE(x, r'[0-9]+', '#')) FROM UNNEST(SPLIT(
-  COALESCE(JSON_VALUE(`{req}`, '$.messages[0].content'),
+_SYSTEM = """COALESCE(JSON_VALUE(`{req}`, '$.messages[0].content'),
            ARRAY_TO_STRING(ARRAY(SELECT JSON_VALUE(p, '$.text') FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.messages[0].content')) p), '\\n'),
-           ''), '\\n')) x)"""
+           '')"""
 
 SCRIPT = """
--- 1. the usecases' line shares, from a bounded sample per usecase
-CREATE TEMP TABLE site_lines AS
-WITH prompts AS (
-  SELECT `{usecase}` AS usecase, DATE(`{time}`) AS day,
-         ARRAY(SELECT DISTINCT l FROM UNNEST({lines}) l WHERE LENGTH(l) >= 8) AS lines
-  FROM `{table}`
-  WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL{scope}
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY `{usecase}` ORDER BY FARM_FINGERPRINT(CAST(`{id}` AS STRING))) <= {sample})
-SELECT r.usecase, l AS line, COUNT(*) / ANY_VALUE(t.total) AS share,
-       COUNT(DISTINCT r.day) < 0.8 * ANY_VALUE(t.days) AS limited_days
-FROM prompts r, UNNEST(r.lines) l
-JOIN (SELECT usecase, COUNT(*) AS total, COUNT(DISTINCT day) AS days FROM prompts GROUP BY 1) t ON t.usecase IS NOT DISTINCT FROM r.usecase
-GROUP BY 1, 2 HAVING share >= {template};
+DECLARE r INT64 DEFAULT 0;
 
--- 2. every call -> site and version
-CREATE TEMP TABLE call_rows AS
-WITH prompts AS (
-  SELECT CAST(`{id}` AS STRING) AS id, `{usecase}` AS usecase, DATE(`{time}`) AS day, `{time}` AS ts,
-         COALESCE(JSON_VALUE(`{resp}`, '$.model'), JSON_VALUE(`{req}`, '$.model')) AS model,
-         FARM_FINGERPRINT(COALESCE(TO_JSON_STRING(ARRAY(SELECT JSON_VALUE(t, '$.function.name')
-                                   FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.tools')) t ORDER BY 1)), '')) AS tools_hash,
-         FARM_FINGERPRINT(CONCAT(COALESCE(TO_JSON_STRING(JSON_QUERY(`{req}`, '$.tools')), ''),
-                                 COALESCE(TO_JSON_STRING(JSON_QUERY(`{req}`, '$.messages[0].content')), ''))) AS prefix_key,
-         COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.prompt_tokens') AS INT64), 0) AS prompt_tokens,
-         GREATEST(COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.cache_read_input_tokens') AS INT64), 0),
-                  COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.prompt_tokens_details.cached_tokens') AS INT64), 0)) AS cached,
-         COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.cache_creation_input_tokens') AS INT64), 0) AS written,
-         COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.completion_tokens') AS INT64), 0) AS completion_tokens,
-         CAST(JSON_VALUE(`{resp}`, '$.usage.cost') AS FLOAT64) AS cost,
-         CAST(`{latency}` AS FLOAT64) AS duration_ms,
-         ARRAY_LENGTH(JSON_QUERY_ARRAY(`{req}`, '$.messages')) AS n_messages,
-         JSON_QUERY(`{req}`, '$.tools') IS NOT NULL AS has_tools,
-         {lines} AS lines
-  FROM `{table}`
-  WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL{scope}),
-tagged AS (
-  SELECT r.id, l AS line, LENGTH(l) AS chars,
-         d.share IS NOT NULL AND LENGTH(l) >= {min_len} AS template,
-         COALESCE(d.share, 0) >= {stable} AND LENGTH(l) >= {min_len} AS stable,
-         d.share IS NOT NULL AND LENGTH(l) >= {min_len} AND (d.share >= {stable} OR d.limited_days) AS versioning
-  FROM prompts r, UNNEST(r.lines) l
-  LEFT JOIN site_lines d ON d.usecase IS NOT DISTINCT FROM r.usecase AND d.line = l
-  WHERE LENGTH(l) >= 8),
-per_row AS (
-  SELECT id,
-         ARRAY_AGG(IF(stable, line, NULL) IGNORE NULLS ORDER BY chars DESC, line LIMIT {top_k}) AS stable_lines,
-         ARRAY_AGG(IF(template, line, NULL) IGNORE NULLS ORDER BY chars DESC, line LIMIT {top_k}) AS template_lines,
-         ARRAY_AGG(IF(versioning, line, NULL) IGNORE NULLS ORDER BY line) AS version_lines
-  FROM tagged GROUP BY 1),
-sig AS (SELECT id, IF(ARRAY_LENGTH(stable_lines) > 0, stable_lines, template_lines) AS signature, version_lines FROM per_row)
-SELECT p.* EXCEPT (lines),
-       FARM_FINGERPRINT(CONCAT(COALESCE(p.usecase, ''), '\\x1f', ARRAY_TO_STRING(ARRAY(SELECT x FROM UNNEST(s.signature) x ORDER BY x), '\\n'))) AS site,
-       FARM_FINGERPRINT(COALESCE(ARRAY_TO_STRING(s.version_lines, '\\n'), '')) AS version,
-       ARRAY_TO_STRING(ARRAY(SELECT x FROM UNNEST(s.signature) x ORDER BY x), '\\n') AS signature_text
-FROM prompts p LEFT JOIN sig s USING (id);
+-- 1. the log, read once: every chat call of the days, its numbers and its system prompt
+CREATE TEMP TABLE src AS
+SELECT CAST(`{id}` AS STRING) AS id, COALESCE(`{usecase}`, '') AS usecase, DATE(`{time}`) AS day, `{time}` AS ts,
+       COALESCE(JSON_VALUE(`{resp}`, '$.model'), JSON_VALUE(`{req}`, '$.model')) AS model,
+       FARM_FINGERPRINT(COALESCE(TO_JSON_STRING(ARRAY(SELECT JSON_VALUE(t, '$.function.name')
+                                 FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.tools')) t ORDER BY 1)), '')) AS tools_hash,
+       ARRAY(SELECT JSON_VALUE(t, '$.function.name') FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.tools')) t) AS tool_names,
+       FARM_FINGERPRINT(CONCAT(COALESCE(TO_JSON_STRING(JSON_QUERY(`{req}`, '$.tools')), ''),
+                               COALESCE(TO_JSON_STRING(JSON_QUERY(`{req}`, '$.messages[0].content')), ''))) AS prefix_key,
+       COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.prompt_tokens') AS INT64), 0) AS prompt_tokens,
+       GREATEST(COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.cache_read_input_tokens') AS INT64), 0),
+                COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.prompt_tokens_details.cached_tokens') AS INT64), 0)) AS cached,
+       COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.cache_creation_input_tokens') AS INT64), 0) AS written,
+       COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.completion_tokens') AS INT64), 0) AS completion_tokens,
+       CAST(JSON_VALUE(`{resp}`, '$.usage.cost') AS FLOAT64) AS cost,
+       CAST(`{latency}` AS FLOAT64) AS duration_ms,
+       ARRAY_LENGTH(JSON_QUERY_ARRAY(`{req}`, '$.messages')) AS n_messages,
+       JSON_QUERY(`{req}`, '$.tools') IS NOT NULL AS has_tools,
+       {system} AS sys,
+       SUBSTR(JSON_VALUE(`{req}`, '$.messages[1].content'), 1, 2000) AS first_user
+FROM `{table}`
+WHERE DATE(`{time}`) BETWEEN @day_from AND @day_to AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL;
 
-CREATE TEMP TABLE sites_daily AS
-SELECT usecase, site, day, COUNT(*) AS n, ANY_VALUE(signature_text) AS signature, ARRAY_AGG(DISTINCT version IGNORE NULLS) AS versions
-FROM call_rows GROUP BY 1, 2, 3;
+-- 2. word windows at anchor words: masked (h: grouping) and as written (r: what the cache sees); one row per word
+CREATE TEMP TABLE cw AS
+SELECT DISTINCT id, unit, h, r FROM (
+  SELECT id, unit, FARM_FINGERPRINT(CONCAT({window})) AS h, FARM_FINGERPRINT(CONCAT({raw_window})) AS r
+  FROM (SELECT id, CONCAT(usecase, '\\x1f', CAST(day AS STRING)) AS unit, i, x, REGEXP_REPLACE(x, r'[0-9]+', '#') AS m
+        FROM src, UNNEST(REGEXP_EXTRACT_ALL(LOWER(sys), r'[a-z0-9]+')) x WITH OFFSET i)
+  QUALIFY MOD(ABS(FARM_FINGERPRINT(m)), {anchor}) = 0 AND LEAD(m, {last}) OVER w IS NOT NULL
+  WINDOW w AS (PARTITION BY id ORDER BY i));
 
--- 3. per site: fixed vs per-call text, from a sample per site
-CREATE TEMP TABLE sample_rows AS
-SELECT c.site, c.tools_hash, FARM_FINGERPRINT(c.id) AS rid, {lines} AS lines
-FROM `{table}` l JOIN call_rows c ON c.id = CAST(l.`{id}` AS STRING) AND c.day = DATE(l.`{time}`)
-WHERE DATE(l.`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY){scope_l}
-QUALIFY ROW_NUMBER() OVER (PARTITION BY c.site ORDER BY FARM_FINGERPRINT(c.id)) <= {sample};
-CREATE TEMP TABLE tagged_s AS
-SELECT site, rid, off, LENGTH(l) AS chars, l AS line FROM sample_rows, UNNEST(lines) l WITH OFFSET off WHERE LENGTH(l) >= 8;
-CREATE TEMP TABLE fixed AS
-SELECT t.site, t.line FROM tagged_s t JOIN (SELECT site, COUNT(DISTINCT rid) AS n FROM tagged_s GROUP BY 1) s USING (site)
-GROUP BY 1, 2, s.n HAVING COUNT(DISTINCT rid) >= {stable} * s.n;
-CREATE TEMP TABLE per_row_s AS
-SELECT t.site, t.rid, SUM(IF(f.line IS NOT NULL, chars, 0)) AS static_chars, SUM(IF(f.line IS NULL, chars, 0)) AS dynamic_chars,
-       MIN(IF(f.line IS NULL, off, NULL)) AS first_dynamic
-FROM tagged_s t LEFT JOIN fixed f ON f.site = t.site AND f.line = t.line GROUP BY 1, 2;
+-- 3. rounds: learn groups on a sample of the unplaced calls, place every call that holds a template, repeat
+CREATE TEMP TABLE placed (id STRING, site INT64);
+CREATE TEMP TABLE templates (unit STRING, site INT64, h INT64);
+WHILE r < {rounds} DO
+  CREATE OR REPLACE TEMP TABLE smp AS
+  SELECT id FROM (SELECT DISTINCT id, unit FROM cw) c LEFT JOIN placed p USING (id) WHERE p.id IS NULL
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY c.unit ORDER BY FARM_FINGERPRINT(CONCAT(c.id, CAST(r AS STRING)))) <= {sample};
+  CREATE OR REPLACE TEMP TABLE common AS
+  SELECT w.unit, w.h, COUNT(DISTINCT w.id) AS n FROM smp JOIN cw w USING (id) GROUP BY 1, 2 HAVING n >= {min_calls};
+  -- a call's key: its TOP_K most common windows (the histogram's top), so calls of one template share a key
+  CREATE OR REPLACE TEMP TABLE g0 AS
+  SELECT id, ANY_VALUE(unit) AS unit,
+         FARM_FINGERPRINT(CONCAT(ANY_VALUE(unit), '|', ARRAY_TO_STRING(ARRAY_AGG(CAST(h AS STRING) ORDER BY n DESC, h LIMIT {top_k}), ','))) AS g
+  FROM (SELECT DISTINCT w.id, w.unit, w.h, c.n FROM smp JOIN cw w USING (id) JOIN common c ON c.unit = w.unit AND c.h = w.h)
+  GROUP BY 1;
+  -- within a group, common windows held by 20..80% of its calls tell templates apart that share most of their text
+  -- (twins); calls re-keyed by them; a split by a mere slot value merges back below (its cores overlap)
+  CREATE OR REPLACE TEMP TABLE splitter AS
+  SELECT g.g, w.h FROM g0 g JOIN (SELECT DISTINCT id, unit, h FROM cw) w USING (id) JOIN common c ON c.unit = w.unit AND c.h = w.h
+  JOIN (SELECT g, COUNT(*) AS n FROM g0 GROUP BY 1) k ON k.g = g.g
+  GROUP BY 1, 2 HAVING COUNT(*) BETWEEN 0.2 * ANY_VALUE(k.n) AND 0.8 * ANY_VALUE(k.n);
+  CREATE OR REPLACE TEMP TABLE g1 AS
+  SELECT g.id, ANY_VALUE(g.unit) AS unit,
+         FARM_FINGERPRINT(CONCAT(CAST(ANY_VALUE(g.g) AS STRING), '|', ARRAY_TO_STRING(ARRAY_AGG(CAST(s.h AS STRING) ORDER BY s.h LIMIT {top_k}), ','))) AS g
+  FROM g0 g LEFT JOIN (SELECT DISTINCT w.id, s.g, s.h FROM cw w JOIN g0 x USING (id) JOIN splitter s ON s.g = x.g AND s.h = w.h) s ON s.id = g.id
+  GROUP BY 1;
+  CREATE OR REPLACE TEMP TABLE core AS
+  SELECT g.unit, g.g, w.h FROM g1 g JOIN (SELECT DISTINCT id, unit, h FROM cw) w USING (id)
+  JOIN common c ON c.unit = w.unit AND c.h = w.h
+  JOIN (SELECT g, COUNT(*) AS n FROM g1 GROUP BY 1) k ON k.g = g.g
+  WHERE k.n >= {min_calls}
+  GROUP BY 1, 2, 3 HAVING COUNT(*) >= {core} * ANY_VALUE(k.n);
+  CREATE OR REPLACE TEMP TABLE hop AS
+  WITH sizes AS (SELECT g, COUNT(*) AS n FROM core GROUP BY 1)
+  SELECT a, MIN(b) AS b FROM (
+    SELECT a.g AS a, b.g AS b FROM core a JOIN core b ON a.unit = b.unit AND a.h = b.h
+    JOIN sizes sa ON sa.g = a.g JOIN sizes sb ON sb.g = b.g
+    GROUP BY 1, 2 HAVING COUNT(*) / (ANY_VALUE(sa.n) + ANY_VALUE(sb.n) - COUNT(*)) >= {same})
+  GROUP BY 1;
+  CREATE OR REPLACE TEMP TABLE newt AS
+  SELECT DISTINCT c.unit, COALESCE(h2.b, h1.b, c.g) AS g, c.h FROM core c LEFT JOIN hop h1 ON h1.a = c.g LEFT JOIN hop h2 ON h2.a = h1.b;
+  CREATE OR REPLACE TEMP TABLE tk AS
+  SELECT g, ANY_VALUE(unit) AS unit, COUNT(*) AS size,
+         FARM_FINGERPRINT(CONCAT(ANY_VALUE(unit), '|', ARRAY_TO_STRING(ARRAY_AGG(CAST(h AS STRING) ORDER BY CAST(h AS STRING) LIMIT {top_k}), ','))) AS site
+  FROM newt GROUP BY 1;
+  INSERT INTO templates SELECT k.unit, k.site, t.h FROM newt t JOIN tk k USING (g);
+  INSERT INTO placed
+  SELECT id, site FROM (
+    SELECT w.id, k.site, COUNT(*) / ANY_VALUE(k.size) AS cover
+    FROM (SELECT DISTINCT id, unit, h FROM cw) w LEFT JOIN placed p USING (id)
+    JOIN newt t ON t.unit = w.unit AND t.h = w.h JOIN tk k ON k.g = t.g
+    WHERE p.id IS NULL GROUP BY 1, 2)
+  WHERE cover >= {contain}
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY cover DESC, site) = 1;
+  SET r = r + 1;
+END WHILE;
+
+CREATE TEMP TABLE call_rows AS SELECT s.* EXCEPT (sys, first_user, tool_names), p.site FROM src s JOIN placed p USING (id);
+
+-- 4. per day-site: the prompt's layout for the cache
+CREATE TEMP TABLE pairs AS
+SELECT site, id, prev FROM (
+  SELECT c.site, c.id, LAG(c.id) OVER (PARTITION BY c.site ORDER BY c.ts, c.id) AS prev FROM call_rows c)
+WHERE prev IS NOT NULL QUALIFY ROW_NUMBER() OVER (PARTITION BY site ORDER BY FARM_FINGERPRINT(id)) <= {pairs};
+CREATE TEMP TABLE lcp AS
+WITH pw AS (SELECT s.id, i, x FROM src s, UNNEST(REGEXP_EXTRACT_ALL(LOWER(s.sys), r'[a-z0-9]+')) x WITH OFFSET i
+            WHERE s.id IN (SELECT id FROM pairs UNION ALL SELECT prev FROM pairs))
+SELECT p.site, p.id, COALESCE(MIN(IF(a.x != b.x, a.i, NULL)), COUNT(*)) AS n
+FROM pairs p JOIN pw a ON a.id = p.id JOIN pw b ON b.id = p.prev AND b.i = a.i GROUP BY 1, 2;
 CREATE TEMP TABLE site_layout AS
-SELECT p.site, AVG(p.static_chars) AS static_chars, AVG(p.dynamic_chars) AS dynamic_chars, AVG(COALESCE(a.static_after, 0)) AS static_after,
-       ANY_VALUE(ts.tool_sets) AS tool_sets
-FROM per_row_s p
-LEFT JOIN (SELECT t.site, t.rid, SUM(t.chars) AS static_after FROM tagged_s t JOIN fixed f ON f.site = t.site AND f.line = t.line
-           JOIN per_row_s q ON q.site = t.site AND q.rid = t.rid WHERE t.off > COALESCE(q.first_dynamic, 1000000000) GROUP BY 1, 2) a
-  ON a.site = p.site AND a.rid = p.rid
-LEFT JOIN (SELECT site, COUNT(DISTINCT tools_hash) AS tool_sets FROM sample_rows GROUP BY 1) ts ON ts.site = p.site
-GROUP BY 1;
+WITH smp AS (SELECT site, id FROM call_rows QUALIFY ROW_NUMBER() OVER (PARTITION BY site ORDER BY FARM_FINGERPRINT(id)) <= {sample}),
+  wr AS (SELECT DISTINCT id, r FROM cw),
+  fixedr AS (SELECT p.site, w.r FROM smp p JOIN wr w USING (id)
+             JOIN (SELECT site, COUNT(*) AS n FROM smp GROUP BY 1) k ON k.site = p.site
+             GROUP BY 1, 2 HAVING COUNT(*) >= 0.5 * ANY_VALUE(k.n)),
+  fx AS (SELECT p.site, p.id, COUNTIF(f.r IS NOT NULL) / COUNT(*) AS fixed_share
+         FROM smp p JOIN wr w USING (id) LEFT JOIN fixedr f ON f.site = p.site AND f.r = w.r GROUP BY 1, 2),
+  agg AS (SELECT p.site, AVG(LENGTH(s.sys)) AS chars, AVG(ARRAY_LENGTH(REGEXP_EXTRACT_ALL(LOWER(s.sys), r'[a-z0-9]+'))) AS words,
+                 AVG(COALESCE(fx.fixed_share, 0)) AS fixed_share
+          FROM smp p JOIN src s USING (id) LEFT JOIN fx USING (site, id) GROUP BY 1),
+  pre AS (SELECT site, APPROX_QUANTILES(n, 2)[OFFSET(1)] AS lead_words FROM lcp GROUP BY 1),
+  st AS (SELECT a.site, a.chars, a.fixed_share * a.chars AS static,
+                LEAST(a.fixed_share * a.chars, COALESCE(SAFE_DIVIDE(p.lead_words, a.words), 0) * a.chars) AS lead
+         FROM agg a LEFT JOIN pre p USING (site))
+SELECT st.site, CAST(st.static AS INT64) AS static_chars, CAST(st.chars - st.static AS INT64) AS dynamic_chars,
+       CAST(st.static - st.lead AS INT64) AS static_after, ts.tool_sets
+FROM st LEFT JOIN (SELECT site, COUNT(DISTINCT tools_hash) AS tool_sets FROM call_rows GROUP BY 1) ts USING (site);
 
--- 4. the ledger: usecase x site x model x day
+-- 5. the ledger: day-site x model (a day-site is one usecase and day)
 CREATE TEMP TABLE prices AS SELECT * FROM UNNEST(@prices);
 CREATE TEMP TABLE ledger_daily AS
 SELECT c.day, c.usecase, c.site, c.model, COUNT(*) AS calls,
@@ -122,67 +171,73 @@ SELECT c.day, c.usecase, c.site, c.model, COUNT(*) AS calls,
 FROM call_rows c LEFT JOIN prices p ON p.model = c.model
 GROUP BY 1, 2, 3, 4;
 
--- 5. gaps: time since the previous call sharing the prefix, bucketed, per site and model over the window
+-- 6. gaps: time since the previous call sharing the prefix, bucketed, per day-site and model
 CREATE TEMP TABLE cache_gaps AS
 WITH seq AS (
   SELECT c.*, TIMESTAMP_DIFF(c.ts, LAG(c.ts) OVER w, SECOND) AS gap,
-         MIN(c.prompt_tokens) OVER (PARTITION BY c.usecase, c.site, c.model, c.prefix_key) AS prefix_tokens
-  FROM call_rows c WINDOW w AS (PARTITION BY c.usecase, c.site, c.model, c.prefix_key ORDER BY c.ts))
-SELECT usecase, site, model, CASE WHEN gap IS NULL THEN 'first' {cases} ELSE 'more' END AS bucket,
+         MIN(c.prompt_tokens) OVER (PARTITION BY c.site, c.model, c.prefix_key) AS prefix_tokens
+  FROM call_rows c WINDOW w AS (PARTITION BY c.site, c.model, c.prefix_key ORDER BY c.ts))
+SELECT day, usecase, site, model, CASE WHEN gap IS NULL THEN 'first' {cases} ELSE 'more' END AS bucket,
        COUNT(*) AS calls, SUM(prefix_tokens) AS prefix_tokens, SUM(prompt_tokens) AS prompt_tokens,
        SUM(cached) AS cached, SUM(written) AS written
-FROM seq GROUP BY 1, 2, 3, 4;
+FROM seq GROUP BY 1, 2, 3, 4, 5;
 """
 
-_SITES = """
-WITH vers AS (
-  SELECT usecase, site, ARRAY_AGG(STRUCT(version, first, last) ORDER BY first) AS versions FROM (
-    SELECT usecase, site, v AS version, MIN(day) AS first, MAX(day) AS last FROM sites_daily, UNNEST(versions) v GROUP BY 1, 2, 3)
-  GROUP BY 1, 2)
-SELECT s.usecase, CAST(s.site AS STRING) AS site, SUM(n) AS n, ANY_VALUE(signature HAVING MAX day) AS signature,
-       MIN(day) AS first_day, MAX(day) AS last_day, ANY_VALUE(v.versions) AS versions,
-       ANY_VALUE(y.static_chars) AS static_chars, ANY_VALUE(y.dynamic_chars) AS dynamic_chars,
-       ANY_VALUE(y.static_after) AS static_after, ANY_VALUE(y.tool_sets) AS tool_sets
-FROM sites_daily s JOIN vers v ON v.usecase IS NOT DISTINCT FROM s.usecase AND v.site = s.site
-LEFT JOIN site_layout y ON y.site = s.site
-GROUP BY 1, 2
+_DAYSITES = """
+SELECT ANY_VALUE(c.usecase) AS usecase, ANY_VALUE(c.day) AS day, CAST(c.site AS STRING) AS site, COUNT(*) AS n,
+       ANY_VALUE(t.template) AS template
+FROM call_rows c JOIN (SELECT site, ARRAY_AGG(DISTINCT h) AS template FROM templates GROUP BY 1) t USING (site)
+GROUP BY c.site
 """
 _LEDGER = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM ledger_daily"
 _GAPS = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM cache_gaps"
-_SAMPLE = """
-SELECT l.`{req}` AS request FROM `{table}` l JOIN call_rows c ON c.id = CAST(l.`{id}` AS STRING) AND c.day = DATE(l.`{time}`)
-WHERE c.site = @site LIMIT 1
+_LAYOUT = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM site_layout"
+# request ids per day-site and model for model audits: the extremes (smallest and largest prompt, heaviest answers)
+# and POOL more at random; only priced calls that answered
+_POOL = """
+SELECT CAST(site AS STRING) AS site, model, day, id, prompt_tokens, completion_tokens FROM call_rows
+WHERE cost IS NOT NULL AND completion_tokens > 0
+QUALIFY ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY FARM_FINGERPRINT(id)) <= {pool}
+     OR ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY prompt_tokens, id) = 1
+     OR ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY prompt_tokens DESC, id) = 1
+     OR ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY completion_tokens DESC, id) <= 2
 """
+# the calls no round placed, with their numbers and windows (up to LEFTOVER per usecase and day: the app groups them
+# across days), and how many there were
+_LEFTOVER = """
+SELECT s.id, s.usecase, s.day, s.model, s.prompt_tokens, s.cached AS cached_tokens, s.written AS written_tokens,
+       s.completion_tokens, s.cost, s.cost + s.cached * (pr.input - pr.cache_read) / 1e6 AS cost_nocache,
+       ARRAY(SELECT DISTINCT h FROM cw WHERE cw.id = s.id) AS template
+FROM src s LEFT JOIN placed p USING (id) LEFT JOIN prices pr ON pr.model = s.model
+WHERE p.id IS NULL
+QUALIFY ROW_NUMBER() OVER (PARTITION BY s.usecase, s.day ORDER BY FARM_FINGERPRINT(s.id)) <= {leftover}
+"""
+_LEFTOVER_COUNT = "SELECT COUNT(*) AS n FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL"
+_SAMPLE = """
+SELECT s.sys, s.first_user, s.tool_names FROM src s JOIN call_rows c USING (id) WHERE c.site = @site LIMIT 1
+"""
+_SAMPLE_ID = "SELECT sys, first_user, tool_names FROM src WHERE id = @id"
 
 
 _USECASES = """
--- generative calls only: chat-format ones (`messages`) are analysed; other generative formats (a `prompt`, or an
--- `input` that is not an embedding's) are counted as not analysed yet; embeddings and the rest are left out
-WITH kinds AS (
-  SELECT `{usecase}` AS usecase, DATE(`{time}`) AS day,
-         JSON_QUERY(`{req}`, '$.messages') IS NOT NULL AS chat,
-         JSON_QUERY(`{req}`, '$.messages') IS NULL
-           AND (JSON_QUERY(`{req}`, '$.prompt') IS NOT NULL OR JSON_QUERY(`{req}`, '$.input') IS NOT NULL)
-           AND NOT REGEXP_CONTAINS(LOWER(COALESCE(JSON_VALUE(`{req}`, '$.model'), '')), r'embed|rerank|moderation|whisper|tts|image')
-           AND COALESCE(JSON_VALUE(`{resp}`, '$.object'), '') != 'list' AS other
-  FROM `{table}` WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY))
-SELECT usecase, COUNTIF(chat) AS calls, COUNTIF(other) AS other_calls, MIN(day) AS first_day, MAX(day) AS last_day
-FROM kinds WHERE chat OR other
+SELECT `{usecase}` AS usecase, COUNT(*) AS calls, MIN(DATE(`{time}`)) AS first_day, MAX(DATE(`{time}`)) AS last_day
+FROM `{table}` WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
 GROUP BY 1 ORDER BY calls DESC
 """
 
 
-def _names(usecase=None):
+def _names():
     c = bq.cfg()
-    scope = "" if usecase is None else " AND `%s` IS NOT DISTINCT FROM @usecase" % c["usecase"]
-    scope_l = "" if usecase is None else " AND l.`%s` IS NOT DISTINCT FROM @usecase" % c["usecase"]
-    return {**c, "lines": _LINES.format(**c), "min_len": MIN_LEN, "stable": STABLE, "template": TEMPLATE,
-            "top_k": TOP_K, "sample": SAMPLE, "scope": scope, "scope_l": scope_l,
+    return {**c, "system": _SYSTEM.format(**c),
+            "window": ", ' ', ".join(["m"] + ["LEAD(m, %d) OVER w" % j for j in range(1, WINDOW)]),
+            "raw_window": ", ' ', ".join(["x"] + ["LEAD(x, %d) OVER w" % j for j in range(1, WINDOW)]),
+            "anchor": ANCHOR, "last": WINDOW - 1, "min_calls": MIN_CALLS, "core": CORE, "same": SAME,
+            "contain": CONTAIN, "top_k": TOP_K, "sample": SAMPLE, "rounds": ROUNDS, "pairs": PAIRS,
             "cases": " ".join("WHEN gap <= %d THEN '%s'" % (secs, name) for name, secs in BUCKETS)}
 
 
 def usecases(days=30):
-    """Every usecase of the window with its call count and days: the cheap list (no JSON column read)."""
+    """Every usecase of the window with its calls (all formats) and days: the usecase and time columns only, cheap."""
     return [dict(r) for r in bq.query(_USECASES.format(**bq.cfg()), {"days": days})]
 
 
@@ -191,18 +246,19 @@ def _prices():
     return [{"model": m, "input": float(p["input"]), "cache_read": float(p["cache_read"])} for m, p in PRICE.items()]
 
 
-class Build:
-    """Run the script once (the whole window, or one usecase), then read its results."""
-    def __init__(self, days=30, usecase=None):
-        self.days, self.usecase = days, usecase
-        self.s = bq.Session()
-        params = {"days": days, "prices": _prices()}
-        if usecase is not None:
-            params["usecase"] = usecase
-        self.s.query(SCRIPT.format(**_names(usecase)), params)
+def _request(row):
+    return {"messages": [{"role": "system", "content": row["sys"]}, {"role": "user", "content": row["first_user"] or ""}],
+            "tools": [{"function": {"name": n}} for n in row["tool_names"] or []]}
 
-    def sites(self):
-        return [dict(r) for r in self.s.query(_SITES)]
+
+class Build:
+    """Run the day script once for days day_from..day_to (dates, inclusive), then read its results."""
+    def __init__(self, day_from, day_to):
+        self.s = bq.Session()
+        self.s.query(SCRIPT.format(**_names()), {"day_from": day_from, "day_to": day_to, "prices": _prices()})
+
+    def day_sites(self):
+        return [dict(r) for r in self.s.query(_DAYSITES)]
 
     def ledger(self):
         return [dict(r) for r in self.s.query(_LEDGER)]
@@ -210,13 +266,21 @@ class Build:
     def gaps(self):
         return [dict(r) for r in self.s.query(_GAPS)]
 
-    def sample_request(self, site):
-        import json
-        rows = self.s.query(_SAMPLE.format(**_names()), {"site": int(site)})
-        if not rows:
-            return None
-        r = rows[0]["request"]
-        return json.loads(r) if isinstance(r, str) else r
+    def layout(self):
+        return {r["site"]: dict(r) for r in self.s.query(_LAYOUT)}
+
+    def pool(self):
+        return [dict(r) for r in self.s.query(_POOL.format(pool=POOL))]
+
+    def leftover(self):
+        """(the unplaced calls, capped per usecase and day; how many there were in all)"""
+        rows = [dict(r) for r in self.s.query(_LEFTOVER.format(leftover=LEFTOVER))]
+        return rows, self.s.query(_LEFTOVER_COUNT)[0]["n"]
+
+    def sample_request(self, site=None, call_id=None):
+        """One call (of a day-site, or by id) as a request body: system prompt, first user message, tool names."""
+        rows = self.s.query(_SAMPLE, {"site": int(site)}) if site else self.s.query(_SAMPLE_ID, {"id": call_id})
+        return _request(rows[0]) if rows else None
 
     def close(self):
         self.s.close()

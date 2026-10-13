@@ -26,7 +26,6 @@ from app import catalog
 from app.services import db
 from core import tasks
 from core.identity import store
-from core.ledger import build
 from validation import jobs
 
 STRATEGIES = {
@@ -87,13 +86,6 @@ def _now():
 
 
 # ----------------------------------------------------------------------------------------------------- sampling
-_POOL = """
-SELECT CAST(site AS STRING) AS site, id, prompt_tokens, completion_tokens FROM call_rows
-WHERE cost IS NOT NULL AND completion_tokens > 0{scope}
-QUALIFY ROW_NUMBER() OVER (PARTITION BY site ORDER BY FARM_FINGERPRINT(id)) <= 2000
-"""
-
-
 def pick(rows, n=DEFAULT_SAMPLES):
     """Representative requests of one call-site from (id, prompt_tokens, completion_tokens) rows: the smallest and
     largest prompts, the quartiles between, the two heaviest answers, then random ones up to `n`."""
@@ -106,7 +98,8 @@ def pick(rows, n=DEFAULT_SAMPLES):
     def take(r, why):
         if r["id"] not in chosen and len(out) < n:
             chosen.add(r["id"])
-            out.append({"id": r["id"], "why": why, "prompt_tokens": r["prompt_tokens"], "completion_tokens": r["completion_tokens"]})
+            out.append({"id": r["id"], "why": why, "prompt_tokens": r["prompt_tokens"], "completion_tokens": r["completion_tokens"],
+                        "day": r.get("day")})
     take(by_prompt[0], "smallest prompt")
     take(by_prompt[-1], "largest prompt")
     for q, why in ((0.5, "median prompt"), (0.25, "quartile prompt"), (0.75, "quartile prompt")):
@@ -120,26 +113,11 @@ def pick(rows, n=DEFAULT_SAMPLES):
     return out
 
 
-def sample(usecase, site=None, n=DEFAULT_SAMPLES, days=30):
-    """{site: [samples]} for the usecase (or one of its call-sites), from the log, in one BigQuery session. The
-    call-sites found are upserted on the way (identity, a profile for new ones), so any usecase can be audited."""
-    from core import profiler
-    from core.ledger.refresh import _texts
-    b = build.Build(days, usecase or "")
-    try:
-        found = b.sites()
-        store.sync(found, b.ledger(), days, usecase or "", drop=False)
-        for f in found:
-            if (not site or str(f["site"]) == site) and not profiler.get(f["site"]):
-                profiler.profile(f["site"], *_texts(b.sample_request(f["site"]) or {}))
-        scope = " AND CAST(site AS STRING) = @site" if site else ""
-        rows = b.s.query(_POOL.format(scope=scope), {"site": site} if site else None)
-    finally:
-        b.close()
-    by = defaultdict(list)
-    for r in rows:
-        by[r["site"]].append(dict(r))
-    return {s: pick(rs, n) for s, rs in by.items()}
+def sample(usecase, site=None, n=DEFAULT_SAMPLES):
+    """{site: [samples]} for the usecase (or one of its call-sites), from the request ids the day processing kept
+    per call-site (the extremes and some at random, every day of the window). No BigQuery here."""
+    sites = [site] if site else [r["site"] for r in store.by_usecase(usecase)]
+    return {s: pick(rows, n) for s, rows in store.samples(sites).items()}
 
 
 # --------------------------------------------------------------------------------------------------- candidates
@@ -257,15 +235,13 @@ def _set(audit_id, **vals):
 
 def estimate(usecase, site=None, n=DEFAULT_SAMPLES, n_candidates=1):
     """A rough cost before running: per sample, the original re-run 4x and each candidate 5x at the site's average
-    tokens, plus the judge; from the call-site records' series."""
+    tokens, plus the judge; from the call-sites' day rows."""
     from app.services.downgrade_refset import spec as app_spec
     spec = app_spec()
-    recs = [store.get(site)] if site else store.by_usecase(usecase)
+    sites = [site] if site else [r["site"] for r in store.by_usecase(usecase)]
     usd = 0.0
-    for rec in recs:
-        if not rec:
-            continue
-        for model, days in rec["series"].items():
+    for by_model in store.series(sites).values():
+        for model, days in by_model.items():
             calls = sum(d.get("calls") or 0 for d in days.values()) or 1
             pt = sum(d.get("prompt_tokens") or 0 for d in days.values()) / calls
             ct = sum(d.get("completion_tokens") or 0 for d in days.values()) / calls
@@ -314,7 +290,7 @@ def start_requests(items, strategy="manual", asked=(), max_budget_usd=None, call
 
 
 def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_SAMPLES, max_budget_usd=None,
-          trigger="user", judge_model=None, days=30, auto=False, callback_url=None):
+          trigger="user", judge_model=None, auto=False, callback_url=None):
     """Sample, build the items and queue the validation, for an audit row that already exists. Run again (its worker
     died), it finishes what is missing and never queues the job twice."""
     from app.services.downgrade_refset import spec as app_spec
@@ -331,11 +307,12 @@ def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_
             raise ValueError("strategy must be one of %s" % ", ".join(STRATEGIES))
         if strategy in ("release", "manual", "custom") and not asked and not auto:
             raise ValueError("%s needs model names" % strategy)
-        samples = sample(usecase, site, n, days)
+        samples = sample(usecase, site, n)
         if not samples:
-            raise ValueError("no requests to sample for this scope")
+            raise ValueError("no requests to sample for this scope: the log's days are not processed yet")
         ids = [s["id"] for ss in samples.values() for s in ss]
-        bodies = _logged_bodies(ids)
+        oldest = min(s["day"] for ss in samples.values() for s in ss if s.get("day")) if ids else None
+        bodies = _logged_bodies(ids, oldest)
         items = []
         for st, ss in samples.items():
             for s in ss:
@@ -477,11 +454,12 @@ def usecase_rollup(usecase):
     """Per usecase, from what the audits found: on how many call-sites a cheaper model passes (valid verdicts), and
     the saving at the window's volume."""
     recs = store.by_usecase(usecase or None)
+    series = store.series([r["site"] for r in recs])
     sites, with_pick, saving, base, picks = 0, 0, 0.0, 0.0, {}
     for r in recs:
         sites += 1
         k = knowledge(r["site"], r)
-        cost = sum(d.get("cost") or 0 for days in r["series"].values() for d in days.values())
+        cost = sum(d.get("cost") or 0 for days in series[r["site"]].values() for d in days.values())
         base += cost
         if k["cheapest"]:
             with_pick += 1

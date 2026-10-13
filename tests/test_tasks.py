@@ -78,12 +78,11 @@ def test_the_functions_own_error_fails_the_task_without_a_retry():
     assert t["status"] == "failed" and "bad input" in t["error"] and tasks.claim("w2") is None
 
 
-def test_a_usecase_is_not_queued_for_analysis_twice():
+def test_the_missing_days_are_queued_as_one_task_once():
     from core.ledger import refresh
-    assert refresh.start("billing") is True
-    assert refresh.start("billing") is False
-    assert refresh.start(None) is True
-    assert sorted(refresh.running()) == ["*", "billing"]
+    assert len(refresh.missing_days()) == refresh.window()
+    assert refresh.start() is True and refresh.running() == ["*"]
+    assert refresh.start() is False                              # queued already
 
 
 def test_sampling_rerun_after_a_crash_does_not_queue_the_job_twice(monkeypatch):

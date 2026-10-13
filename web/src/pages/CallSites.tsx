@@ -15,9 +15,10 @@ type Site = {
 }
 type Pick = { model: string; cost_vs_original_pct?: number; latency_vs_original_pct?: number; audit: string } | null
 type Models = { candidates: Record<string, Verdict & { audit: string; at: string; trigger: string; valid?: boolean }>; cheapest?: Pick; fastest?: Pick } | null
-type UsecaseRow = { usecase: string | null; calls: number; other_calls?: number | null; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; analysing: boolean; error: string | null; decisions?: { models?: { sites: number; with_cheaper: number; saving: number; cost: number } } }
+type Days = { window: number; done: string[]; queued: string[]; missing: string[] }
+type UsecaseRow = { usecase: string | null; calls: number; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; error: string | null; decisions?: { models?: { sites: number; with_cheaper: number; saving: number; cost: number } } }
 type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; usecases: UsecaseRow[] }
-type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean }
+type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean; days: Days }
 type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null } }
 
 const ucPath = (u: string | null) => `/usecases/${encodeURIComponent(u ?? 'None')}`
@@ -34,7 +35,7 @@ export function CallSiteUsecases() {
   return (
     <Page crumbs={crumbs}>
       <div className="head">
-        <div><h1>Usecases</h1><span className="muted">each usecase is made of call-sites: one prompt template each, found from the instruction lines its calls share, named by the profiler{list.data?.listed_at && <> · list from {when(list.data.listed_at)}{list.data.reloading && ', reloading'}</>}</span></div>
+        <div><h1>Usecases</h1><span className="muted">{list.data?.listed_at && <>list from {when(list.data.listed_at)}{list.data.reloading && ', reloading'}</>}</span></div>
         <div className="row"><input className="input" placeholder="Find a usecase" value={q} onChange={(e) => { setQ(e.target.value); setParams({ q: e.target.value }) }} /><button className="btn" onClick={() => get(`/suite/callsites/usecases?reload=true`).then(() => list.refetch())}>Reload list</button></div>
       </div>
       {list.isPending ? <Loading /> : list.isError ? <Failed error={list.error} /> : !list.data.usecases.length ? (
@@ -48,10 +49,10 @@ export function CallSiteUsecases() {
               {list.data.usecases.map((u) => (
                 <tr key={u.usecase ?? 'None'}>
                   <td><Link to={ucPath(u.usecase)}>{usecaseName(u.usecase)}</Link></td>
-                  <td className="num mono">{u.calls.toLocaleString('en-US')}{u.other_calls ? <div className="muted" title="generative calls in another format (not chat): counted, not analysed yet">+{u.other_calls.toLocaleString('en-US')} other</div> : null}</td>
+                  <td className="num mono">{u.calls.toLocaleString('en-US')}</td>
                   <td className="muted nowrap">{u.first_day} → {u.last_day}</td>
                   <td className="num mono">{u.sites ?? '—'}</td>
-                  <td>{u.analysing || list.data.running.includes(u.usecase ?? '') ? <span className="chip">analysing…</span> : u.error ? <span className="chip warn" title={u.error}>failed</span> : u.analysed_at ? <span className="muted nowrap">{when(u.analysed_at)}</span> : <span className="muted">open to analyse</span>}</td>
+                  <td>{list.data.running.length ? <span className="chip">processing days…</span> : u.error ? <span className="chip warn" title={u.error}>failed</span> : u.analysed_at ? <span className="muted nowrap">{when(u.analysed_at)}</span> : <span className="muted">no day processed yet</span>}</td>
                 </tr>
               ))}
             </tbody>
@@ -92,11 +93,12 @@ export function CallSiteUsecase() {
   return (
     <Page crumbs={crumbs}>
       <div className="head">
-        <div><h1>{usecaseName(u.usecase)}</h1><span className="muted">{u.calls.toLocaleString('en-US')} calls in the window{u.sites.length > 0 && <> · made of {count(u.sites.length, 'call-site')}{calls !== u.calls && ` (${calls.toLocaleString('en-US')} of them chat calls)`}</>} · derived from the log, no source code needed{u.analysed_at && <> · analysed {when(u.analysed_at)}</>}</span></div>
-        <div className="row"><Link className="btn primary" to={`/audit/models?usecase=${encodeURIComponent(u.usecase ?? 'None')}`}>Audit models</Link><button className="btn" disabled={u.analysing} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? 'Analysing…' : 'Analyse again'}</button></div>
+        <div><h1>{usecaseName(u.usecase)}</h1><span className="muted">{u.calls.toLocaleString('en-US')} calls in the window{u.sites.length > 0 && <> · made of {count(u.sites.length, 'call-site')}{calls !== u.calls && ` (${calls.toLocaleString('en-US')} of them chat calls)`}</>}{u.analysed_at && <> · analysed {when(u.analysed_at)}</>}</span></div>
+        <div className="row"><Link className="btn primary" to={`/audit/models?usecase=${encodeURIComponent(u.usecase ?? 'None')}`}>Audit models</Link><button className="btn" disabled={u.analysing || !u.days.missing.length} title={u.days.missing.length ? `process ${u.days.missing.length} day(s) of the log not processed yet (every usecase)` : 'every day of the window is processed'} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? `Processing ${u.days.queued.length} day(s)…` : u.days.missing.length ? `Process ${u.days.missing.length} new day(s)` : 'Up to date'}</button></div>
       </div>
-      {u.analysing && !u.sites.length && <p className="empty">Analysing this usecase from the log: finding its call-sites, naming them, reading their cache behaviour. Usually under a minute.</p>}
-      {u.error && <p className="error" role="alert">The last analysis failed: {u.error}</p>}
+      {u.analysing && !u.sites.length && <p className="empty">Processing {u.days.queued.length} day(s) of the log…</p>}
+      {!u.analysing && !u.sites.length && u.days.missing.length > 0 && <p className="empty">No day of the log processed yet.</p>}
+      {u.error && <p className="error" role="alert">The last processing failed: {u.error}</p>}
       {u.decisions?.models && u.decisions.models.with_cheaper > 0 && <p><b>A cheaper model passes on {u.decisions.models.with_cheaper} of {u.decisions.models.sites} call-sites</b>: about {money(u.decisions.models.saving, 2)} of {money(u.decisions.models.cost, 2)} spent in the window.</p>}
       {u.sites.map((s) => (
         <section key={s.site} className="panel site-card">
@@ -158,15 +160,14 @@ export function CallSite() {
       <div className="kpis">
         <Kpi label="Calls" value={s.calls.toLocaleString('en-US')} note={`last ${s.window_days} days, ${s.first_day} → ${s.last_day}`} />
         <Kpi label="Prompt versions" value={s.versions.length} note={s.versions.length > 1 ? 'revisions seen in the window' : 'unchanged in the window'} />
-        <Kpi label="Fingerprint lines" value={s.signature.length} note="stable instruction lines" />
+        <Kpi label="Same every call" value={pct(s.static_chars / ((s.static_chars + s.dynamic_chars) || 1))} note="of the system prompt's text" />
         <Kpi label="Profiled" value={p ? 'yes' : 'no'} note={p ? `${when(p.created_at ?? '')} by ${p.model}` : 'profiled on the next refresh'} />
       </div>
 
       <section className="panel story">
         <div className="pad">
           <h2>Identity: how its calls are recognised</h2>
-          <p>A call belongs to this call-site when its system prompt contains these lines (numbers masked as #). They are the longest lines that at least half of the usecase's calls share; everything else in the prompt is per-call content or a revision.</p>
-          <ol className="sig">{s.signature.map((l, i) => <li key={i}><code>{l}</code></li>)}</ol>
+          <pre className="sig">{s.signature.join('\n')}</pre>
           {s.versions.length > 1 && (
             <>
               <h3>Versions</h3>

@@ -9,6 +9,7 @@ import { CallSite, CallSiteUsecase, CallSiteUsecases } from './pages/CallSites'
 import { ModelAuditDetail, ModelAudits } from './pages/ModelAudits'
 import How from './pages/How'
 import { Page } from './ui'
+import Schedules from './pages/Schedules'
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="audit/cache/usecases/:usecase" element={<CacheUsecase />} />
         <Route path="audit/cache/sites/:site" element={<CacheSite />} />
         <Route path="models" element={<Models />} />
+        <Route path="schedules" element={<Schedules />} />
         <Route path="models/migrations/:provider" element={<Migrations />} />
         <Route path="*" element={<Page crumbs={[]}><p className="empty">No such page.</p></Page>} />
       </Route>

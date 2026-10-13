@@ -9,7 +9,7 @@ import threading
 import traceback
 
 from app.services.llm_client import Unreachable
-from core import tasks
+from core import schedule, tasks
 from validation import jobs
 
 POLL_S = 2.0
@@ -21,6 +21,7 @@ _held = {}                  # worker id -> (release, token) of the task or group
 def loop(worker, stop):
     while not stop.is_set():
         try:
+            schedule.tick()                            # queue any due scheduled job (one instance wins it)
             task = tasks.claim(worker)                 # first: sampling and analyses are short and unblock the rest
             if task:
                 _held[worker] = (tasks.release, task[1])

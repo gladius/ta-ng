@@ -10,14 +10,15 @@ api = APIRouter(prefix="/api/audit/cache", dependencies=[Depends(require_key)], 
 
 
 def _status():
-    return {"running": "*" in refresh.running(), "error": None, "analysing": refresh.running()}
+    from app.web.callsites import days_status
+    return {"running": bool(refresh.running()), "error": None, "analysing": refresh.running(), "days": days_status()}
 
 
 @api.get("/overview")
 def overview():
     o = query.overview()
     if not o:
-        raise HTTPException(404, "no usecase analysed yet: open a usecase, or analyse the whole window")
+        raise HTTPException(404, "no day of the log processed yet: process the new days first")
     return {**o, "status": _status()}
 
 
@@ -38,10 +39,9 @@ def site(site: str):
 
 
 @api.post("/refresh")
-def start_refresh(days: int = 30):
-    """Analyse the whole window (every usecase); the usecases list is reloaded first."""
-    refresh.list_usecases(days)
-    return {"started": refresh.start(None, days), **_status()}
+def start_refresh():
+    """Process the log's days not processed yet (every usecase)."""
+    return {"queued": refresh.start(), **_status()}
 
 
 @api.get("/refresh")

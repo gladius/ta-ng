@@ -129,11 +129,12 @@ def preview(strategy: str = "cheaper", usecases: str = "", site: Optional[str] =
         raise HTTPException(422, "strategy must be one of %s" % ", ".join(audits.STRATEGIES))
     asked = [m for m in models.split(",") if m]
     recs = [store.get(site)] if site else [r for u in usecases.split(",") if u for r in store.by_usecase(_uc(u))]
+    series = store.series([r["site"] for r in recs if r])
     out = []
     for r in recs:
         if not r:
             continue
-        for m in sorted(r["series"]):
+        for m in sorted(series[r["site"]]):
             out.append({"usecase": r["usecase"], "site": r["site"], "name": (r["profile"] or {}).get("name") or r["site"],
                         "model": m, "candidates": audits.candidates_for(m, strategy, asked, rec=r)})
     unknown = [u for u in usecases.split(",") if u and not store.by_usecase(_uc(u))]

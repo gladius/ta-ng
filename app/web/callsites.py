@@ -1,15 +1,13 @@
 """Usecases and call-sites: the cheap list (reloaded when stale), one usecase analysed on demand, one call-site's
 identity, profile and decisions."""
-import threading
-
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.web.public import require_key
+from core import tasks
 from core.identity import store
 from core.ledger import refresh
 
 api = APIRouter(prefix="/api/suite/callsites", dependencies=[Depends(require_key)], include_in_schema=False)
-_list = {"running": False}
 
 
 def _cache_decision(site):
@@ -22,25 +20,16 @@ def _with_profile(s):
     return {**s, "name": (p or {}).get("name") or (s["signature"][0][:60] if s["signature"] else s["site"])}
 
 
-def _reload_list():
-    """Reload the usecases list in the background, once at a time."""
-    if _list["running"]:
-        return True
-
-    def go():
-        try:
-            refresh.list_usecases()
-        finally:
-            _list["running"] = False
-    _list["running"] = True
-    threading.Thread(target=go, daemon=True).start()
-    return True
+def _reloading():
+    return "reload_usecases" in tasks.pending("reload_usecases")
 
 
 @api.get("/usecases")
 def usecases(q: str | None = None, page: int = 1, per_page: int = 50, reload: bool = False):
     """The usecases of the log. The list reloads in the background when older than 12 h (or on reload=true)."""
-    reloading = _list["running"] or ((reload or refresh.list_is_stale()) and _reload_list())
+    if (reload or refresh.list_is_stale()) and not _reloading():
+        tasks.add("reload_usecases", {"days": 30}, key="reload_usecases")
+    reloading = _reloading()
     out = store.usecase_list(q=q, page=max(1, page), per_page=min(200, max(1, per_page)))
     at = store.listed_at()
     return {**out, "listed_at": at.isoformat(timespec="seconds") if at else None, "reloading": bool(reloading),
@@ -49,28 +38,36 @@ def usecases(q: str | None = None, page: int = 1, per_page: int = 50, reload: bo
 
 @api.get("/usecases/{usecase}")
 def usecase(usecase: str):
-    """One usecase with its call-sites; analysed in the background on first open, the answer saying `analysing`."""
+    """One usecase with its call-sites, from the log's days processed so far."""
     uc = None if usecase == "None" else usecase
     u = store.get_usecase(uc)
     if not u:
         raise HTTPException(404, "unknown usecase")
-    if u["analysed_at"] is None and not u["error"]:
-        refresh.start(uc or "")                          # queued once: a pending one is not queued again
     sites = store.by_usecase(uc)
     from modules.models import audits
     for s in sites:
         s["decisions"] = {"models": audits.knowledge(s["site"], s), "router": s["choice"]}
     u = {**u, "decisions": {"models": audits.usecase_rollup(uc)}}
     return {**u, "sites": [{**_with_profile(s), "cache": _cache_decision(s["site"])} for s in sites],
-            "analysing": (uc or "") in refresh.running()}
+            "analysing": bool(refresh.running()), "days": days_status()}
+
+
+def days_status():
+    """Which days of the window are processed, queued, or missing."""
+    done, missing = store.days_done(), refresh.missing_days()
+    return {"window": refresh.window(), "done": sorted(done), "queued": missing if refresh.running() else [],
+            "missing": [] if refresh.running() else missing}
 
 
 @api.post("/usecases/{usecase}/analyse")
 def analyse_usecase(usecase: str):
-    uc = None if usecase == "None" else usecase
-    if not store.get_usecase(uc):
-        raise HTTPException(404, "unknown usecase")
-    return {"started": refresh.start(uc or ""), "running": refresh.running()}
+    """Process the log's days not processed yet (every usecase: one read per day serves them all)."""
+    return {"queued": refresh.start(), "days": days_status()}
+
+
+@api.get("/days")
+def days():
+    return days_status()
 
 
 @api.get("/{site}")

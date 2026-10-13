@@ -107,7 +107,7 @@ export function CacheOverview() {
     <Page crumbs={crumbs}>
       <div className="head">
         <div><h1>Cache audit</h1><Built at={o.built_at} /></div>
-        <div className="row"><WindowPick n={n} set={setN} max={o.window} /><button className="btn" onClick={() => refresh.mutate()} disabled={refresh.isPending || o.status.running} title="Analyse every usecase of the window; single usecases are analysed when opened">{o.status.running ? 'Analysing all…' : 'Analyse all usecases'}</button></div>
+        <div className="row"><WindowPick n={n} set={setN} max={o.window} /><button className="btn" onClick={() => refresh.mutate()} disabled={refresh.isPending || o.status.running || !o.status.days.missing.length} title={o.status.days.missing.length ? `process ${o.status.days.missing.length} day(s) of the log not processed yet` : 'every day of the window is processed'}>{o.status.running ? `Processing ${o.status.days.queued.length} day(s)…` : o.status.days.missing.length ? `Process ${o.status.days.missing.length} new day(s)` : 'Up to date'}</button></div>
       </div>
       {o.status.error && <p className="error" role="alert">The last refresh failed: {o.status.error}</p>}
       <div className="kpis">

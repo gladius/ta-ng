@@ -1,5 +1,5 @@
-"""What the cache pages show, read from the call-site records (their series and cache findings). Same JSON shapes as
-before: the org and usecase levels are sums over records."""
+"""What the cache pages show, read from the call-site records (their day rows and cache findings): the org and
+usecase levels are sums over call-sites."""
 from collections import defaultdict
 
 from core.identity import store
@@ -42,9 +42,9 @@ def _sum_days(blocks):
 _EMPTY_STORY = {"now": "", "why": "", "action": "", "worth": 0, "share": 0, "proof": None, "cause": None}
 
 
-def _site_block(rec):
+def _site_block(rec, series):
     cache = rec["cache"] or {}
-    days = _series_total(rec["series"])
+    days = _series_total(series.get(rec["site"]) or {})
     static = rec.get("static_chars") or 0
     return {"site": rec["site"], "usecase": rec["usecase"], "anchors": rec["signature"], "unsure": rec["unsure"],
             "versions": rec["versions"],
@@ -59,7 +59,8 @@ def usecase(uc):
     recs = store.by_usecase(uc)
     if not recs:
         return None
-    sites = [_site_block(r) for r in recs]
+    series = store.series([r["site"] for r in recs])
+    sites = [_site_block(r, series) for r in recs]
     days = _sum_days(sites)
     return {"built_at": max((s["built_at"] or "" for s in sites), default=None) or None, "window": sites[0]["window"],
             "usecase": uc, "total": total(list(days.values())), "days": days, "trend": trend(days),
@@ -69,7 +70,7 @@ def usecase(uc):
 
 def site(site_id):
     rec = store.get(site_id)
-    return _site_block(rec) if rec else None
+    return _site_block(rec, store.series([site_id])) if rec else None
 
 
 def _brief(s):
@@ -84,7 +85,8 @@ def overview():
     recs = store.all_sites()
     if not recs:
         return None
-    sites = [_site_block(r) for r in recs]
+    series = store.series([r["site"] for r in recs])
+    sites = [_site_block(r, series) for r in recs]
     by_uc = defaultdict(list)
     for s in sites:
         by_uc[s["usecase"]].append(s)

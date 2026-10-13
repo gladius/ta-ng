@@ -352,10 +352,16 @@ class ResultsPage(_Out):
     results: list[Result]
 
 
-def _logged_bodies(ids):
-    """{request_id: (request, response)} from BigQuery, for the model checks (same lookup as the API's items)."""
+def _logged_bodies(ids, oldest_day=None):
+    """{request_id: (request, response)} from BigQuery for an audit's samples: the log's days back to `oldest_day`."""
+    import datetime
     from connectors.bigquery import source
-    return source.lookup(set(ids)) if ids else {}
+    if not ids:
+        return {}
+    days = source.LOOKUP_DAYS
+    if oldest_day:
+        days = (datetime.date.today() - datetime.date.fromisoformat(str(oldest_day))).days + 2
+    return source.lookup(set(ids), days)
 
 
 def _logged(items):

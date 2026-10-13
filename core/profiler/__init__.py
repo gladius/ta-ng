@@ -42,7 +42,7 @@ def get(site):
     return s["profile"] if s else None
 
 
-def profile(site, system_prompt, tools, first_user=""):
+def profile(site, system_prompt, tools=(), first_user=""):
     """The profile of `site`, made now if missing (one model call, the request read whole)."""
     p = get(site)
     if p:

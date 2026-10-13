@@ -227,7 +227,14 @@ def usecase_audit(eng, rids):
         if listed["usecases"] and not listed["reloading"]:
             break
         time.sleep(2)
-    ucs = [u for u in listed["usecases"] if (u["calls"] or 0) >= 20 and not (u["usecase"] or "").startswith("jev-")]
+    http("/api/audit/cache/refresh", {})                 # a fresh database: the log's days get processed first
+    for _ in range(120):
+        st = http("/api/audit/cache/refresh")[2]
+        if st["days"]["done"] and not st["running"]:
+            break
+        time.sleep(10)
+    listed = http("/api/suite/callsites/usecases?per_page=200")[2]
+    ucs = [u for u in listed["usecases"] if (u["sites"] or 0) >= 1 and (u["calls"] or 0) >= 20 and not (u["usecase"] or "").startswith("jev-")]
     uc = os.environ.get("E2E_USECASE") or min(ucs, key=lambda u: u["calls"])["usecase"]
     s, _, jc = http("/api/audit/models", {"usecases": [uc], "strategy": "manual", "models": ["gpt-5.4-nano"],
                                          "samples": 3, "judge_model": JUDGE, "max_budget_usd": 0.5})
@@ -250,7 +257,7 @@ def main():
     if "--reset" in sys.argv:
         with eng.begin() as c:
             for t in ("validation_callbacks", "validation_cells", "validation_items", "validation_jobs", "model_audits",
-                      "tasks"):
+                      "tasks", "schedules", "site_days", "site_samples", "unplaced", "processed_days", "callsites", "usecases"):
                 c.execute(sa.text("DROP TABLE IF EXISTS %s" % t))
         say("dropped the audit tables (--reset)")
     srv = ThreadingHTTPServer(("127.0.0.1", CB_PORT), CB)

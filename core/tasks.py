@@ -18,7 +18,9 @@ from app.services import db
 
 KINDS = {
     "sample_audit": "modules.models.audits:_fill",
-    "analyse_usecase": "core.ledger.refresh:analyse",
+    "process_days": "core.ledger.refresh:process_missing",
+    "profile_site": "core.profiler:profile",
+    "reload_usecases": "core.ledger.refresh:list_usecases",
 }
 HEARTBEAT_S = 20
 STALE_S = 120

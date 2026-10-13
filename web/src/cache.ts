@@ -32,7 +32,7 @@ export type Overview = {
   built_at: string | null; window: number; daily: Record<string, Totals>; total: Totals; saving: number; trend: Trend
   opportunities: Brief[]; dropped: Brief[]
   usecases: { usecase: string; total: Totals; saving: number; trend: Trend; sites: number; unsure: boolean; causes: Cause[] }[]
-  status: { running: boolean; error: string | null; finished: string | null }
+  status: { running: boolean; error: string | null; days: { window: number; done: string[]; queued: string[]; missing: string[] } }
 }
 export type UsecasePage = { built_at: string | null; window: number; usecase: string; total: Totals; days: Record<string, Totals>; trend: Trend; saving: number; sites: Site[] }
 export type SitePage = Site & { built_at: string | null; window: number; usecase: string }

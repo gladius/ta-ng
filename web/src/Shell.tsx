@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
-  ArrowUpRight, BookOpen, Braces, Database, Fingerprint, LayoutDashboard, Menu, Route as RouteIcon, TrendingDown, X,
+  ArrowUpRight, BookOpen, Braces, Clock, Database, Fingerprint, LayoutDashboard, Menu, Route as RouteIcon, TrendingDown, X,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -59,6 +59,7 @@ export default function Shell() {
         </div>
         <div className="group foot">
           <Entry icon={BookOpen} label="Model catalog" to="/models" />
+          <Entry icon={Clock} label="Schedules" to="/schedules" />
           <Entry icon={Braces} label="API reference" href="/docs" />
         </div>
       </nav>

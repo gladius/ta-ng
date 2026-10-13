@@ -338,6 +338,8 @@ def test_a_worker_thread_survives_an_unexpected_error(monkeypatch):
             raise RuntimeError("server closed the connection unexpectedly")
         stop.set()
     monkeypatch.setattr(jobs, "claim", claim)
+    monkeypatch.setattr(worker.schedule, "tick", lambda: [])     # offline: no scheduled job, no task
+    monkeypatch.setattr(worker.tasks, "claim", lambda w: None)
     monkeypatch.setattr(worker, "ERROR_WAIT_S", 0)
     worker.loop("w1", stop)                                      # returns only because it carried on and claimed again
     assert len(calls) == 2
