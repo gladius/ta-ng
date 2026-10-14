@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.web.public import require_key
 from core import tasks
 from core.identity import store
-from core.ledger import refresh
+from core.ledger import bq, refresh
 
 api = APIRouter(prefix="/api/suite/callsites", dependencies=[Depends(require_key)], include_in_schema=False)
 
@@ -33,7 +33,7 @@ def usecases(q: str | None = None, page: int = 1, per_page: int = 50, reload: bo
     out = store.usecase_list(q=q, page=max(1, page), per_page=min(200, max(1, per_page)))
     at = store.listed_at()
     return {**out, "listed_at": at.isoformat(timespec="seconds") if at else None, "reloading": bool(reloading),
-            "running": refresh.running()}
+            "running": refresh.running(), "skipped": bq.skipped()}
 
 
 @api.get("/usecases/{usecase}")

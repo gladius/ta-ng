@@ -87,7 +87,7 @@ SELECT CAST(`{id}` AS STRING) AS id, COALESCE(`{usecase}`, '') AS usecase, DATE(
        {system} AS sys,
        SUBSTR(JSON_VALUE(`{req}`, '$.messages[1].content'), 1, 2000) AS first_user
 FROM `{table}`
-WHERE DATE(`{time}`) BETWEEN @day_from AND @day_to AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL);
+WHERE DATE(`{time}`) BETWEEN @day_from AND @day_to AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL AND {skip});
 
 -- 2. place every call by the fingerprints the app knows (its usecase's), one pass, row by row
 CREATE TEMP TABLE fp AS
@@ -259,7 +259,7 @@ _SAMPLE_ID = "SELECT sys, first_user, tool_names FROM src WHERE id = @id"
 
 _USECASES = """
 SELECT `{usecase}` AS usecase, COUNT(*) AS calls, MIN(DATE(`{time}`)) AS first_day, MAX(DATE(`{time}`)) AS last_day
-FROM `{table}` WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
+FROM `{table}` WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND {skip}
 GROUP BY 1 ORDER BY calls DESC
 """
 
@@ -275,7 +275,7 @@ def _names():
     layout = "SELECT id, CAST(site AS STRING) AS unit, sys FROM lay_smp"
     leftover = ("SELECT s.id, s.unit, s.sys FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL "
                 "QUALIFY ROW_NUMBER() OVER (PARTITION BY s.usecase, s.day ORDER BY FARM_FINGERPRINT(s.id)) <= %d" % LEFTOVER)
-    return {**c, "system": _SYSTEM.format(**c), "words_sys": words,
+    return {**c, "system": _SYSTEM.format(**c), "words_sys": words, "skip": bq.SKIP_FILTER.format(col=c["usecase"]),
             "win_sample": _WIN.format(q=sample, **win), "win_layout": _WIN.format(q=layout, **win),
             "win_leftover": _WIN.format(q=leftover, **win),
             "place": _PLACE.format(hits=HITS), "min_calls": MIN_CALLS, "core": CORE, "same": SAME, "markers": MARKERS,
@@ -285,7 +285,9 @@ def _names():
 
 def usecases(days=30):
     """Every usecase of the window with its calls (all formats) and days: the usecase and time columns only, cheap."""
-    return [dict(r) for r in bq.query(_USECASES.format(**bq.cfg()), {"days": days})]
+    c = bq.cfg()
+    return [dict(r) for r in bq.query(_USECASES.format(skip=bq.SKIP_FILTER.format(col=c["usecase"]), **c),
+                                      {"days": days, "skip": bq.skipped()})]
 
 
 def _prices():
@@ -328,7 +330,8 @@ class Build:
         known = [{"usecase": k["usecase"] or "", "site": str(k["site"]), "markers": k["markers"], "template": k["template"]}
                  for k in known] or [{"usecase": "\x00", "site": "0", "markers": "", "template": ""}]   # a typed, empty array
         from core import tasks
-        self.s.script(SCRIPT.format(**_names()), {"day_from": day_from, "day_to": day_to, "prices": _prices(), "known": known},
+        self.s.script(SCRIPT.format(**_names()), {"day_from": day_from, "day_to": day_to, "prices": _prices(), "known": known,
+                                                  "skip": bq.skipped()},
                       progress=lambda text: tasks.note("%s: %s" % (day_from, _plain(text))))
 
     def _read(self, sql, params=None):

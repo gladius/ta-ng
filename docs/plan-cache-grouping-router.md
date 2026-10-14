@@ -233,3 +233,9 @@ synthetic log exact, hard bench 24/24 (the 15-call site left to the app's cross-
 a router: a substring check on an incoming request. Found and fixed: BigQuery evaluates SELECT expressions before
 QUALIFY (sample first, then compute), and carrying an array into UNNEST rows copies it per row (quadratic).
 Next: hourly split and a per-statement byte cap; the router contract (fingerprints to Redis).
+
+## Skipped usecases (2026-10-15)
+SKIP_USECASES: LIKE patterns (e.g. `user-%`, developer traffic such as Claude Code: no stable template). One filter
+(bq.SKIP_FILTER, the patterns as an array parameter: empty keeps all, a NULL usecase compares as '' and is kept) in
+the day read and the usecases list; the lookup by request id ignores it. The router contract publishes the same list:
+a request from a skipped usecase passes through with no matching and no pinning.

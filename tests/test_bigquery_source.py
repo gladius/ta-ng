@@ -98,3 +98,11 @@ def test_lookup_by_request_id(monkeypatch):
     assert body["model"] == "openai/gpt-5.4-mini" and body["max_tokens"] == 32768 and body["temperature"] == 0.2
     assert [t["function"]["name"] for t in body["tools"]] == ["refund"] and resp["id"] == "chatcmpl-1"
     assert list(got) == ["chatcmpl-1"]                         # an unknown id is just absent
+
+
+def test_skip_usecases_setting_parses_and_empty_means_none(monkeypatch):
+    from core.ledger import bq as core_bq
+    for raw, want in ((None, []), ("", []), ("user-%", ["user-%"]), (" user-% , test-%,", ["user-%", "test-%"])):
+        monkeypatch.setattr(bq.credentials, "get_config", lambda k, d=None, raw=raw, **kw: raw if k == "SKIP_USECASES" else d)
+        assert core_bq.skipped() == want
+    assert "COALESCE(`vegas_usecase_name`, '')" in core_bq.SKIP_FILTER.format(col="vegas_usecase_name")   # NULL kept

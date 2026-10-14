@@ -17,7 +17,7 @@ type Pick = { model: string; cost_vs_original_pct?: number; latency_vs_original_
 type Models = { candidates: Record<string, Verdict & { audit: string; at: string; trigger: string; valid?: boolean }>; cheapest?: Pick; fastest?: Pick } | null
 type Days = { window: number; done: string[]; queued: string[]; missing: string[] }
 type UsecaseRow = { usecase: string | null; calls: number; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; error: string | null; decisions?: { models?: { sites: number; with_cheaper: number; saving: number; cost: number } } }
-type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; usecases: UsecaseRow[] }
+type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; skipped: string[]; usecases: UsecaseRow[] }
 type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean; days: Days }
 type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null } }
 
@@ -35,7 +35,7 @@ export function CallSiteUsecases() {
   return (
     <Page crumbs={crumbs}>
       <div className="head">
-        <div><h1>Usecases</h1><span className="muted">{list.data?.listed_at && <>list from {when(list.data.listed_at)}{list.data.reloading && ', reloading'}</>}</span></div>
+        <div><h1>Usecases</h1><span className="muted">{list.data?.listed_at && <>list from {when(list.data.listed_at)}{list.data.reloading && ', reloading'}</>}{!!list.data?.skipped.length && <> · not analysed: usecases like {list.data.skipped.join(', ')}</>}</span></div>
         <div className="row"><input className="input" placeholder="Find a usecase" value={q} onChange={(e) => { setQ(e.target.value); setParams({ q: e.target.value }) }} /><button className="btn" onClick={() => get(`/suite/callsites/usecases?reload=true`).then(() => list.refetch())}>Reload list</button></div>
       </div>
       {list.isPending ? <Loading /> : list.isError ? <Failed error={list.error} /> : !list.data.usecases.length ? (

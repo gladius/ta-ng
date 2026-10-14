@@ -21,6 +21,17 @@ SETTINGS = {"table": "BQ_TABLE", "req": "BQ_REQUEST_COLUMN", "resp": "BQ_RESPONS
             "usecase": "BQ_USECASE_COLUMN", "time": "BQ_TIME_COLUMN", "latency": "BQ_LATENCY_COLUMN"}
 
 
+def skipped():
+    """SKIP_USECASES: comma-separated LIKE patterns of usecases never analysed (e.g. `user-%` for developer traffic);
+    empty: none. Used by every query that reads the log by usecase, and published to the router."""
+    return [p.strip() for p in (credentials.get_config("SKIP_USECASES") or "").split(",") if p.strip()]
+
+
+# a usecase column is kept unless it matches a pattern of @skip; an empty @skip keeps everything; an untagged call
+# (NULL usecase) is compared as '' so it is kept unless a pattern matches ''
+SKIP_FILTER = "NOT EXISTS (SELECT 1 FROM UNNEST(@skip) p WHERE COALESCE(`{col}`, '') LIKE p)"
+
+
 def configured():
     return all(credentials.get_config(k) for k in SETTINGS.values())
 
