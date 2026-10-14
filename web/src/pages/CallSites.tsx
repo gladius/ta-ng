@@ -94,7 +94,7 @@ export function CallSiteUsecase() {
     <Page crumbs={crumbs}>
       <div className="head">
         <div><h1>{usecaseName(u.usecase)}</h1><span className="muted">{u.calls.toLocaleString('en-US')} calls in the window{u.sites.length > 0 && <> · made of {count(u.sites.length, 'call-site')}{calls !== u.calls && ` (${calls.toLocaleString('en-US')} of them chat calls)`}</>}{u.analysed_at && <> · analysed {when(u.analysed_at)}</>}</span></div>
-        <div className="row"><Link className="btn primary" to={`/audit/models?usecase=${encodeURIComponent(u.usecase ?? 'None')}`}>Audit models</Link><button className="btn" disabled={u.analysing || !u.days.missing.length} title={u.days.missing.length ? `process ${u.days.missing.length} day(s) of the log not processed yet (every usecase)` : 'every day of the window is processed'} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? `Processing ${u.days.queued.length} day(s)…` : u.days.missing.length ? `Process ${u.days.missing.length} new day(s)` : 'Up to date'}</button></div>
+        <div className="row"><Link className="btn primary" to={`/audit/models/new?usecase=${encodeURIComponent(u.usecase ?? 'None')}`}>Audit models</Link><button className="btn" disabled={u.analysing || !u.days.missing.length} title={u.days.missing.length ? `process ${u.days.missing.length} day(s) of the log not processed yet (every usecase)` : 'every day of the window is processed'} onClick={() => get(`/suite/callsites/usecases/${encodeURIComponent(usecase)}/analyse`, { method: 'POST' }).then(() => q.refetch())}>{u.analysing ? `Processing ${u.days.queued.length} day(s)…` : u.days.missing.length ? `Process ${u.days.missing.length} new day(s)` : 'Up to date'}</button></div>
       </div>
       {u.analysing && !u.sites.length && <p className="empty">Processing {u.days.queued.length} day(s) of the log…</p>}
       {!u.analysing && !u.sites.length && u.days.missing.length > 0 && <p className="empty">No day of the log processed yet.</p>}
@@ -155,7 +155,7 @@ export function CallSite() {
             {s.unsure && <span className="chip warn">grouping unsure</span>}
           </div>
         </div>
-        <Link className="btn primary" to={`/audit/models?usecase=${encodeURIComponent(s.usecase ?? 'None')}&site=${s.site}`}>Audit models</Link>
+        <Link className="btn primary" to={`/audit/models/new?usecase=${encodeURIComponent(s.usecase ?? 'None')}&site=${s.site}`}>Audit models</Link>
       </div>
       <div className="kpis">
         <Kpi label="Calls" value={s.calls.toLocaleString('en-US')} note={`last ${s.window_days} days, ${s.first_day} → ${s.last_day}`} />

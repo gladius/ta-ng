@@ -6,7 +6,7 @@ import Review from './pages/Review'
 import { Migrations, Models } from './pages/Catalog'
 import { CacheOverview, CacheSite, CacheUsecase } from './pages/Cache'
 import { CallSite, CallSiteUsecase, CallSiteUsecases } from './pages/CallSites'
-import { ModelAuditDetail, ModelAudits } from './pages/ModelAudits'
+import { ModelAuditDetail, ModelAudits, NewModelAudit } from './pages/ModelAudits'
 import How from './pages/How'
 import { Page } from './ui'
 import Schedules from './pages/Schedules'
@@ -20,6 +20,7 @@ export default function App() {
         <Route path="audit/models/:auditId/requests/*" element={<Review />} />
         <Route path="audit/models" element={<ModelAudits />} />
         <Route path="audit/models/how" element={<How />} />
+        <Route path="audit/models/new" element={<NewModelAudit />} />
         <Route path="audit/models/:auditId" element={<ModelAuditDetail />} />
         <Route path="usecases" element={<CallSiteUsecases />} />
         <Route path="usecases/:usecase" element={<CallSiteUsecase />} />

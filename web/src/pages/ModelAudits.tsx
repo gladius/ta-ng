@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import Select from 'react-select'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { get, type JobStatus, type ResultsPage } from '../api'
 import { usecaseName } from '../cache'
 import { AnswersBar, count, Failed, Legend, Loading, money, ms, Page, pct, Squares, verdictWord, VsBar, when } from '../ui'
@@ -28,8 +28,9 @@ type UsecaseOpt = { usecase: string | null; sites: number | null; analysed_at: s
 
 /** The one way to start an audit: which usecases (or the one call-site this page is on), which models (any the
     gateway serves, several at once) and/or Auto; samples and budget under "advanced". */
-export function AuditDialog({ usecase, site, lockScope = false, initialOpen = false, onStarted }: { usecase?: string | null; site?: string; lockScope?: boolean; initialOpen?: boolean; onStarted?: (ids: string[]) => void }) {
-  const [open, setOpen] = useState(initialOpen)
+export function AuditDialog({ usecase, site, lockScope = false, onStarted }: { usecase?: string | null; site?: string; lockScope?: boolean; onStarted?: (ids: string[]) => void }) {
+  const open = true
+  const nav = useNavigate()
   const [usecases, setUsecases] = useState<string[]>(usecase !== undefined ? [usecase ?? 'None'] : [])
   const [models, setModels] = useState<string[]>([])
   const [strategy, setStrategy] = useState('cheaper')
@@ -53,14 +54,12 @@ export function AuditDialog({ usecase, site, lockScope = false, initialOpen = fa
   const start = useMutation({
     mutationFn: () => get<{ audits: { id: string }[] }>('/audit/models', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ usecases: site ? [] : usecases, site, strategy, models, samples, ...(budget !== '' && { max_budget_usd: budget }) }) }),
-    onSuccess: (r) => { setOpen(false); onStarted?.(r.audits.map((a) => a.id)) },
+    onSuccess: (r) => { onStarted?.(r.audits.map((a) => a.id)) },
   })
-  if (!open) return <button className="btn primary" onClick={() => setOpen(true)}>New model audit…</button>
   const available = (served.data?.models ?? []).filter((m) => m.available)
   return (
     <div className="panel pad dialog">
       <h2>New model audit {site ? 'of one call-site' : lockScope ? 'of this usecase' : ''}</h2>
-      <p className="muted">Each call-site's requests are sampled by size; the current model and every candidate answer them again; a judge compares the answers with evidence. You get, per call-site: which candidates drift, and the cheapest and fastest that don't, by measured cost and latency. Nothing in production changes.</p>
       {!site && !lockScope && (
         <label>Usecases
           <Select isMulti classNamePrefix="rs" placeholder="Choose usecases… (type to search)" closeMenuOnSelect={false}
@@ -109,23 +108,32 @@ export function AuditDialog({ usecase, site, lockScope = false, initialOpen = fa
       )}
       <p className="muted">Estimated cost: {est.data ? money(est.data.usd, 2) : '…'}{est.data?.unknown ? ` plus ${est.data.unknown} usecase${est.data.unknown === 1 ? '' : 's'} not sized yet` : ''} · {site ? '1 audit' : `${usecases.length} audit${usecases.length === 1 ? '' : 's'}, one per usecase`}</p>
       {start.isError && <p className="error" role="alert">{start.error instanceof Error ? start.error.message : String(start.error)}</p>}
-      <div className="row"><button className="btn primary" disabled={start.isPending || (!site && !usecases.length) || ((strategy === 'manual' || strategy === 'release') && !models.length)} onClick={() => start.mutate()}>Start</button><button className="btn" onClick={() => setOpen(false)}>Cancel</button></div>
+      <div className="row"><button className="btn primary" disabled={start.isPending || (!site && !usecases.length) || ((strategy === 'manual' || strategy === 'release') && !models.length)} onClick={() => start.mutate()}>Start</button><button className="btn" onClick={() => nav(-1)}>Cancel</button></div>
     </div>
   )
 }
 
 /** Every model audit, newest first. */
+/** The new-audit page: the form on its own, preset from ?usecase= / ?site=. */
+export function NewModelAudit() {
+  const [params] = useSearchParams()
+  const nav = useNavigate()
+  const usecase = params.get('usecase') ?? undefined, site = params.get('site') ?? undefined
+  return (
+    <Page crumbs={[{ label: 'Model audit' }, { label: 'Model audits', to: '/audit/models' }, { label: 'New' }]}>
+      <AuditDialog key={(usecase ?? '') + (site ?? '')} usecase={usecase} site={site} onStarted={() => nav('/audit/models')} />
+    </Page>
+  )
+}
+
 export function ModelAudits() {
-  const [params, setParams] = useSearchParams()
-  const preset = params.get('usecase') || params.get('site') ? { usecase: params.get('usecase') ?? undefined, site: params.get('site') ?? undefined } : null
   const q = useQuery({ queryKey: ['model-audits'], queryFn: () => get<Audit[]>('/audit/models'),
     refetchInterval: (query) => (query.state.data?.some((c) => ['sampling', 'queued', 'running'].includes(c.status)) ? 5000 : false) })
   const crumbs = [{ label: 'Model audit' }, { label: 'Model audits' }]
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>Model audits</h1><span className="muted">which models hold on a usecase's call-sites, and which is cheapest and fastest by measured cost? Started here, by the API, or by the router: on requests sampled from the log per call-site, or on requests you send. Each audit keeps its findings; a call-site's page shows what all audits found there. <Link to="/audit/models/how">How an audit works</Link>.</span></div>{!preset && <AuditDialog onStarted={() => q.refetch()} />}</div>
-      {preset && <AuditDialog key={preset.usecase + (preset.site ?? '')} usecase={preset.usecase} site={preset.site} initialOpen onStarted={() => { setParams({}); q.refetch() }} />}
-      {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No model audits yet: press "New model audit…", or "Audit models" on a usecase.</p> : (
+      <div className="head"><div><h1>Model audits</h1><span className="muted"><Link to="/audit/models/how">How an audit works</Link></span></div><Link className="btn primary" to="/audit/models/new">New model audit…</Link></div>
+      {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No model audits yet.</p> : (
         <section className="panel">
           <table className="grid">
             <thead><tr><th>Audit</th><th>Scope</th><th>Strategy</th><th>Status</th><th>Result</th><th>Started</th></tr></thead>
