@@ -73,15 +73,8 @@ def site(site_id):
     return _site_block(rec, store.series([site_id])) if rec else None
 
 
-def _brief(s):
-    p = s.get("profile") or {}
-    return {"usecase": s["usecase"], "site": s["site"], "name": p.get("name") or (s["anchors"][0][:60] if s["anchors"] else s["site"]),
-            "does": p.get("does", ""), "calls": s["total"]["calls"], "share": s["story"]["share"], "cause": s["story"]["cause"],
-            "action": s["story"]["action"], "worth": s["saving"], "proof": s["story"]["proof"], "trend": s["trend"]}
-
-
 def overview():
-    """The org level over every analysed usecase: reuse and its trend, opportunities, drops, usecases by what's left."""
+    """The org level over every analysed usecase: reuse and its trend, usecases by what's left."""
     recs = store.all_sites()
     if not recs:
         return None
@@ -99,8 +92,6 @@ def overview():
     days = _sum_days(sites)
     return {"built_at": max((s["built_at"] or "" for s in sites), default=None) or None, "window": sites[0]["window"], "daily": days,
             "total": total(list(days.values())), "trend": trend(days), "saving": round(sum(u["saving"] for u in usecases), 2),
-            "opportunities": [_brief(s) for s in sorted(sites, key=lambda s: -s["saving"]) if s["saving"] > 0][:10],
-            "dropped": sorted([_brief(s) for s in sites if s["trend"] and s["trend"]["delta"] <= -0.05], key=lambda b: b["trend"]["delta"]),
             "usecases": sorted(usecases, key=lambda u: (-u["saving"], -u["total"]["cost"]))}
 
 

@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { get, post } from '../api'
 import {
-  CAUSE, reuse, saved, siteName, ttlName, usecaseName, type Brief, type Cause, type Overview, type Proof, type Site, type SitePage,
+  CAUSE, reuse, saved, siteName, ttlName, usecaseName, type Cause, type Overview, type Proof, type Site, type SitePage,
   type Totals, type Trend, type Ttl, type UsecasePage,
 } from '../cache'
 import { count, Failed, Kpi, Loading, money, Page, pct } from '../ui'
@@ -65,19 +65,6 @@ function WindowPick({ n, set, max }: { n: number; set: (n: number) => void; max:
 }
 
 /** One opportunity or drop: what, where, what to do, what it's worth. */
-function BriefRow({ b }: { b: Brief }) {
-  return (
-    <div className="brief">
-      <div className="spread">
-        <span><Link to={`/audit/cache/sites/${b.site}`}><b>{b.name}</b></Link> <span className="muted">in {usecaseName(b.usecase)} · {count(b.calls, 'call')} · {pct(b.share)} reused</span></span>
-        {b.worth > 0 && <b className="nowrap">{usd(b.worth)}</b>}
-      </div>
-      <div className="row"><CauseChip cause={b.cause} proof={b.proof} />{b.trend && <TrendWord t={b.trend} />}</div>
-      <p>{b.action}</p>
-    </div>
-  )
-}
-
 /** Org level: how much is reused, is it getting better, where is the money left. */
 export function CacheOverview() {
   const qc = useQueryClient()
@@ -101,7 +88,6 @@ export function CacheOverview() {
   const o = q.data
   const n = Math.min(n0, o.window)
   const t = sumDays(o.daily, n)
-  const well = o.usecases.filter((u) => u.saving === 0 && u.causes.every((c) => c === 'ok' || c === 'below_min' || c === 'sparse'))
   const shown = o.usecases.filter((u) => !find || usecaseName(u.usecase).toLowerCase().includes(find.toLowerCase()))
   const pageRows = shown.slice(page * PER, page * PER + PER)
   return (
@@ -115,20 +101,9 @@ export function CacheOverview() {
         <Kpi label="Reused from cache" value={pct(reuse(t))} note={<>of prompt tokens, last {n} days <TrendWord t={o.trend} /></>} />
         <Kpi label="Calls that reused something" value={pct(t.calls ? t.calls_cached / t.calls : 0)} note={count(t.calls, 'call')} />
         <Kpi label="Saved by caching" value={usd(saved(t))} note="estimated, catalog prices" />
-        <Kpi label="Still possible" value={usd(o.saving)} note={`over the ${o.window}-day window, from the fixes below`} best={o.saving > 0 ? 'opportunity' : undefined} />
+        <Kpi label="Still possible" value={usd(o.saving)} note={`over the ${o.window}-day window`} best={o.saving > 0 ? 'opportunity' : undefined} />
       </div>
       <section className="panel"><div className="panel-head"><b>Reused from cache, per day</b></div><ReuseTrend days={o.daily} n={n} /></section>
-      <div className="two-col">
-        <section className="panel">
-          <div className="panel-head"><b>Biggest opportunities</b><span className="muted">what's left, ranked by value</span></div>
-          {o.opportunities.length ? o.opportunities.map((b) => <BriefRow key={b.site} b={b} />) : <p className="muted pad">Nothing left to fix.</p>}
-        </section>
-        <section className="panel">
-          <div className="panel-head"><b>Dropped this week</b><span className="muted">reuse fell 5 points or more</span></div>
-          {o.dropped.length ? o.dropped.map((b) => <BriefRow key={b.site} b={b} />) : <p className="muted pad">No call-site dropped.</p>}
-          <div className="panel-head"><b>Doing well</b><span className="muted">{count(well.length, 'usecase')} with nothing to fix</span></div>
-        </section>
-      </div>
       <section className="panel">
         <div className="panel-head">
           <b>All usecases</b>

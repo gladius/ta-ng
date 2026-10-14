@@ -27,10 +27,8 @@ export type Site = {
   models: Record<string, SiteModel>; days: Record<string, Totals>; total: Totals; saving: number
   profile: Profile; story: Story; trend: Trend
 }
-export type Brief = { usecase: string; site: string; name: string; does: string; calls: number; share: number; cause: Cause | null; action: string; worth: number; proof: Proof; trend?: Trend }
 export type Overview = {
   built_at: string | null; window: number; daily: Record<string, Totals>; total: Totals; saving: number; trend: Trend
-  opportunities: Brief[]; dropped: Brief[]
   usecases: { usecase: string; total: Totals; saving: number; trend: Trend; sites: number; unsure: boolean; causes: Cause[] }[]
   status: { running: boolean; error: string | null; days: { window: number; done: string[]; queued: string[]; missing: string[] } }
 }

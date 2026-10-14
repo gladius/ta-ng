@@ -249,7 +249,6 @@ export function ModelAuditDetail() {
           </section>
         )
       })}
-      <button className="btn" onClick={() => qc.invalidateQueries({ queryKey: ['model-audits'] })}>Refresh</button>
     </Page>
   )
 }
