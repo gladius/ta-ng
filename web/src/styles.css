@@ -398,3 +398,11 @@ tr.dim { opacity: 0.45; }
 
 .preview { display: flex; flex-direction: column; gap: 4px; }
 .preview .grid td { padding: 6px 10px; font-size: 13px; }
+
+/* the reuse grid: usecases down, days across */
+.heat-wrap { overflow-x: auto; }
+.heat { border-collapse: separate; border-spacing: 3px; margin: 8px 16px 0; }
+.heat th { font-size: 11px; font-weight: 500; color: var(--ink-2); text-align: left; padding: 0 8px 4px 0; white-space: nowrap; }
+.heat thead th { text-align: center; padding: 0 0 4px; }
+.heat td { width: 22px; height: 22px; padding: 0; }
+.heat td i { display: block; width: 22px; height: 22px; border-radius: 4px; background: var(--ink); }

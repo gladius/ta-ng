@@ -41,6 +41,35 @@ function ReuseTrend({ days, n }: { days: Record<string, Totals>; n: number }) {
   )
 }
 
+/** Usecases down (most spend first), days across; a cell is that usecase's share of prompt tokens reused from cache
+    that day, measured from the logged usage. Darker is more reuse; empty is no calls. */
+function ReuseGrid({ usecases, n }: { usecases: Overview['usecases']; n: number }) {
+  const days = [...new Set(usecases.flatMap((u) => Object.keys(u.days)))].sort().slice(-n)
+  const rows = [...usecases].sort((a, b) => b.total.cost - a.total.cost).slice(0, 40)
+  if (!days.length) return null
+  return (
+    <div className="heat-wrap">
+      <table className="heat">
+        <thead><tr><th /> {days.map((d) => <th key={d}>{d.slice(5)}</th>)}</tr></thead>
+        <tbody>
+          {rows.map((u) => (
+            <tr key={u.usecase ?? 'None'}>
+              <th><Link to={`/audit/cache/usecases/${encodeURIComponent(u.usecase ?? 'None')}`}>{usecaseName(u.usecase)}</Link></th>
+              {days.map((d) => {
+                const c = u.days[d]
+                const share = c && c.prompt_tokens ? c.cached_tokens / c.prompt_tokens : null
+                const title = c ? `${usecaseName(u.usecase)} · ${d}: ${pct(share)} reused · ${count(c.calls, 'call')} · ${usd(c.cost)}` : `${usecaseName(u.usecase)} · ${d}: no calls`
+                return <td key={d} title={title}><i style={{ opacity: share == null ? 0 : 0.12 + 0.88 * share }} /></td>
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted pad">Share of prompt tokens reused from cache, per usecase and day; the {rows.length} usecases with most spend. A usecase served by several providers mixes their caches.</p>
+    </div>
+  )
+}
+
 function TrendWord({ t }: { t: Trend }) {
   if (!t) return null
   const d = Math.round(100 * t.delta)
@@ -59,7 +88,7 @@ function Built({ at }: { at: string | null }) {
 function WindowPick({ n, set, max }: { n: number; set: (n: number) => void; max: number }) {
   return (
     <div className="seg" role="group" aria-label="Window">
-      {WINDOWS.filter((w) => w <= Math.max(max, 7)).map((w) => <button key={w} type="button" aria-pressed={n === w} onClick={() => set(w)}>{w} days</button>)}
+      {[...new Set([...WINDOWS.filter((w) => w < max), max])].map((w) => <button key={w} type="button" aria-pressed={Math.min(n, max) === w} onClick={() => set(w)}>{w} days</button>)}
     </div>
   )
 }
@@ -81,7 +110,7 @@ function BriefRow({ b }: { b: Brief }) {
 /** Org level: how much is reused, is it getting better, where is the money left. */
 export function CacheOverview() {
   const qc = useQueryClient()
-  const [n, setN] = useState<number>(30)
+  const [n0, setN] = useState<number>(30)
   const [find, setFind] = useState('')
   const [page, setPage] = useState(0)
   const PER = 25
@@ -99,6 +128,7 @@ export function CacheOverview() {
     )
   }
   const o = q.data
+  const n = Math.min(n0, o.window)
   const t = sumDays(o.daily, n)
   const well = o.usecases.filter((u) => u.saving === 0 && u.causes.every((c) => c === 'ok' || c === 'below_min' || c === 'sparse'))
   const shown = o.usecases.filter((u) => !find || usecaseName(u.usecase).toLowerCase().includes(find.toLowerCase()))
@@ -117,6 +147,7 @@ export function CacheOverview() {
         <Kpi label="Still possible" value={usd(o.saving)} note={`over the ${o.window}-day window, from the fixes below`} best={o.saving > 0 ? 'opportunity' : undefined} />
       </div>
       <section className="panel"><div className="panel-head"><b>Reused from cache, per day</b></div><ReuseTrend days={o.daily} n={n} /></section>
+      <section className="panel"><div className="panel-head"><b>Reused from cache, per usecase and day</b></div><ReuseGrid usecases={o.usecases} n={n} /></section>
       <div className="two-col">
         <section className="panel">
           <div className="panel-head"><b>Biggest opportunities</b><span className="muted">what's left, ranked by value</span></div>
@@ -189,12 +220,13 @@ function SiteCard({ s, usecase }: { s: Site; usecase: string | null }) {
 /** One usecase: its reuse, trend, and each call-site as a card. */
 export function CacheUsecase() {
   const { usecase = '' } = useParams()
-  const [n, setN] = useState<number>(30)
+  const [n0, setN] = useState<number>(30)
   const q = useQuery({ queryKey: ['cache', 'usecase', usecase], queryFn: () => get<UsecasePage>(`/audit/cache/usecases/${encodeURIComponent(usecase)}`) })
   const crumbs = [{ label: 'Cache' }, { label: 'Cache audit', to: '/audit/cache' }, { label: usecaseName(usecase) }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const u = q.data
+  const n = Math.min(n0, u.window)
   const t = sumDays(u.days, n)
   return (
     <Page crumbs={crumbs}>
@@ -282,12 +314,13 @@ function TtlTable({ t }: { t: Ttl }) {
 /** One call-site: what it is, what happens now, why, what to do; then the evidence. */
 export function CacheSite() {
   const { site = '' } = useParams()
-  const [n, setN] = useState<number>(30)
+  const [n0, setN] = useState<number>(30)
   const q = useQuery({ queryKey: ['cache', 'site', site], queryFn: () => get<SitePage>(`/audit/cache/sites/${site}`) })
   const crumbs = [{ label: 'Cache' }, { label: 'Cache audit', to: '/audit/cache' }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const s = q.data
+  const n = Math.min(n0, s.window)
   const t = sumDays(s.days, n)
   const main = Object.values(s.models).sort((a, b) => b.calls - a.calls)[0]
   const lifetimeMatters = main?.ttl && (Object.keys(main.ttl.options).length > 1 || s.story.cause === 'gaps' || s.story.cause === 'sparse')
