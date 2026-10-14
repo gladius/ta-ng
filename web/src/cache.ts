@@ -31,8 +31,7 @@ export type Brief = { usecase: string; site: string; name: string; does: string;
 export type Overview = {
   built_at: string | null; window: number; daily: Record<string, Totals>; total: Totals; saving: number; trend: Trend
   opportunities: Brief[]; dropped: Brief[]
-  usecases: { usecase: string; total: Totals; saving: number; trend: Trend; sites: number; unsure: boolean; causes: Cause[]
-    days: Record<string, { calls: number; prompt_tokens: number; cached_tokens: number; cost: number }> }[]
+  usecases: { usecase: string; total: Totals; saving: number; trend: Trend; sites: number; unsure: boolean; causes: Cause[] }[]
   status: { running: boolean; error: string | null; days: { window: number; done: string[]; queued: string[]; missing: string[] } }
 }
 export type UsecasePage = { built_at: string | null; window: number; usecase: string; total: Totals; days: Record<string, Totals>; trend: Trend; saving: number; sites: Site[] }

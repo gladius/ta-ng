@@ -94,7 +94,6 @@ def overview():
     for uc, uc_sites in by_uc.items():
         days = _sum_days(uc_sites)
         usecases.append({"usecase": uc, "total": total(list(days.values())), "saving": round(sum(s["saving"] for s in uc_sites), 2),
-                         "days": {d: {k: v[k] for k in ("calls", "prompt_tokens", "cached_tokens", "cost")} for d, v in days.items()},
                          "trend": trend(days), "sites": len(uc_sites), "unsure": any(s["unsure"] for s in uc_sites),
                          "causes": sorted({s["story"]["cause"] for s in uc_sites if s["story"]["cause"]})})
     days = _sum_days(sites)

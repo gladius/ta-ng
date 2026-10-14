@@ -41,35 +41,6 @@ function ReuseTrend({ days, n }: { days: Record<string, Totals>; n: number }) {
   )
 }
 
-/** Usecases down (most spend first), days across; a cell is that usecase's share of prompt tokens reused from cache
-    that day, measured from the logged usage. Darker is more reuse; empty is no calls. */
-function ReuseGrid({ usecases, n }: { usecases: Overview['usecases']; n: number }) {
-  const days = [...new Set(usecases.flatMap((u) => Object.keys(u.days)))].sort().slice(-n)
-  const rows = [...usecases].sort((a, b) => b.total.cost - a.total.cost).slice(0, 40)
-  if (!days.length) return null
-  return (
-    <div className="heat-wrap">
-      <table className="heat">
-        <thead><tr><th /> {days.map((d) => <th key={d}>{d.slice(5)}</th>)}</tr></thead>
-        <tbody>
-          {rows.map((u) => (
-            <tr key={u.usecase ?? 'None'}>
-              <th><Link to={`/audit/cache/usecases/${encodeURIComponent(u.usecase ?? 'None')}`}>{usecaseName(u.usecase)}</Link></th>
-              {days.map((d) => {
-                const c = u.days[d]
-                const share = c && c.prompt_tokens ? c.cached_tokens / c.prompt_tokens : null
-                const title = c ? `${usecaseName(u.usecase)} · ${d}: ${pct(share)} reused · ${count(c.calls, 'call')} · ${usd(c.cost)}` : `${usecaseName(u.usecase)} · ${d}: no calls`
-                return <td key={d} title={title}><i style={{ opacity: share == null ? 0 : 0.12 + 0.88 * share }} /></td>
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="muted pad">Share of prompt tokens reused from cache, per usecase and day; the {rows.length} usecases with most spend. A usecase served by several providers mixes their caches.</p>
-    </div>
-  )
-}
-
 function TrendWord({ t }: { t: Trend }) {
   if (!t) return null
   const d = Math.round(100 * t.delta)
@@ -147,7 +118,6 @@ export function CacheOverview() {
         <Kpi label="Still possible" value={usd(o.saving)} note={`over the ${o.window}-day window, from the fixes below`} best={o.saving > 0 ? 'opportunity' : undefined} />
       </div>
       <section className="panel"><div className="panel-head"><b>Reused from cache, per day</b></div><ReuseTrend days={o.daily} n={n} /></section>
-      <section className="panel"><div className="panel-head"><b>Reused from cache, per usecase and day</b></div><ReuseGrid usecases={o.usecases} n={n} /></section>
       <div className="two-col">
         <section className="panel">
           <div className="panel-head"><b>Biggest opportunities</b><span className="muted">what's left, ranked by value</span></div>
