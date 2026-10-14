@@ -115,8 +115,10 @@ def _new_site(site, usecase, template, markers, req):
 def process_day(day):
     """Process one day (ISO date) for every usecase. Blocking: the task start() queues runs it."""
     day = str(day)
+    tasks.note("%s: starting" % day)
     b = build.Build(day, day, store.fingerprints())
     try:
+        tasks.note("%s: linking the day's call-sites to the known ones" % day)
         day_sites, ledger, gaps, layout, pool = b.day_sites(), b.ledger(), b.gaps(), b.layout(), b.pool()
         leftover, n_left = b.leftover()
         by_uc = defaultdict(list)
@@ -160,7 +162,9 @@ def process_day(day):
         store.replace_unplaced([day], [r for r in leftover if r["id"] not in placed])
         _save(recs, by_uc.keys())
         store.mark_day(day, sum(d["n"] for d in day_sites) + len(placed), n_left - len(placed))
+        tasks.note("%s: cache findings" % day)
         _cache(recs)
+        tasks.note("%s: done" % day)
         return len(day_sites)
     finally:
         b.close()

@@ -4,7 +4,7 @@ import { Failed, Loading, Page, when } from '../ui'
 
 type Job = {
   name: string; does: string; every_h: number; enabled: boolean; last_run: string | null; next_run: string | null
-  task: { status: 'queued' | 'running' | 'done' | 'failed'; error: string | null; attempts: number; finished_at: string | null } | null
+  task: { status: 'queued' | 'running' | 'done' | 'failed'; error: string | null; attempts: number; finished_at: string | null; note: string | null } | null
 }
 
 const STATE: Record<string, string> = { queued: 'waiting for a worker', running: 'running', done: 'done', failed: 'failed' }
@@ -38,7 +38,8 @@ export default function Schedules() {
                     <td className="nowrap">{j.last_run ? when(j.last_run) : <span className="muted">never</span>}</td>
                     <td>{j.task ? <span className={'chip' + (j.task.status === 'failed' ? ' warn' : '')} title={j.task.error ?? undefined}>
                       {STATE[j.task.status]}{j.task.finished_at && ' ' + when(j.task.finished_at)}</span> : <span className="muted">—</span>}
-                      {j.task?.error && <div className="muted">{j.task.error}</div>}</td>
+                      {j.task?.error && <div className="muted">{j.task.error}</div>}
+                      {j.task?.note && j.task.status === 'running' && <div className="muted">{j.task.note}</div>}</td>
                     <td className="nowrap">{!j.enabled ? <span className="muted">off</span> : j.next_run && j.next_run.includes('T') ? when(j.next_run) : j.next_run}</td>
                     <td className="row nowrap">
                       <button className="btn" disabled={busy || post.isPending} onClick={() => post.mutate({ name: j.name })}>Run now</button>

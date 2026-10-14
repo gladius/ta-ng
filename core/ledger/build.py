@@ -293,6 +293,21 @@ def _request(row):
             "tools": [{"function": {"name": n}} for n in row["tool_names"] or []]}
 
 
+_STEPS = (("src", "reading the day's calls"), ("placed", "placing calls by fingerprint"), ("templates", "learning call-sites"),
+          ("cw", "learning call-sites"), ("common", "learning call-sites"), ("g0", "learning call-sites"), ("g1", "learning call-sites"),
+          ("splitter", "learning call-sites"), ("core", "learning call-sites"), ("hop", "learning call-sites"), ("newt", "learning call-sites"),
+          ("tk", "learning call-sites"), ("fp", "learning call-sites"), ("call_rows", "placing calls by fingerprint"),
+          ("pairs", "cache prefix"), ("lcp", "cache prefix"), ("lay_", "prompt layout"), ("site_layout", "prompt layout"),
+          ("prices", "totals"), ("ledger_daily", "totals"), ("cache_gaps", "cache gaps"))
+
+
+def _plain(text):
+    """A script statement's head ("CREATE OR REPLACE TEMP TABLE g0 AS (12 statements done, 1 min)") in plain words."""
+    name = text.replace("CREATE OR REPLACE TEMP TABLE ", "").replace("CREATE TEMP TABLE ", "").replace("INSERT INTO ", "").split(" ")[0]
+    tail = text[text.rfind("("):] if "(" in text else ""
+    return "%s %s" % (next((w for k, w in _STEPS if name.startswith(k)), name), tail)
+
+
 class Build:
     """Run the day script once for days day_from..day_to (dates, inclusive) with the fingerprints known
     (known: [{usecase, site, markers, template}], phrases joined by '|'), then read its results."""
@@ -300,7 +315,9 @@ class Build:
         self.s = bq.Session()
         known = [{"usecase": k["usecase"] or "", "site": str(k["site"]), "markers": k["markers"], "template": k["template"]}
                  for k in known] or [{"usecase": "\x00", "site": "0", "markers": "", "template": ""}]   # a typed, empty array
-        self.s.query(SCRIPT.format(**_names()), {"day_from": day_from, "day_to": day_to, "prices": _prices(), "known": known})
+        from core import tasks
+        self.s.script(SCRIPT.format(**_names()), {"day_from": day_from, "day_to": day_to, "prices": _prices(), "known": known},
+                      progress=lambda text: tasks.note("%s: %s" % (day_from, _plain(text))))
 
     def day_sites(self):
         return [dict(r) for r in self.s.query(_DAYSITES)]

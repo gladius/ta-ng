@@ -82,16 +82,43 @@ class Session:
         job.result()
         self.id = job.session_info.session_id
 
-    def query(self, sql, params=None, timeout=1800):
+    def _cfg(self, params):
         from google.cloud import bigquery
-        from google.auth.exceptions import RefreshError
-        cfg_ = bigquery.QueryJobConfig(query_parameters=_params(params),
+        cap = float(credentials.get_config("BQ_MAX_TB") or 2) * 1e12
+        return bigquery.QueryJobConfig(query_parameters=_params(params), maximum_bytes_billed=int(cap),
                                        connection_properties=[bigquery.ConnectionProperty("session_id", self.id)])
+
+    def query(self, sql, params=None, timeout=1800):
+        """One statement in the session. Reads over BQ_MAX_TB (default 2 TB) are refused before they run."""
+        from google.auth.exceptions import RefreshError
         try:
-            return list(client().query(sql, job_config=cfg_, location=location()).result(timeout=timeout))
+            return list(client().query(sql, job_config=self._cfg(params), location=location()).result(timeout=timeout))
         except RefreshError:                  # the dev machine's gcloud token expired mid-run: a fresh client, once
             _clients.pop(cfg()["project"], None)
-            return list(client().query(sql, job_config=cfg_, location=location()).result(timeout=timeout))
+            return list(client().query(sql, job_config=self._cfg(params), location=location()).result(timeout=timeout))
+
+    def script(self, sql, params=None, timeout=4 * 3600, progress=None, every=15):
+        """A multi-statement script, polled every `every` seconds; `progress(text)` gets the statement running (its
+        first comment line, e.g. "-- 1. the log, read once") so a page can show how far it is."""
+        import time
+        job = client().query(sql, job_config=self._cfg(params), location=location())
+        t0 = time.time()
+        while not job.done():
+            if progress:
+                try:
+                    kids = sorted(client().list_jobs(parent_job=job.job_id, max_results=200), key=lambda k: k.created)
+                    running = [k for k in kids if k.state == "RUNNING"]
+                    head = ((running or kids)[-1].query if kids else "").strip().splitlines()
+                    progress("%s (%d statements done, %d min)" % (next((l.lstrip("- ").strip() for l in head if l.startswith("--")),
+                                                                     head[0][:40] if head else "starting"), len(kids) - len(running), (time.time() - t0) / 60))
+                except Exception:
+                    pass
+            if time.time() - t0 > timeout:
+                client().cancel_job(job.job_id, location=location())
+                raise TimeoutError("the day script ran over %d h" % (timeout // 3600))
+            time.sleep(every)
+        job.result()
+        return job
 
     def close(self):
         try:

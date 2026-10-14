@@ -98,7 +98,7 @@ def status():
         out.append({"name": name, "does": job["does"], "every_h": job["every_h"], "enabled": row.enabled,
                     "last_run": row.last_run.isoformat(timespec="seconds") if row.last_run else None,
                     "next_run": (nxt.isoformat(timespec="seconds") if nxt else "at the next check") if row.enabled else None,
-                    "task": {"status": t["status"], "error": t["error"], "attempts": t["attempts"],
+                    "task": {"status": t["status"], "error": t["error"], "attempts": t["attempts"], "note": t.get("note"),
                              "finished_at": t["updated_at"].isoformat(timespec="seconds") if t["status"] in ("done", "failed") else None}
                     if t else None})
     return out

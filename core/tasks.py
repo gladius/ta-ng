@@ -41,6 +41,7 @@ tasks = Table(
     Column("worker", String(120)),
     Column("attempts", Integer, nullable=False, default=0),
     Column("error", Text),
+    Column("note", Text),                                # progress, written by the task itself (tasks.note)
 )
 
 
@@ -131,6 +132,21 @@ def _beat(task_id, token, stop):
             pass
 
 
+_current = threading.local()
+
+
+def note(text):
+    """The running task's progress note (shown on the Schedules page); no-op outside a task."""
+    task_id = getattr(_current, "task_id", None)
+    if not task_id:
+        return
+    try:
+        with db.ready().begin() as c:
+            c.execute(update(tasks).where(tasks.c.id == task_id).values(note=text[:300]))
+    except exc.DBAPIError:
+        pass
+
+
 def _finish(task_id, token, error=None):
     with db.ready().begin() as c:
         c.execute(update(tasks).where(tasks.c.id == task_id, tasks.c.claim == token).values(
@@ -148,6 +164,7 @@ def run(task, token):
     """Run a claimed task with a heartbeat; its function's exception fails it."""
     stop = threading.Event()
     threading.Thread(target=_beat, args=(task["id"], token, stop), daemon=True).start()
+    _current.task_id = task["id"]
     try:
         mod, fn = KINDS[task["kind"]].split(":")
         getattr(importlib.import_module(mod), fn)(**json.loads(task["args"]))
@@ -155,4 +172,5 @@ def run(task, token):
     except Exception as e:
         _finish(task["id"], token, "%s: %s" % (type(e).__name__, str(e)[:500]))
     finally:
+        _current.task_id = None
         stop.set()
