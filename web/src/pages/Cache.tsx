@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { get, post } from '../api'
 import {
   CAUSE, reuse, saved, siteName, ttlName, usecaseName, type Cause, type Overview, type Proof, type Site, type SitePage,
@@ -10,7 +10,7 @@ import {
 import { count, Failed, Kpi, Loading, money, Page, pct } from '../ui'
 
 const usd = (v: number | null | undefined) => money(v, 2)
-const INK = '#000000', GOLD = '#F7B500', RED = '#EE0000'
+const INK = '#000000', RED = '#EE0000', GREY = '#9A9693'
 const WINDOWS = [7, 30, 90] as const
 
 /** The last `n` days of a per-day series. */
@@ -213,26 +213,41 @@ function PrefixBar({ s }: { s: Site }) {
 }
 
 /** Time since the previous call with the same prefix, against the cache lifetime. */
+/** One sentence: would a longer lifetime pay, is caching a loss, or can the lifetime not be set at all. */
+function ttlVerdict(t: Ttl, days: number): string {
+  const late = t.beyond_default - (t.histogram.first ?? 0)
+  const choices = Object.keys(t.options).map(Number).filter((x) => x > 0)
+  if (t.loss > 0) return `Caching costs more than it saves: the prompt is written far more often than it is read back. Not marking it saves ${usd(t.loss)} over ${days} days.`
+  if (choices.length < 2) return `${t.provider === 'google' ? 'Gemini' : 'This provider'}'s cache lifetime is fixed at ${ttlName(t.default_ttl)}; ${late.toLocaleString('en-US')} calls came too late to reuse the prompt.`
+  if (t.best_ttl !== t.default_ttl && t.saving > 0) {
+    const more = (t.options[t.best_ttl]?.reads ?? 0) - (t.options[t.default_ttl]?.reads ?? 0)
+    return `A ${ttlName(t.best_ttl)} lifetime would save ${usd(t.saving)} over ${days} days: ${more.toLocaleString('en-US')} more calls would reuse the prompt.`
+  }
+  return late > 0 ? `A longer lifetime wouldn't pay: the ${late.toLocaleString('en-US')} late calls don't cover the extra cost of longer-lived writes.` : `Every repeat call comes within ${ttlName(t.default_ttl)}: the lifetime is not the limit.`
+}
+
+/** Time since the previous call with the same prompt: black reused it (within the lifetime), red came too late, grey
+    was the first call with that prompt (no lifetime helps). */
 function GapChart({ t }: { t: Ttl }) {
   const order = ['first', '1m', '5m', '15m', '1h', '6h', '24h', 'more']
   const label: Record<string, string> = { first: 'first ever', '1m': '≤1 min', '5m': '≤5 min', '15m': '≤15 min', '1h': '≤1 h', '6h': '≤6 h', '24h': '≤24 h', more: '>24 h' }
-  const secs: Record<string, number> = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '6h': 21600, '24h': 86400 }
+  const secs: Record<string, number> = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '6h': 21600, '24h': 86400, more: Infinity }
   const data = order.map((k) => ({ gap: label[k], calls: t.histogram[k] ?? 0, key: k }))
-  const at = (ttl: number) => data.find((d) => secs[d.key] === ttl)?.gap
+  const fill = (k: string) => (k === 'first' ? GREY : secs[k] <= t.default_ttl ? INK : RED)
   return (
     <div className="chart">
       <ResponsiveContainer width="100%" height={200}>
-        <BarChart data={data} margin={{ top: 22, right: 8, left: 0, bottom: 0 }}>
+        <BarChart data={data} margin={{ top: 12, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke="#EFEDEA" />
           <XAxis dataKey="gap" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
           <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={44} />
           <Tooltip formatter={(v: number) => [v.toLocaleString('en-US'), 'calls']} />
-          <Bar dataKey="calls" fill={INK} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-          {at(t.default_ttl) && <ReferenceLine x={at(t.default_ttl)} stroke={GOLD} strokeWidth={2} label={{ value: `cache lasts ${ttlName(t.default_ttl)}`, fontSize: 11, position: 'top' }} />}
-          {t.best_ttl !== t.default_ttl && at(t.best_ttl) && <ReferenceLine x={at(t.best_ttl)} stroke={RED} strokeWidth={2} label={{ value: `with ${ttlName(t.best_ttl)}`, fontSize: 11, position: 'top' }} />}
+          <Bar dataKey="calls" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+            {data.map((d) => <Cell key={d.key} fill={fill(d.key)} />)}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
-      <p className="muted pad">How long after the previous call with the same prompt each call came. Calls left of the gold line found the prompt still in cache; calls right of it had to write it again ({t.beyond_default.toLocaleString('en-US')} of {t.calls.toLocaleString('en-US')}).</p>
+      <p className="muted pad"><span className="swatch" style={{ background: INK }} /> reused (within {ttlName(t.default_ttl)}) · <span className="swatch" style={{ background: RED }} /> too late · <span className="swatch" style={{ background: GREY }} /> first call with this prompt</p>
     </div>
   )
 }
@@ -313,6 +328,7 @@ export function CacheSite() {
       {lifetimeMatters && main.ttl && (
         <section className="panel">
           <div className="panel-head"><b>Cache lifetime</b><span className="muted">{main.model}</span></div>
+          <p className="pad"><b>{ttlVerdict(main.ttl, n)}</b></p>
           <div className="two"><div><GapChart t={main.ttl} /></div><div><TtlTable t={main.ttl} /></div></div>
         </section>
       )}
