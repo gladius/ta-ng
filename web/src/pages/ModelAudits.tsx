@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import Select from 'react-select'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -164,7 +164,6 @@ export function ModelAudits() {
     candidate did, linking to the request's review. */
 export function ModelAuditDetail() {
   const { auditId = '' } = useParams()
-  const qc = useQueryClient()
   const q = useQuery({ queryKey: ['model-audits', auditId], queryFn: () => get<Audit>(`/audit/models/${auditId}`),
     refetchInterval: (query) => (['sampling', 'queued', 'running'].includes(query.state.data?.status ?? '') ? 5000 : false) })
   const results = useQuery({ queryKey: ['results', auditId, q.data?.items_done], queryFn: () => get<ResultsPage>(`/audit/models/${auditId}/results?per_page=200`),
