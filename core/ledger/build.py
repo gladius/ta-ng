@@ -27,7 +27,7 @@ MIN_CALLS = 5
 CORE = 0.9
 SAME = 0.8
 MARKERS = 5             # phrases per fingerprint
-HITS = 3                # phrases a call must hold to be placed (of MARKERS)
+HITS = 3                # phrases a call must hold to be placed (of MARKERS; all of them when there are fewer)
 TOP_K = 10
 SAMPLE = 5000           # calls per unit and round the groups are learned on
 ROUNDS = 3
@@ -54,8 +54,9 @@ QUALIFY MOD(ABS(FARM_FINGERPRINT(m)), {anchor}) = 0 AND LEAD(m, {last}) OVER w I
 WINDOW w AS (PARTITION BY id ORDER BY i)"""
 # placement: the fingerprint of the unit's call-sites a call holds >= HITS phrases of (the most), or NULL
 _PLACE = """(SELECT AS STRUCT site, hits FROM (
-  SELECT k.site, (SELECT COUNTIF(STRPOS(s.norm, CONCAT(' ', ph, ' ')) > 0) FROM UNNEST(k.phrases) ph) AS hits
-  FROM UNNEST(fp.sites) k) WHERE hits >= {hits} ORDER BY hits DESC, site LIMIT 1)"""
+  SELECT k.site, (SELECT COUNTIF(STRPOS(s.norm, CONCAT(' ', ph, ' ')) > 0) FROM UNNEST(k.phrases) ph) AS hits,
+         ARRAY_LENGTH(k.phrases) AS n
+  FROM UNNEST(fp.sites) k) WHERE hits >= LEAST({hits}, n) ORDER BY hits DESC, site LIMIT 1)"""
 
 SCRIPT = """
 DECLARE r INT64 DEFAULT 0;

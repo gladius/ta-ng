@@ -90,7 +90,10 @@ def group_leftovers(calls):
         n = Counter(h for i in ids for h in calls[i])
         t = {h for h, k in n.items() if k >= build.CORE * len(ids)}
         markers = sorted(t, key=lambda h: (-n[h], h))[:build.MARKERS]
-        out.append((t, markers, [i for i in ids if len(set(markers) & calls[i]) >= build.HITS]))
+        need = min(build.HITS, len(markers))
+        placed = [i for i in ids if need and len(set(markers) & calls[i]) >= need]
+        if placed:
+            out.append((t, markers, placed))
     return out
 
 
@@ -186,7 +189,7 @@ def _place_leftovers(leftover, recs, rows, day, b):
         rest = {}
         for i, r in calls.items():
             w = set(r["template"])
-            site = next((s for s, m in markers_of.items() if len(w & m) >= build.HITS), None)
+            site = next((s for s, m in markers_of.items() if m and len(w & m) >= min(build.HITS, len(m))), None)
             if site:
                 placed[i] = site
             elif w:
