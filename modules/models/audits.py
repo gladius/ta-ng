@@ -86,8 +86,8 @@ def _now():
 
 # ----------------------------------------------------------------------------------------------------- sampling
 def pick(rows, n=DEFAULT_SAMPLES):
-    """Representative requests of one call-site from (id, prompt_tokens, completion_tokens) rows: the smallest and
-    largest prompts, the quartiles between, the two heaviest answers, then random ones up to `n`."""
+    """Representative requests of one call-site from (id, prompt_tokens, completion_tokens, duration_ms) rows: the
+    smallest and largest prompts, the quartiles between, the two heaviest answers, the two slowest, then random ones."""
     if not rows:
         return []
     by_prompt = sorted(rows, key=lambda r: (r["prompt_tokens"] or 0, r["id"]))
@@ -105,6 +105,8 @@ def pick(rows, n=DEFAULT_SAMPLES):
         take(by_prompt[int(q * (len(by_prompt) - 1))], why)
     for r in by_answer[:2]:
         take(r, "heaviest answer")
+    for r in sorted((r for r in rows if r.get("duration_ms")), key=lambda r: (-r["duration_ms"], r["id"]))[:2]:
+        take(r, "slowest")
     rest = [r for r in rows if r["id"] not in chosen]
     random.Random(42).shuffle(rest)
     for r in rest:

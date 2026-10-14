@@ -89,6 +89,7 @@ site_samples = Table(
     Column("model", Text),
     Column("prompt_tokens", Integer),
     Column("completion_tokens", Integer),
+    Column("duration_ms", Float),
 )
 unplaced = Table(
     "unplaced", db.metadata,
@@ -345,7 +346,8 @@ def replace_samples(days, rows):
             c.execute(delete(site_samples).where(site_samples.c.day.in_(list(days))))
         for i in range(0, len(rows), 500):
             c.execute(site_samples.insert(), [{"site": r["site"], "id": r["id"], "day": r["day"], "model": r["model"] or "",
-                                               "prompt_tokens": r["prompt_tokens"], "completion_tokens": r["completion_tokens"]}
+                                               "prompt_tokens": r["prompt_tokens"], "completion_tokens": r["completion_tokens"],
+                                               "duration_ms": r.get("duration_ms")}
                                               for r in rows[i:i + 500]])
 
 

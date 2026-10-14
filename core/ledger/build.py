@@ -68,8 +68,10 @@ SELECT CAST(`{id}` AS STRING) AS id, COALESCE(`{usecase}`, '') AS usecase, DATE(
        CONCAT(COALESCE(`{usecase}`, ''), '\\x1f', CAST(DATE(`{time}`) AS STRING)) AS unit,
        COALESCE(JSON_VALUE(`{resp}`, '$.model'), JSON_VALUE(`{req}`, '$.model')) AS model,
        FARM_FINGERPRINT(COALESCE(TO_JSON_STRING(ARRAY(SELECT JSON_VALUE(t, '$.function.name')
-                                 FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.tools')) t ORDER BY 1)), '')) AS tools_hash,
-       ARRAY(SELECT JSON_VALUE(t, '$.function.name') FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.tools')) t) AS tool_names,
+                                 FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.tools')) t
+                                 WHERE JSON_VALUE(t, '$.function.name') IS NOT NULL ORDER BY 1)), '')) AS tools_hash,
+       ARRAY(SELECT JSON_VALUE(t, '$.function.name') FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.tools')) t
+             WHERE JSON_VALUE(t, '$.function.name') IS NOT NULL) AS tool_names,   -- an array can't hold NULL (built-in tools)
        FARM_FINGERPRINT(CONCAT(COALESCE(TO_JSON_STRING(JSON_QUERY(`{req}`, '$.tools')), ''),
                                COALESCE(TO_JSON_STRING(JSON_QUERY(`{req}`, '$.messages[0].content')), ''))) AS prefix_key,
        COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.prompt_tokens') AS INT64), 0) AS prompt_tokens,
@@ -212,43 +214,45 @@ SELECT day, usecase, site, model, CASE WHEN gap IS NULL THEN 'first' {cases} ELS
        COUNT(*) AS calls, SUM(prefix_tokens) AS prefix_tokens, SUM(prompt_tokens) AS prompt_tokens,
        SUM(cached) AS cached, SUM(written) AS written
 FROM seq GROUP BY 1, 2, 3, 4, 5;
-"""
 
-_DAYSITES = """
+-- 7. what the app reads: the day's call-sites with their templates and fingerprints, one sample call per call-site,
+--    request ids for audits (the extremes and POOL at random per call-site and model), the unplaced calls (capped)
+CREATE TEMP TABLE day_sites AS
 SELECT ANY_VALUE(c.usecase) AS usecase, ANY_VALUE(c.day) AS day, CAST(c.site AS STRING) AS site, COUNT(*) AS n,
        ANY_VALUE(t.template) AS template, ANY_VALUE(t.markers) AS markers
 FROM call_rows c LEFT JOIN (SELECT site, ARRAY_AGG(DISTINCT ph) AS template, ARRAY_AGG(IF(marker, ph, NULL) IGNORE NULLS) AS markers
                             FROM templates GROUP BY 1) t USING (site)
-GROUP BY c.site
-"""
-_LEDGER = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM ledger_daily"
-_GAPS = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM cache_gaps"
-_LAYOUT = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM site_layout"
-# request ids per day-site and model for model audits: the extremes (smallest and largest prompt, heaviest answers)
-# and POOL more at random; only priced calls that answered
-_POOL = """
-SELECT CAST(site AS STRING) AS site, model, day, id, prompt_tokens, completion_tokens FROM call_rows
+GROUP BY c.site;
+CREATE TEMP TABLE site_sample AS
+SELECT CAST(c.site AS STRING) AS site, s.sys, s.first_user, s.tool_names FROM call_rows c JOIN src s USING (id)
+QUALIFY ROW_NUMBER() OVER (PARTITION BY c.site ORDER BY FARM_FINGERPRINT(c.id)) = 1;
+CREATE TEMP TABLE pool AS
+SELECT CAST(site AS STRING) AS site, model, day, id, prompt_tokens, completion_tokens, duration_ms FROM call_rows
 WHERE cost IS NOT NULL AND completion_tokens > 0
 QUALIFY ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY FARM_FINGERPRINT(id)) <= {pool}
      OR ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY prompt_tokens, id) = 1
      OR ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY prompt_tokens DESC, id) = 1
      OR ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY completion_tokens DESC, id) <= 2
-"""
-# the calls no round placed, with their numbers and windows (up to LEFTOVER per usecase and day: the app groups them
-# across days), and how many there were
-_LEFTOVER = """
+     OR ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY duration_ms DESC, id) <= 2;
+CREATE TEMP TABLE leftover_count AS SELECT COUNT(*) AS n FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL;
+CREATE TEMP TABLE leftover AS
 SELECT s.id, s.usecase, s.day, s.model, s.prompt_tokens, s.cached AS cached_tokens, s.written AS written_tokens,
        s.completion_tokens, s.cost, s.cost + s.cached * (pr.input - pr.cache_read) / 1e6 AS cost_nocache,
        ARRAY(SELECT DISTINCT ph FROM UNNEST(w.phs) ph) AS template
 FROM (SELECT * FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL
       QUALIFY ROW_NUMBER() OVER (PARTITION BY s.usecase, s.day ORDER BY FARM_FINGERPRINT(s.id)) <= {leftover}) s
 LEFT JOIN prices pr ON pr.model = s.model
-LEFT JOIN (SELECT id, ARRAY_AGG(ph) AS phs FROM ({win_leftover}) GROUP BY 1) w USING (id)
+LEFT JOIN (SELECT id, ARRAY_AGG(ph) AS phs FROM ({win_leftover}) GROUP BY 1) w USING (id);
 """
-_LEFTOVER_COUNT = "SELECT COUNT(*) AS n FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL"
-_SAMPLE = """
-SELECT s.sys, s.first_user, s.tool_names FROM src s JOIN call_rows c USING (id) WHERE c.site = @site LIMIT 1
-"""
+
+_DAYSITES = "SELECT * FROM day_sites"
+_LEDGER = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM ledger_daily"
+_GAPS = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM cache_gaps"
+_LAYOUT = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM site_layout"
+_POOL = "SELECT * FROM pool"
+_LEFTOVER = "SELECT * FROM leftover"
+_LEFTOVER_COUNT = "SELECT n FROM leftover_count"
+_SAMPLE = "SELECT sys, first_user, tool_names FROM site_sample WHERE site = @site"
 _SAMPLE_ID = "SELECT sys, first_user, tool_names FROM src WHERE id = @id"
 
 
@@ -274,7 +278,7 @@ def _names():
             "win_sample": _WIN.format(q=sample, **win), "win_layout": _WIN.format(q=layout, **win),
             "win_leftover": _WIN.format(q=leftover, **win),
             "place": _PLACE.format(hits=HITS), "min_calls": MIN_CALLS, "core": CORE, "same": SAME, "markers": MARKERS,
-            "top_k": TOP_K, "sample": SAMPLE, "rounds": ROUNDS, "pairs": PAIRS, "layout": LAYOUT,
+            "top_k": TOP_K, "sample": SAMPLE, "rounds": ROUNDS, "pairs": PAIRS, "layout": LAYOUT, "pool": POOL, "leftover": LEFTOVER,
             "cases": " ".join("WHEN gap <= %d THEN '%s'" % (secs, name) for name, secs in BUCKETS)}
 
 
@@ -298,7 +302,8 @@ _STEPS = (("src", "reading the day's calls"), ("placed", "placing calls by finge
           ("splitter", "learning call-sites"), ("core", "learning call-sites"), ("hop", "learning call-sites"), ("newt", "learning call-sites"),
           ("tk", "learning call-sites"), ("fp", "learning call-sites"), ("call_rows", "placing calls by fingerprint"),
           ("pairs", "cache prefix"), ("lcp", "cache prefix"), ("lay_", "prompt layout"), ("site_layout", "prompt layout"),
-          ("prices", "totals"), ("ledger_daily", "totals"), ("cache_gaps", "cache gaps"))
+          ("prices", "totals"), ("ledger_daily", "totals"), ("cache_gaps", "cache gaps"), ("day_sites", "collecting the results"),
+          ("site_sample", "collecting the results"), ("pool", "audit samples"), ("leftover", "unplaced calls"))
 
 
 def _plain(text):
@@ -319,29 +324,31 @@ class Build:
         self.s.script(SCRIPT.format(**_names()), {"day_from": day_from, "day_to": day_to, "prices": _prices(), "known": known},
                       progress=lambda text: tasks.note("%s: %s" % (day_from, _plain(text))))
 
+    def _read(self, sql, params=None):
+        return [dict(r) for r in self.s.query(sql, params, timeout=4 * 3600)]
+
     def day_sites(self):
-        return [dict(r) for r in self.s.query(_DAYSITES)]
+        return self._read(_DAYSITES)
 
     def ledger(self):
-        return [dict(r) for r in self.s.query(_LEDGER)]
+        return self._read(_LEDGER)
 
     def gaps(self):
-        return [dict(r) for r in self.s.query(_GAPS)]
+        return self._read(_GAPS)
 
     def layout(self):
-        return {r["site"]: dict(r) for r in self.s.query(_LAYOUT)}
+        return {r["site"]: r for r in self._read(_LAYOUT)}
 
     def pool(self):
-        return [dict(r) for r in self.s.query(_POOL.format(pool=POOL))]
+        return self._read(_POOL)
 
     def leftover(self):
         """(the unplaced calls, capped per usecase and day; how many there were in all)"""
-        rows = [dict(r) for r in self.s.query(_LEFTOVER.format(leftover=LEFTOVER, win_leftover=_names()["win_leftover"]))]
-        return rows, self.s.query(_LEFTOVER_COUNT)[0]["n"]
+        return self._read(_LEFTOVER), self._read(_LEFTOVER_COUNT)[0]["n"]
 
     def sample_request(self, site=None, call_id=None):
         """One call (of a day-site, or by id) as a request body: system prompt, first user message, tool names."""
-        rows = self.s.query(_SAMPLE, {"site": int(site)}) if site else self.s.query(_SAMPLE_ID, {"id": call_id})
+        rows = self._read(_SAMPLE, {"site": str(site)}) if site else self._read(_SAMPLE_ID, {"id": call_id})
         return _request(rows[0]) if rows else None
 
     def close(self):
