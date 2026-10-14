@@ -53,3 +53,18 @@ def test_turned_on_it_runs_and_run_now_queues_at_once():
     task_id = schedule.run_now("process_days")
     job = {j["name"]: j for j in schedule.status()}["process_days"]
     assert job["task"]["status"] == "queued" and tasks.get(task_id)["key"] == "process_days" and job["next_run"] is None
+
+
+def _noop():
+    pass
+
+
+def test_a_run_records_when_it_started_and_finished_and_how_long_it_took(monkeypatch):
+    monkeypatch.setitem(tasks.KINDS, "reload_usecases", __name__ + ":_noop")       # an instant stand-in for the work
+    schedule.run_now("usecases_list")
+    job = {j["name"]: j for j in schedule.status()}["usecases_list"]
+    assert job["task"]["status"] == "queued" and job["task"]["started_at"] is None and job["task"]["seconds"] is None
+    tasks.run(*tasks.claim("w1"))
+    run = {j["name"]: j for j in schedule.status()}["usecases_list"]["task"]
+    assert run["status"] == "done" and run["started_at"] and run["finished_at"] and run["seconds"] is not None
+    assert run["started_at"] <= run["finished_at"]

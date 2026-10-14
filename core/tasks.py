@@ -37,7 +37,9 @@ tasks = Table(
     Column("created_at", DateTime, nullable=False, index=True),
     Column("updated_at", DateTime, nullable=False),
     Column("claim", String(32)),
-    Column("claimed_at", DateTime),
+    Column("claimed_at", DateTime),                       # the claim's heartbeat
+    Column("started_at", DateTime),                       # when a worker began it (a takeover restarts it)
+    Column("finished_at", DateTime),
     Column("worker", String(120)),
     Column("attempts", Integer, nullable=False, default=0),
     Column("error", Text),
@@ -85,6 +87,14 @@ def get(task_id):
     return dict(zip([col.name for col in tasks.columns], r)) if r else None
 
 
+def history(key, n=5):
+    """The newest `n` tasks of that key (a scheduled job's runs), newest first."""
+    eng = db.ready()
+    with eng.connect() as c:
+        ids = c.execute(select(tasks.c.id).where(tasks.c.key == key).order_by(tasks.c.created_at.desc()).limit(n)).scalars().all()
+    return [get(i) for i in ids]
+
+
 def last(key):
     """The newest task of that key, or None."""
     eng = db.ready()
@@ -114,7 +124,8 @@ def claim(worker):
                     status="failed", updated_at=now, claim=None, error="gave up after %d attempts" % row[0]))
                 continue
             got = c.execute(update(tasks).where(tasks.c.id == task_id, _claimable()).values(
-                status="running", claim=token, claimed_at=now, worker=worker, attempts=tasks.c.attempts + 1,
+                status="running", claim=token, claimed_at=now, started_at=now, finished_at=None, worker=worker,
+                attempts=tasks.c.attempts + 1,
                 updated_at=now)).rowcount
         if got:
             return get(task_id), token
@@ -150,7 +161,7 @@ def note(text):
 def _finish(task_id, token, error=None):
     with db.ready().begin() as c:
         c.execute(update(tasks).where(tasks.c.id == task_id, tasks.c.claim == token).values(
-            status="failed" if error else "done", error=error, claim=None, updated_at=_now()))
+            status="failed" if error else "done", error=error, claim=None, updated_at=_now(), finished_at=_now()))
 
 
 def release(token):

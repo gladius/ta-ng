@@ -93,12 +93,21 @@ def status():
     for name, row in sorted(_rows().items()):
         if name not in JOBS:
             continue
-        job, t = JOBS[name], tasks.get(row.task_id) if row.task_id else None
+        job = JOBS[name]
+        runs = [_run(t) for t in tasks.history(job["key"])]
         nxt = (row.last_run + datetime.timedelta(hours=job["every_h"])) if row.last_run else None
         out.append({"name": name, "does": job["does"], "every_h": job["every_h"], "enabled": row.enabled,
                     "last_run": row.last_run.isoformat(timespec="seconds") if row.last_run else None,
                     "next_run": (nxt.isoformat(timespec="seconds") if nxt else "at the next check") if row.enabled else None,
-                    "task": {"status": t["status"], "error": t["error"], "attempts": t["attempts"], "note": t.get("note"),
-                             "finished_at": t["updated_at"].isoformat(timespec="seconds") if t["status"] in ("done", "failed") else None}
-                    if t else None})
+                    "task": runs[0] if runs else None, "runs": runs})
     return out
+
+
+def _run(t):
+    """One run of a job: its outcome, when it started and finished, how long it took (so far, while running)."""
+    iso = lambda v: v.isoformat(timespec="seconds") if v else None
+    start, end = t.get("started_at"), t.get("finished_at")
+    secs = ((end or _now()) - start).total_seconds() if start else None
+    return {"status": t["status"], "error": t["error"], "attempts": t["attempts"], "note": t.get("note"),
+            "queued_at": iso(t["created_at"]), "started_at": iso(start), "finished_at": iso(end),
+            "seconds": round(secs) if secs is not None else None}

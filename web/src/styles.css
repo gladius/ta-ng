@@ -399,3 +399,5 @@ tr.dim { opacity: 0.45; }
 .preview { display: flex; flex-direction: column; gap: 4px; }
 .preview .grid td { padding: 6px 10px; font-size: 13px; }
 
+
+.runs { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
