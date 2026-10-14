@@ -9,7 +9,7 @@ type Strategies = {
   spec: { reference_runs: number; first_runs: number; candidate_runs: number; votes: number; margin: number; coherence_floor: number; judge_model: string }
   samples: number; valid_days: number
 }
-export const STRATEGY_NAME: Record<string, string> = { cheaper: 'Cheaper', better_value: 'Better value', release: 'A release', revalidate: 'Re-validate', drift_watch: 'Drift watch', manual: 'Manual' }
+export const STRATEGY_NAME: Record<string, string> = { cheaper: 'Cheaper', better_value: 'Better value', release: 'A release', manual: 'Manual', revalidate: 'Re-validate (retired)', drift_watch: 'Drift watch (retired)' }
 
 function Step({ n, title, children, wide = false }: { n: number; title: string; children: React.ReactNode; wide?: boolean }) {
   return (
