@@ -123,56 +123,55 @@ def process_day(day):
     store.day_session(day, b.s.id)
     if b.resumed:
         tasks.note("%s: resumed from the last run's BigQuery session (the day was not read again)" % day)
-    try:
-        tasks.note("%s: linking the day's call-sites to the known ones" % day)
-        day_sites, ledger, gaps, layout, pool = b.day_sites(), b.ledger(), b.gaps(), b.layout(), b.pool()
-        leftover, n_left = b.leftover()
-        by_uc = defaultdict(list)
-        for d in day_sites:
-            by_uc[d["usecase"] or ""].append(d)
-        for r in leftover:
-            by_uc.setdefault(r["usecase"] or "", [])
-        mapping, recs = {}, {}                             # day site -> site; site -> identity rec
-        for uc, ds in by_uc.items():                       # one usecase at a time: its templates only
-            known = store.templates(uc)
-            recs.update({r["site"]: r for r in store.by_usecase(uc)})
-            for d in sorted(ds, key=lambda d: d["site"]):
-                t = set(d["template"] or [])
-                site = d["site"] if d["site"] in known else link(t, known)   # placed by a known fingerprint, or learned
-                if site is None:
-                    site = site_id(uc, t)
-                    recs[site] = _new_site(site, uc, t, d["markers"], b.sample_request(site=d["site"]))
-                mapping[d["site"]] = site
-                rec = recs[site]
-                if site != d["site"]:                      # learned this day: follow its template
-                    known[site] = t
-                    _version(rec, t, day)
-                elif not rec["versions"]:
-                    rec["versions"].append({"version": site_id("v", t), "first": day, "last": day})
-                else:
-                    rec["versions"][-1]["last"] = max(rec["versions"][-1]["last"], day)
-                if d["site"] in layout:
-                    rec.update({k: layout[d["site"]][k] for k in ("static_chars", "dynamic_chars", "static_after", "tool_sets")})
-        # the day's numbers, by call-site
-        rows = {}
-        for r in ledger:
-            key = (mapping[r["site"]], r["model"] or "")
-            rows[key] = {"site": key[0], "day": day, "model": key[1], **{k: r.get(k) for k in store.NUMBERS}, "gaps": {}}
-        for g in gaps:
-            key = (mapping[g["site"]], g["model"] or "")
-            rows[key]["gaps"][g["bucket"]] = {k: g.get(k) for k in ("calls", "prefix_tokens", "prompt_tokens", "cached", "written")}
-        samples = [{**p, "site": mapping[p["site"]], "day": day} for p in pool]
-        placed = _place_leftovers(leftover, recs, rows, day, b)
-        store.replace_days([day], list(rows.values()))
-        store.replace_samples([day], samples)
-        store.replace_unplaced([day], [r for r in leftover if r["id"] not in placed])
-        _save(recs, by_uc.keys())
-        store.mark_day(day, sum(d["n"] for d in day_sites) + len(placed), n_left - len(placed))
-        tasks.note("%s: cache findings" % day)
-        _cache(recs)
-        tasks.note("%s: done" % day)
-        b.close()                                          # on a failure the session stays: the next run resumes from it
-        return len(day_sites)
+    tasks.note("%s: linking the day's call-sites to the known ones" % day)
+    day_sites, ledger, gaps, layout, pool = b.day_sites(), b.ledger(), b.gaps(), b.layout(), b.pool()
+    leftover, n_left = b.leftover()
+    by_uc = defaultdict(list)
+    for d in day_sites:
+        by_uc[d["usecase"] or ""].append(d)
+    for r in leftover:
+        by_uc.setdefault(r["usecase"] or "", [])
+    mapping, recs = {}, {}                             # day site -> site; site -> identity rec
+    for uc, ds in by_uc.items():                       # one usecase at a time: its templates only
+        known = store.templates(uc)
+        recs.update({r["site"]: r for r in store.by_usecase(uc)})
+        for d in sorted(ds, key=lambda d: d["site"]):
+            t = set(d["template"] or [])
+            site = d["site"] if d["site"] in known else link(t, known)   # placed by a known fingerprint, or learned
+            if site is None:
+                site = site_id(uc, t)
+                recs[site] = _new_site(site, uc, t, d["markers"], b.sample_request(site=d["site"]))
+            mapping[d["site"]] = site
+            rec = recs[site]
+            if site != d["site"]:                      # learned this day: follow its template
+                known[site] = t
+                _version(rec, t, day)
+            elif not rec["versions"]:
+                rec["versions"].append({"version": site_id("v", t), "first": day, "last": day})
+            else:
+                rec["versions"][-1]["last"] = max(rec["versions"][-1]["last"], day)
+            if d["site"] in layout:
+                rec.update({k: layout[d["site"]][k] for k in ("static_chars", "dynamic_chars", "static_after", "tool_sets")})
+    # the day's numbers, by call-site
+    rows = {}
+    for r in ledger:
+        key = (mapping[r["site"]], r["model"] or "")
+        rows[key] = {"site": key[0], "day": day, "model": key[1], **{k: r.get(k) for k in store.NUMBERS}, "gaps": {}}
+    for g in gaps:
+        key = (mapping[g["site"]], g["model"] or "")
+        rows[key]["gaps"][g["bucket"]] = {k: g.get(k) for k in ("calls", "prefix_tokens", "prompt_tokens", "cached", "written")}
+    samples = [{**p, "site": mapping[p["site"]], "day": day} for p in pool]
+    placed = _place_leftovers(leftover, recs, rows, day, b)
+    store.replace_days([day], list(rows.values()))
+    store.replace_samples([day], samples)
+    store.replace_unplaced([day], [r for r in leftover if r["id"] not in placed])
+    _save(recs, by_uc.keys())
+    store.mark_day(day, sum(d["n"] for d in day_sites) + len(placed), n_left - len(placed))
+    tasks.note("%s: cache findings" % day)
+    _cache(recs)
+    tasks.note("%s: done" % day)
+    b.close()                                          # on a failure the session stays: the next run resumes from it
+    return len(day_sites)
 
 
 def _place_leftovers(leftover, recs, rows, day, b):
