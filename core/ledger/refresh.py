@@ -153,16 +153,15 @@ def process_day(day):
             if d["site"] in layout:
                 rec.update({k: layout[d["site"]][k] for k in ("static_chars", "dynamic_chars", "static_after", "tool_sets")})
     # the day's numbers, by call-site
-    rows = {}
-    for r in ledger:
-        key = (mapping[r["site"]], r["model"] or "")
-        rows[key] = {"site": key[0], "day": day, "model": key[1], **{k: r.get(k) for k in store.NUMBERS}, "gaps": {}}
+    rows = {}                                              # (site, day, model) -> the day's numbers
+    for r in ledger:                                       # two of the day's groups can be one call-site: added up
+        merge(rows, mapping[r["site"]], day, r["model"] or "", r)
     for g in gaps:
-        key = (mapping[g["site"]], g["model"] or "")
-        rows[key]["gaps"][g["bucket"]] = {k: g.get(k) for k in ("calls", "prefix_tokens", "prompt_tokens", "cached", "written")}
+        merge(rows, mapping[g["site"]], day, g["model"] or "", {}, {g["bucket"]: g})
     samples = [{**p, "site": mapping[p["site"]], "day": day} for p in pool]
     placed = _place_leftovers(leftover, recs, rows, day, b)
-    store.replace_days([day], list(rows.values()))
+    store.replace_days([day], [r for r in rows.values() if r["day"] == day])
+    store.add_to_days([r for r in rows.values() if r["day"] != day])   # calls of earlier days placed only now
     store.replace_samples([day], samples)
     store.replace_unplaced([day], [r for r in leftover if r["id"] not in placed])
     _save(recs, by_uc.keys())
@@ -172,6 +171,27 @@ def process_day(day):
     tasks.note("%s: done" % day)
     b.close()                                          # on a failure the session stays: the next run resumes from it
     return len(day_sites)
+
+
+AVERAGES = ("avg_ms", "avg_messages")
+GAPS = ("calls", "prefix_tokens", "prompt_tokens", "cached", "written")
+
+
+def merge(rows, site, day, model, numbers, gaps=None):
+    """Add numbers (and gap buckets) into rows[(site, day, model)]: sums add, averages are weighted by calls."""
+    e = rows.setdefault((site, day, model), {"site": site, "day": day, "model": model, **{k: 0 for k in store.NUMBERS}, "gaps": {}})
+    n0, n1 = e.get("calls") or 0, numbers.get("calls") or 0
+    for k in AVERAGES:
+        if numbers.get(k) is not None:
+            e[k] = ((e.get(k) or 0) * n0 + numbers[k] * n1) / (n0 + n1) if n0 + n1 else numbers[k]
+    for k in store.NUMBERS:
+        if k not in AVERAGES:
+            e[k] = (e.get(k) or 0) + (numbers.get(k) or 0)
+    for bucket, g in (gaps or {}).items():
+        b = e["gaps"].setdefault(bucket, {k: 0 for k in GAPS})
+        for k in GAPS:
+            b[k] += g.get(k) or 0
+    return e
 
 
 def _place_leftovers(leftover, recs, rows, day, b):
@@ -205,14 +225,10 @@ def _place_leftovers(leftover, recs, rows, day, b):
             for i in ids:
                 placed[i] = site
         for i, r in calls.items():
-            if i not in placed:
-                continue
-            key = (placed[i], r["model"] or "")
-            e = rows.setdefault(key, {"site": key[0], "day": str(r["day"]), "model": key[1], **{k: 0 for k in store.NUMBERS}, "gaps": {}})
-            for k in ("prompt_tokens", "cached_tokens", "written_tokens", "completion_tokens", "cost", "cost_nocache"):
-                e[k] = (e.get(k) or 0) + (r.get(k) or 0)
-            e["calls"] = (e.get("calls") or 0) + 1
-            e["calls_cached"] = (e.get("calls_cached") or 0) + int((r.get("cached_tokens") or 0) > 0)
+            if i in placed:                                # one call, on its own day
+                merge(rows, placed[i], str(r["day"]), r["model"] or "",
+                      {**{k: r.get(k) for k in ("prompt_tokens", "cached_tokens", "written_tokens", "completion_tokens", "cost",
+                                                 "cost_nocache")}, "calls": 1, "calls_cached": int((r.get("cached_tokens") or 0) > 0)})
     today_ids = {r["id"] for r in leftover}
     store.drop_unplaced([i for i in placed if i not in today_ids])
     return placed

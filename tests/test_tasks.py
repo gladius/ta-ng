@@ -108,3 +108,21 @@ def test_an_audit_whose_sampling_was_given_up_shows_failed():
         c.execute(update(tasks.tasks).where(tasks.tasks.c.id == t["id"]).values(status="failed", error="gave up after 3 attempts"))
     after = audits.refresh_status(audits.get(a["id"]))
     assert after["status"] == "failed" and "gave up" in after["error"]
+
+
+def test_day_numbers_add_up_and_a_late_placed_call_lands_on_its_own_day():
+    from core.identity import store
+    from core.ledger import refresh
+    with db.ready().begin() as c:
+        c.execute(delete(store.site_days))
+    rows = {}
+    refresh.merge(rows, "s1", "2026-10-14", "m", {"calls": 10, "cost": 1.0, "avg_ms": 100.0}, {"1m": {"calls": 4}})
+    refresh.merge(rows, "s1", "2026-10-14", "m", {"calls": 30, "cost": 2.0, "avg_ms": 200.0}, {"1m": {"calls": 6}})
+    e = rows[("s1", "2026-10-14", "m")]
+    assert e["calls"] == 40 and e["cost"] == 3.0 and e["avg_ms"] == 175.0 and e["gaps"]["1m"]["calls"] == 10
+    store.replace_days(["2026-10-13"], [{"site": "s1", "day": "2026-10-13", "model": "m", "calls": 5, "cost": 0.5, "gaps": {}}])
+    store.add_to_days([{"site": "s1", "day": "2026-10-13", "model": "m", "calls": 1, "cost": 0.1},      # an existing row: added
+                       {"site": "s2", "day": "2026-10-13", "model": "m", "calls": 1, "cost": 0.2}])     # a missing one: inserted
+    s = store.series(["s1", "s2"])
+    assert s["s1"]["m"]["2026-10-13"]["calls"] == 6 and round(s["s1"]["m"]["2026-10-13"]["cost"], 6) == 0.6
+    assert s["s2"]["m"]["2026-10-13"]["calls"] == 1

@@ -312,6 +312,23 @@ def replace_days(days, rows):
                                            for r in rows[i:i + 500]])
 
 
+def add_to_days(rows):
+    """Add numbers onto existing day rows (calls of an earlier day placed only later), inserting the missing ones."""
+    if not rows:
+        return
+    eng = db.ready()
+    with eng.begin() as c:
+        for r in rows:
+            key = (site_days.c.site == r["site"]) & (site_days.c.day == r["day"]) & (site_days.c.model == (r["model"] or ""))
+            have = c.execute(select(site_days).where(key)).first()
+            if have is None:
+                c.execute(site_days.insert().values(site=r["site"], day=r["day"], model=r["model"] or "",
+                                                    **{k: r.get(k) for k in NUMBERS}, gaps=json.dumps(r.get("gaps") or {})))
+            else:
+                c.execute(update(site_days).where(key).values(**{k: (getattr(have, k) or 0) + (r.get(k) or 0)
+                                                                 for k in NUMBERS if k not in ("avg_ms", "avg_messages")}))
+
+
 def series(sites):
     """{site: {model: {day: {<NUMBERS>, gaps}}}} for those sites, from site_days."""
     out = defaultdict(lambda: defaultdict(dict))
