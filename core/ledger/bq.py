@@ -76,11 +76,23 @@ def location():
 
 class Session:
     """A BigQuery session: temp tables made by one query stay readable by the next, for 24 h or until closed."""
-    def __init__(self):
+    def __init__(self, session_id=None):
+        """A new session, or an existing one by id (its temp tables still there if it is under 24 h old)."""
         from google.cloud import bigquery
+        if session_id:
+            self.id = session_id
+            return
         job = client().query("SELECT 1", job_config=bigquery.QueryJobConfig(create_session=True), location=location())
         job.result()
         self.id = job.session_info.session_id
+
+    def has(self, table):
+        """Does this temp table exist in the session (False when the session expired or the script never got there)."""
+        try:
+            self.query("SELECT 1 FROM %s LIMIT 0" % table, timeout=120)
+            return True
+        except Exception:
+            return False
 
     def _cfg(self, params):
         from google.cloud import bigquery

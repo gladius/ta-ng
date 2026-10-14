@@ -119,7 +119,10 @@ def process_day(day):
     """Process one day (ISO date) for every usecase. Blocking: the task start() queues runs it."""
     day = str(day)
     tasks.note("%s: starting" % day)
-    b = build.Build(day, day, store.fingerprints())
+    b = build.Build(day, day, store.fingerprints(), session_id=store.day_session(day))
+    store.day_session(day, b.s.id)
+    if b.resumed:
+        tasks.note("%s: resumed from the last run's BigQuery session (the day was not read again)" % day)
     try:
         tasks.note("%s: linking the day's call-sites to the known ones" % day)
         day_sites, ledger, gaps, layout, pool = b.day_sites(), b.ledger(), b.gaps(), b.layout(), b.pool()
@@ -168,9 +171,8 @@ def process_day(day):
         tasks.note("%s: cache findings" % day)
         _cache(recs)
         tasks.note("%s: done" % day)
+        b.close()                                          # on a failure the session stays: the next run resumes from it
         return len(day_sites)
-    finally:
-        b.close()
 
 
 def _place_leftovers(leftover, recs, rows, day, b):

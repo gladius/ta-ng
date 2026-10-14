@@ -317,8 +317,14 @@ def _plain(text):
 class Build:
     """Run the day script once for days day_from..day_to (dates, inclusive) with the fingerprints known
     (known: [{usecase, site, markers, template}], phrases joined by '|'), then read its results."""
-    def __init__(self, day_from, day_to, known=()):
-        self.s = bq.Session()
+    def __init__(self, day_from, day_to, known=(), session_id=None):
+        """With `session_id`, a session whose script already finished (its tables are reused: no read of the day)."""
+        self.s = bq.Session(session_id) if session_id else bq.Session()
+        self.resumed = bool(session_id) and self.s.has("leftover")
+        if self.resumed:
+            return
+        if session_id:                                      # the session is gone or incomplete: start afresh
+            self.s = bq.Session()
         known = [{"usecase": k["usecase"] or "", "site": str(k["site"]), "markers": k["markers"], "template": k["template"]}
                  for k in known] or [{"usecase": "\x00", "site": "0", "markers": "", "template": ""}]   # a typed, empty array
         from core import tasks

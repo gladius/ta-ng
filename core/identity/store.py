@@ -105,6 +105,12 @@ unplaced = Table(
     Column("cost_nocache", Float),
     Column("template", Text, nullable=False),                  # JSON list of window hashes
 )
+day_sessions = Table(                                      # the BigQuery session of a day's last script run: a failure
+    "day_sessions", db.metadata,                           # after the script resumes from its temp tables (24 h)
+    Column("day", String(10), primary_key=True),
+    Column("session_id", Text, nullable=False),
+    Column("at", DateTime, nullable=False),
+)
 processed_days = Table(
     "processed_days", db.metadata,
     Column("day", String(10), primary_key=True),
@@ -390,6 +396,18 @@ def drop_unplaced(ids):
     with eng.begin() as c:
         for i in range(0, len(ids), 500):
             c.execute(delete(unplaced).where(unplaced.c.id.in_(ids[i:i + 500])))
+
+
+def day_session(day, session_id=None):
+    """Remember the session of the day's script run, or read it back (None when older than 20 h)."""
+    eng = db.ready()
+    with eng.begin() as c:
+        if session_id:
+            c.execute(delete(day_sessions).where(day_sessions.c.day == day))
+            c.execute(day_sessions.insert().values(day=day, session_id=session_id, at=_now()))
+            return session_id
+        r = c.execute(select(day_sessions.c.session_id, day_sessions.c.at).where(day_sessions.c.day == day)).first()
+    return r[0] if r and (_now() - r[1]).total_seconds() < 20 * 3600 else None
 
 
 # ------------------------------------------------------------------------------------------- processed_days
