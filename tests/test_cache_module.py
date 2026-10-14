@@ -43,3 +43,19 @@ def test_a_mark_is_worth_the_fixed_part_on_every_unread_call():
     d = diagnosis.diagnose(_site(static_chars=40000), _ledger("claude-sonnet-5", calls=100), None)
     assert d["cause"] == "no_mark" and d["proof"] == "safe"
     assert d["saving"] > 0 and d["evidence"]["fixed_tokens"] == 10000
+
+
+def test_claude_caching_that_is_rarely_read_is_a_loss():
+    # 1,000 calls, each the first of its prefix or a day apart: every one writes (1.25x on 5 min), none reads
+    rows = [{"bucket": b, "calls": n, "prefix_tokens": n * 5000, "cached": 0, "written": n * 5000} for b, n in
+            (("first", 500), ("more", 500))]
+    w = ttl.what_if(rows, "claude-sonnet-5")
+    assert w["best_ttl"] == 0 and w["loss"] > 0                                     # not marking is cheaper
+    assert w["current"]["cost"] == w["options"][300]["cost"]                          # today: every call writes at 1.25x
+    assert w["current"]["cost"] > w["options"][0]["cost"]
+    assert diagnosis.diagnose(_site(), _ledger("claude-sonnet-5", cached_share=0.0) | {"calls_cached": 60}, w)["cause"] == "loss"
+
+
+def test_no_loss_option_where_writes_cost_nothing_extra():
+    w = ttl.what_if(_gaps(first=1, **{"1m": 100}), "gpt-5.4-mini")
+    assert 0 not in w["options"] and w["loss"] == 0.0

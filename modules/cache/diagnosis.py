@@ -5,6 +5,7 @@
   below_min        the fixed part is under the provider's minimum: nothing to cache (no fix; maybe merge prompts)
   dynamic_first    per-call content sits before the fixed part, so the prefix changes every call (prompt change: proof)
   tools_vary       the tool list changes per call and tools lead the prefix (prompt change: a stable tool set)
+  loss             caching costs more than it saves (writes with a surcharge, rarely read): stop marking (safe fix)
   gaps             the prefix repeats but calls arrive after it expired: a longer lifetime pays (safe fix)
   sparse           calls arrive after the prefix expired and the provider offers no longer lifetime
   versions_churn   the fixed part changed often in the window: each version restarts the cache
@@ -56,7 +57,10 @@ def diagnose(site, ledger, ttl):
     if site["tool_sets"] > 1 and site["tool_sets"] > max(3, calls * 0.01) and share_now < OK_SHARE * achievable:
         return _out("tools_vary", ev, achievable, saving, "The tool list changes from call to call and tools lead "
                     "the prefix. Send one stable tool set per call-site.", "proof")
-    if ttl and ttl["best_ttl"] != ttl["default_ttl"] and ttl["saving"] >= MATERIAL * (ledger["cost"] or 0):
+    if ttl and ttl.get("loss", 0) >= MATERIAL * (ledger["cost"] or 0) and ttl["best_ttl"] == 0:
+        return _out("loss", ev, achievable, ttl["loss"], "The prompt is written to cache far more often than it is read "
+                    "again, and each write costs extra. Not marking it is cheaper by the amount shown.", "safe")
+    if ttl and ttl["best_ttl"] not in (0, ttl["default_ttl"]) and ttl["saving"] >= MATERIAL * (ledger["cost"] or 0):
         return _out("gaps", ev, achievable, ttl["saving"], "Calls repeat the prefix after it expired. A %s lifetime "
                     "saves the difference." % _ttl_name(ttl["best_ttl"]), "safe")
     if share_now >= OK_SHARE * achievable:

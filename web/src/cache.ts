@@ -4,7 +4,7 @@ export type Totals = {
   calls: number; prompt_tokens: number; cached_tokens: number; written_tokens: number; completion_tokens: number
   calls_cached: number; cost: number; cost_nocache: number; calls_with_tools: number; unsure: boolean
 }
-export type Cause = 'ok' | 'no_mark' | 'below_min' | 'dynamic_first' | 'tools_vary' | 'gaps' | 'sparse' | 'versions_churn' | 'unexplained'
+export type Cause = 'ok' | 'no_mark' | 'below_min' | 'dynamic_first' | 'tools_vary' | 'gaps' | 'sparse' | 'versions_churn' | 'unexplained' | 'loss'
 export type Proof = 'safe' | 'proof' | null
 export type Diagnosis = {
   cause: Cause; saving: number; suggestion: string; proof: Proof; achievable_share: number
@@ -14,7 +14,7 @@ export type Diagnosis = {
 export type Ttl = {
   provider: string; options: Record<string, { reads: number; writes: number; cost: number }>
   current: { cached_tokens: number; written_tokens: number; cost: number }
-  default_ttl: number; best_ttl: number; saving: number; calls: number; beyond_default: number
+  default_ttl: number; best_ttl: number; saving: number; calls: number; beyond_default: number; loss: number
   histogram: Record<string, number>
 }
 export type Trend = { recent: number; before: number; delta: number } | null
@@ -38,9 +38,9 @@ export type SitePage = Site & { built_at: string | null; window: number; usecase
 export const CAUSE: Record<Cause, string> = {
   ok: 'reusing well', no_mark: 'no cache mark', below_min: 'shared part too small', dynamic_first: 'per-call content first',
   tools_vary: 'tool list varies', gaps: 'cache expires too soon', sparse: 'calls too far apart', versions_churn: 'prompt changes often',
-  unexplained: 'not reused, unexplained',
+  unexplained: 'not reused, unexplained', loss: 'caching costs more than it saves',
 }
-export const ttlName = (secs: number) => (secs < 3600 ? `${secs / 60} min` : secs < 86400 ? `${secs / 3600} h` : `${secs / 86400} d`)
+export const ttlName = (secs: number) => (secs === 0 ? 'no caching' : secs < 3600 ? `${secs / 60} min` : secs < 86400 ? `${secs / 3600} h` : `${secs / 86400} d`)
 /** The share of prompt tokens reused from cache. */
 export const reuse = (t: Totals) => (t.prompt_tokens ? t.cached_tokens / t.prompt_tokens : 0)
 /** What caching saved: the no-cache cost minus the logged cost (0 when the model has no catalog price). */

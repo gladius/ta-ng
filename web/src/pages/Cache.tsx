@@ -248,9 +248,10 @@ function TtlTable({ t }: { t: Ttl }) {
             <td>{ttlName(o.ttl)}{o.ttl === t.default_ttl && <span className="muted"> (now)</span>}</td>
             <td className="num mono">{o.reads.toLocaleString('en-US')}</td><td className="num mono">{o.writes.toLocaleString('en-US')}</td>
             <td className="num mono">{usd(o.cost)}</td>
-            <td>{o.ttl === t.best_ttl && t.saving > 0 && <span className="best">saves {usd(t.saving)}</span>}</td>
+            <td>{o.ttl === t.best_ttl && t.saving > 0 && <span className="best">saves {usd(t.saving)}</span>}{o.ttl === 0 && t.loss > 0 && <span className="best">saves {usd(t.loss)}</span>}</td>
           </tr>
         ))}
+        <tr><td className="muted">today, as logged</td><td className="num muted">—</td><td className="num muted">—</td><td className="num mono">{usd(t.current.cost)}</td><td>{t.loss > 0 && <span className="chip warn">caching is a loss</span>}</td></tr>
       </tbody>
     </table>
   )
@@ -268,7 +269,7 @@ export function CacheSite() {
   const n = Math.min(n0, s.window)
   const t = sumDays(s.days, n)
   const main = Object.values(s.models).sort((a, b) => b.calls - a.calls)[0]
-  const lifetimeMatters = main?.ttl && (Object.keys(main.ttl.options).length > 1 || s.story.cause === 'gaps' || s.story.cause === 'sparse')
+  const lifetimeMatters = !!main?.ttl
   return (
     <Page crumbs={[...crumbs, { label: usecaseName(s.usecase), to: `/audit/cache/usecases/${encodeURIComponent(s.usecase)}` }, { label: siteName(s) }]}>
       <div className="head">

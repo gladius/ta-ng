@@ -44,6 +44,10 @@ def tell(site, window):
     elif cause == "tools_vary":
         why = "The tool list changes from call to call (%d different sets) and tools come first in what the cache sees." % ev.get("tool_sets", 0)
         action = "Send one stable tool set for this call-site; put the varying part in the message instead."
+    elif cause == "loss":
+        t = main.get("ttl") or {}
+        why = "The prompt is written to cache much more often than it is read back, and every write costs extra."
+        action = "Stop marking this prompt for cache: it saves about $%.2f over the window. No text changes." % t.get("loss", 0)
     elif cause == "gaps":
         t = main.get("ttl") or {}
         why = "Most calls come after the cache expired (%s)." % _TTL(t.get("default_ttl", 300))
