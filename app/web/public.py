@@ -36,7 +36,7 @@ routers. One call, `POST /api/audit/models`, with one scope:
   `request` and `response` bodies. A request may name its own `candidates` (`label` and `model`).
 
 Candidates: the `strategy`'s picks for each request's model plus the `models` you name. Strategies (`GET
-/api/audit/models/strategies`): `cheaper`, `better_value`, `release`, `revalidate`, `drift_watch`, `manual`.
+/api/audit/models/strategies`): `cheaper`, `better_value`, `release`, `manual`.
 
 **Flow**
 1. `POST /api/audit/models` returns `202` and `{audits: [{id, url, ...}]}`.

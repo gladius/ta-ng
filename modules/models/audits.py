@@ -34,10 +34,9 @@ STRATEGIES = {
     "better_value": "per call-site, the served model one tier up and the same-tier served models of other providers: "
                     "a stronger model can be cheaper per call when it answers tightly; up to 3",
     "release": "the named models, against every call-site in scope",
-    "revalidate": "the models already measured on each call-site, again",
     "manual": "exactly the models you name",
 }
-STRATEGY_IDS = tuple(STRATEGIES) + ("open_weight", "custom", "auto", "drift_watch")      # older rows
+STRATEGY_IDS = tuple(STRATEGIES) + ("open_weight", "custom", "auto", "drift_watch", "revalidate")      # older rows
 MAX_PICKS = 3
 TRIGGERS = ("user", "release", "router", "api", "schedule")
 DEFAULT_SAMPLES = 12
@@ -186,8 +185,6 @@ def candidates_for(model, strategy, asked, auto=False, rec=None):
         named += [m for m in auto_candidates(model) if m not in named]
     if strategy == "better_value":
         named += [m for m in better_value_candidates(model) if m not in named]
-    if strategy == "revalidate" and rec:
-        named += [m for m in knowledge(rec["site"], rec)["candidates"] if m not in named and m != model]
     return served([m for m in named if m not in same])
 
 

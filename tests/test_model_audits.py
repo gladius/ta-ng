@@ -56,4 +56,3 @@ def test_knowledge_is_the_latest_valid_verdict_per_model_and_audits_never_touch_
     k = audits.knowledge("s1", rec)
     assert {m: v["valid"] for m, v in k["candidates"].items()} == {"a": True, "b": False, "c": False}
     assert k["cheapest"]["model"] == "a" and k["candidates"]["a"]["audit"] == "a1"
-    assert sorted(audits.candidates_for("gpt-5.4", "revalidate", [], rec=rec)) == ["a", "b", "c"]
