@@ -42,15 +42,9 @@ export default function Shell() {
           <Entry icon={LayoutDashboard} label="Overview" to="/" end />
         </div>
         <div className="group">
-          <span className="group-name">Profiles</span>
+          <span className="group-name">Agentic workloads</span>
           <Entry icon={Fingerprint} label="Usecases" to="/usecases" />
-        </div>
-        <div className="group">
-          <span className="group-name">Model audit</span>
           <Entry icon={TrendingDown} label="Model audits" to="/audit/models" />
-        </div>
-        <div className="group">
-          <span className="group-name">Cache</span>
           <Entry icon={Database} label="Cache audit" to="/audit/cache" />
         </div>
         <div className="group">

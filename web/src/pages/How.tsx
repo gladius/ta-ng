@@ -24,8 +24,8 @@ function Step({ n, title, children, wide = false }: { n: number; title: string; 
 export default function How({ strategy: initial = 'cheaper', spec: given, samples: givenSamples, embedded = false }: { strategy?: string; spec?: Strategies['spec']; samples?: number; embedded?: boolean }) {
   const [strategy, setStrategy] = useState(initial)
   const q = useQuery({ queryKey: ['strategies'], queryFn: () => get<Strategies>('/audit/models/strategies') })
-  if (q.isPending) return embedded ? <Loading /> : <Page crumbs={[{ label: 'Model audit' }, { label: 'How a model audit works' }]}><Loading /></Page>
-  if (q.isError) return embedded ? <Failed error={q.error} /> : <Page crumbs={[{ label: 'Model audit' }, { label: 'How a model audit works' }]}><Failed error={q.error} /></Page>
+  if (q.isPending) return embedded ? <Loading /> : <Page crumbs={[{ label: 'Agentic workloads' }, { label: 'How a model audit works' }]}><Loading /></Page>
+  if (q.isError) return embedded ? <Failed error={q.error} /> : <Page crumbs={[{ label: 'Agentic workloads' }, { label: 'How a model audit works' }]}><Failed error={q.error} /></Page>
   const s = given ?? q.data.spec
   const samples = givenSamples ?? q.data.samples
   const does = q.data.strategies.find((x) => x.id === strategy)?.does ?? ''
@@ -52,5 +52,5 @@ export default function How({ strategy: initial = 'cheaper', spec: given, sample
       {!embedded && <p className="muted">Start one from <Link to="/audit/models">Model audits</Link> (a usecase or call-site page links there with it selected), or with <span className="mono">POST /api/audit/models</span>.</p>}
     </>
   )
-  return embedded ? <div className="flow-wrap">{body}</div> : <Page crumbs={[{ label: 'Model audit' }, { label: 'Model audits', to: '/audit/models' }, { label: 'How it works' }]}>{body}</Page>
+  return embedded ? <div className="flow-wrap">{body}</div> : <Page crumbs={[{ label: 'Agentic workloads' }, { label: 'Model audits', to: '/audit/models' }, { label: 'How it works' }]}>{body}</Page>
 }

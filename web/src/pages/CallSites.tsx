@@ -31,7 +31,7 @@ export function CallSiteUsecases() {
   const [q, setQ] = useState(params.get('q') ?? '')
   const list = useQuery({ queryKey: ['callsites', 'usecases', page, q], queryFn: () => get<Usecases>(`/suite/callsites/usecases?page=${page}&per_page=50${q ? '&q=' + encodeURIComponent(q) : ''}`),
     refetchInterval: (query) => (query.state.data?.reloading || query.state.data?.running.length ? 5000 : false) })
-  const crumbs = [{ label: 'Profiles' }, { label: 'Usecases' }]
+  const crumbs = [{ label: 'Agentic workloads' }, { label: 'Usecases' }]
   return (
     <Page crumbs={crumbs}>
       <div className="head">
@@ -85,7 +85,7 @@ export function CallSiteUsecase() {
   const { usecase = '' } = useParams()
   const q = useQuery({ queryKey: ['callsites', 'usecase', usecase], queryFn: () => get<UsecasePage>(`/suite/callsites/usecases/${encodeURIComponent(usecase)}`),
     refetchInterval: (query) => (query.state.data?.analysing ? 4000 : false) })
-  const crumbs = [{ label: 'Profiles' }, { label: 'Usecases', to: '/usecases' }, { label: usecaseName(usecase) }]
+  const crumbs = [{ label: 'Agentic workloads' }, { label: 'Usecases', to: '/usecases' }, { label: usecaseName(usecase) }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const u = q.data
@@ -138,7 +138,7 @@ function LayoutBar({ s }: { s: Site }) {
 export function CallSite() {
   const { site = '' } = useParams()
   const q = useQuery({ queryKey: ['callsites', 'site', site], queryFn: () => get<SitePage>(`/suite/callsites/${site}`) })
-  const crumbs = [{ label: 'Profiles' }, { label: 'Usecases', to: '/usecases' }]
+  const crumbs = [{ label: 'Agentic workloads' }, { label: 'Usecases', to: '/usecases' }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const s = q.data

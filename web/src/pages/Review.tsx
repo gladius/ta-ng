@@ -39,7 +39,7 @@ export default function Review() {
   const origLatency = r ? avg(r.reference.runs.map((x) => x.latency_ms)) : null
 
   return (
-    <Page fill crumbs={[{ label: 'Model audit' }, { label: 'Model audits', to: '/audit/models' }, { label: jobId, to: `/audit/models/${jobId}` }, { label: requestId }]}>
+    <Page fill crumbs={[{ label: 'Agentic workloads' }, { label: 'Model audits', to: '/audit/models' }, { label: jobId, to: `/audit/models/${jobId}` }, { label: requestId }]}>
       <div className="review">
         <section className="review-list" aria-label="Requests">
           <label htmlFor="review-find" className="sr">Find a request</label>

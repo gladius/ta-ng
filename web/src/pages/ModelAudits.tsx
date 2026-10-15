@@ -120,7 +120,7 @@ export function NewModelAudit() {
   const nav = useNavigate()
   const usecase = params.get('usecase') ?? undefined, site = params.get('site') ?? undefined
   return (
-    <Page crumbs={[{ label: 'Model audit' }, { label: 'Model audits', to: '/audit/models' }, { label: 'New' }]}>
+    <Page crumbs={[{ label: 'Agentic workloads' }, { label: 'Model audits', to: '/audit/models' }, { label: 'New' }]}>
       <AuditDialog key={(usecase ?? '') + (site ?? '')} usecase={usecase} site={site} onStarted={() => nav('/audit/models')} />
     </Page>
   )
@@ -129,7 +129,7 @@ export function NewModelAudit() {
 export function ModelAudits() {
   const q = useQuery({ queryKey: ['model-audits'], queryFn: () => get<Audit[]>('/audit/models'),
     refetchInterval: (query) => (query.state.data?.some((c) => ['sampling', 'queued', 'running'].includes(c.status)) ? 5000 : false) })
-  const crumbs = [{ label: 'Model audit' }, { label: 'Model audits' }]
+  const crumbs = [{ label: 'Agentic workloads' }, { label: 'Model audits' }]
   return (
     <Page crumbs={crumbs}>
       <div className="head"><div><h1>Model audits</h1><span className="muted"><Link to="/audit/models/how">How an audit works</Link></span></div><Link className="btn primary" to="/audit/models/new">New model audit…</Link></div>
@@ -168,7 +168,7 @@ export function ModelAuditDetail() {
     refetchInterval: (query) => (['sampling', 'queued', 'running'].includes(query.state.data?.status ?? '') ? 5000 : false) })
   const results = useQuery({ queryKey: ['results', auditId, q.data?.items_done], queryFn: () => get<ResultsPage>(`/audit/models/${auditId}/results?per_page=200`),
     enabled: !!q.data && q.data.status !== 'sampling' })
-  const crumbs = [{ label: 'Model audit' }, { label: 'Model audits', to: '/audit/models' }, { label: auditId }]
+  const crumbs = [{ label: 'Agentic workloads' }, { label: 'Model audits', to: '/audit/models' }, { label: auditId }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const c = q.data

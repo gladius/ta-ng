@@ -75,7 +75,7 @@ export function CacheOverview() {
   const q = useQuery({ queryKey: ['cache', 'overview'], queryFn: () => get<Overview>('/audit/cache/overview'),
     refetchInterval: (query) => (query.state.data?.status.running ? 5000 : false) })
   const refresh = useMutation({ mutationFn: () => post<unknown>('/audit/cache/refresh'), onSuccess: () => qc.invalidateQueries({ queryKey: ['cache'] }) })
-  const crumbs = [{ label: 'Cache' }, { label: 'Cache audit' }]
+  const crumbs = [{ label: 'Agentic workloads' }, { label: 'Cache audit' }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) {
     return (
@@ -167,7 +167,7 @@ export function CacheUsecase() {
   const { usecase = '' } = useParams()
   const [n0, setN] = useState<number>(30)
   const q = useQuery({ queryKey: ['cache', 'usecase', usecase], queryFn: () => get<UsecasePage>(`/audit/cache/usecases/${encodeURIComponent(usecase)}`) })
-  const crumbs = [{ label: 'Cache' }, { label: 'Cache audit', to: '/audit/cache' }, { label: usecaseName(usecase) }]
+  const crumbs = [{ label: 'Agentic workloads' }, { label: 'Cache audit', to: '/audit/cache' }, { label: usecaseName(usecase) }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const u = q.data
@@ -277,7 +277,7 @@ export function CacheSite() {
   const { site = '' } = useParams()
   const [n0, setN] = useState<number>(30)
   const q = useQuery({ queryKey: ['cache', 'site', site], queryFn: () => get<SitePage>(`/audit/cache/sites/${site}`) })
-  const crumbs = [{ label: 'Cache' }, { label: 'Cache audit', to: '/audit/cache' }]
+  const crumbs = [{ label: 'Agentic workloads' }, { label: 'Cache audit', to: '/audit/cache' }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const s = q.data
