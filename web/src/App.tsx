@@ -10,6 +10,7 @@ import { ModelAuditDetail, ModelAudits, NewModelAudit } from './pages/ModelAudit
 import How from './pages/How'
 import { Page } from './ui'
 import Schedules from './pages/Schedules'
+import Quality from './pages/Quality'
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="audit/cache/sites/:site" element={<CacheSite />} />
         <Route path="models" element={<Models />} />
         <Route path="schedules" element={<Schedules />} />
+        <Route path="quality" element={<Quality />} />
         <Route path="models/migrations/:provider" element={<Migrations />} />
         <Route path="*" element={<Page crumbs={[]}><p className="empty">No such page.</p></Page>} />
       </Route>

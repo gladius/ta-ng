@@ -68,8 +68,8 @@ WINDOW w AS (PARTITION BY id ORDER BY i)"""
 # placement: the fingerprint of the unit's call-sites a call holds >= HITS phrases of (the most), or NULL
 _PLACE = """(SELECT AS STRUCT site, hits FROM (
   SELECT k.site, (SELECT COUNTIF(STRPOS(s.norm, CONCAT(' ', ph, ' ')) > 0) FROM UNNEST(k.phrases) ph) AS hits,
-         ARRAY_LENGTH(k.phrases) AS n
-  FROM UNNEST(fp.sites) k) WHERE hits >= LEAST({hits}, n) ORDER BY hits DESC, site LIMIT 1)"""
+         IF(k.need > 0, k.need, LEAST({hits}, ARRAY_LENGTH(k.phrases))) AS need
+  FROM UNNEST(fp.sites) k) WHERE hits >= need ORDER BY hits DESC, need, site LIMIT 1)"""
 
 SCRIPT = """
 DECLARE r INT64 DEFAULT 0;
@@ -135,7 +135,7 @@ WHERE rn = 1;
 
 -- 2. place every call by the fingerprints the app knows (its usecase's), one pass, row by row
 CREATE TEMP TABLE fp AS
-SELECT usecase, ARRAY_AGG(STRUCT(site, SPLIT(markers, '|') AS phrases)) AS sites FROM UNNEST(@known) GROUP BY 1;
+SELECT usecase, ARRAY_AGG(STRUCT(site, SPLIT(markers, '|') AS phrases, need)) AS sites FROM UNNEST(@known) GROUP BY 1;
 CREATE TEMP TABLE placed AS
 SELECT id, CAST(best.site AS INT64) AS site, -1 AS round FROM (
   SELECT s.id, {place} AS best FROM src s JOIN fp ON fp.usecase = s.usecase)
@@ -193,7 +193,7 @@ WHILE r < {rounds} DO
   LEFT JOIN (SELECT unit, h FROM newt GROUP BY 1, 2 HAVING COUNT(DISTINCT g) > 1) o ON o.unit = t.unit AND o.h = t.h
 ;
   CREATE OR REPLACE TEMP TABLE fp AS
-  SELECT unit, ARRAY_AGG(STRUCT(CAST(site AS STRING) AS site, phrases)) AS sites FROM (
+  SELECT unit, ARRAY_AGG(STRUCT(CAST(site AS STRING) AS site, phrases, 0 AS need)) AS sites FROM (
     SELECT unit, site, ARRAY_AGG(ph) AS phrases FROM templates WHERE marker AND site IN (SELECT site FROM tk) GROUP BY 1, 2)
   GROUP BY 1;
   INSERT INTO placed
@@ -266,9 +266,15 @@ SELECT ANY_VALUE(c.usecase) AS usecase, ANY_VALUE(c.day) AS day, CAST(c.site AS 
 FROM call_rows c LEFT JOIN (SELECT site, ARRAY_AGG(DISTINCT ph) AS template, ARRAY_AGG(IF(marker, ph, NULL) IGNORE NULLS) AS markers
                             FROM templates GROUP BY 1) t USING (site)
 GROUP BY c.site;
-CREATE TEMP TABLE site_sample AS
-SELECT CAST(c.site AS STRING) AS site, s.sys, s.first_user, s.tool_names FROM call_rows c JOIN src s USING (id)
-QUALIFY ROW_NUMBER() OVER (PARTITION BY c.site ORDER BY FARM_FINGERPRINT(c.id)) = 1;
+-- a few calls per day-site, one read of the text: up to 3 at random and the first of each model (the profile reads
+-- the first; the audit of the audit compares them)
+CREATE TEMP TABLE site_calls AS
+SELECT CAST(c.site AS STRING) AS site, c.usecase, c.id, c.model, s.sys, s.first_user, s.tool_names,
+       ROW_NUMBER() OVER (PARTITION BY c.site ORDER BY FARM_FINGERPRINT(c.id)) AS rn
+FROM call_rows c JOIN src s USING (id)
+QUALIFY ROW_NUMBER() OVER (PARTITION BY c.site ORDER BY FARM_FINGERPRINT(c.id)) <= 3
+     OR ROW_NUMBER() OVER (PARTITION BY c.site, c.model ORDER BY FARM_FINGERPRINT(c.id)) = 1;
+CREATE TEMP TABLE site_sample AS SELECT site, sys, first_user, tool_names FROM site_calls WHERE rn = 1;
 CREATE TEMP TABLE pool AS
 SELECT CAST(site AS STRING) AS site, model, day, id, prompt_tokens, completion_tokens, duration_ms FROM call_rows
 WHERE cost IS NOT NULL AND completion_tokens > 0
@@ -300,6 +306,7 @@ _LEFTOVER_COUNT = "SELECT n FROM leftover_count"
 _COVERAGE = "SELECT * FROM coverage"
 _SAMPLE = "SELECT sys, first_user, tool_names FROM site_sample WHERE site = @site"
 _SAMPLE_ID = "SELECT sys, first_user, tool_names FROM src WHERE id = @id"
+_SITE_CALLS = "SELECT site, usecase, id, model, sys, rn FROM site_calls WHERE site IN UNNEST(@sites)"
 
 
 _USECASES = """
@@ -354,7 +361,7 @@ _STEPS = (("src", "reading the day's calls"), ("placed", "placing calls by finge
           ("tk", "learning call-sites"), ("fp", "learning call-sites"), ("call_rows", "placing calls by fingerprint"),
           ("pairs", "cache prefix"), ("lcp", "cache prefix"), ("lay_", "prompt layout"), ("site_layout", "prompt layout"),
           ("prices", "totals"), ("ledger_daily", "totals"), ("cache_gaps", "cache gaps"), ("day_sites", "collecting the results"),
-          ("site_sample", "collecting the results"), ("pool", "audit samples"), ("leftover", "unplaced calls"))
+          ("site_sample", "collecting the results"), ("site_calls", "collecting the results"), ("pool", "audit samples"), ("leftover", "unplaced calls"))
 
 
 def _plain(text):
@@ -376,8 +383,8 @@ class Build:
             return
         if session_id:                                      # the session is gone or incomplete: start afresh
             self.s = bq.Session()
-        known = [{"usecase": k["usecase"] or "", "site": str(k["site"]), "markers": k["markers"]}
-                 for k in known] or [{"usecase": "\x00", "site": "0", "markers": ""}]   # a typed, empty array
+        known = [{"usecase": k["usecase"] or "", "site": str(k["site"]), "markers": k["markers"], "need": int(k.get("need") or 0)}
+                 for k in known] or [{"usecase": "\x00", "site": "0", "markers": "", "need": 0}]   # a typed, empty array
         from core import tasks
         self.s.script(SCRIPT.format(**_names()), {"day_from": day_from, "day_to": day_to, "prices": _prices(), "known": known,
                                                   "skip": bq.skipped()},
@@ -408,6 +415,10 @@ class Build:
     def leftover(self):
         """(the unplaced calls, capped per usecase and day; how many there were in all)"""
         return self._read(_LEFTOVER), self._read(_LEFTOVER_COUNT)[0]["n"]
+
+    def site_calls(self, sites):
+        """The few calls kept per day-site (text included), for the given day-sites."""
+        return self._read(_SITE_CALLS, {"sites": list(sites)}) if sites else []
 
     def sample_request(self, site=None, call_id=None):
         """One call (of a day-site, or by id) as a request body: system prompt, first user message, tool names."""

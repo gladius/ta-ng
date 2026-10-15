@@ -111,12 +111,15 @@ def _version(rec, template, day):
 
 
 def distinct_markers(markers, template, siblings):
-    """The fingerprint's phrases, none of them in a sibling call-site's template (else that phrase would match the
-    sibling's calls too); topped up from the template's other phrases."""
-    taken = set().union(*siblings) if siblings else set()
-    keep = [m for m in markers if m not in taken]
-    keep += [p for p in sorted(template) if p not in taken and p not in keep][:max(0, build.MARKERS - len(keep))]
-    return keep[:build.MARKERS]
+    """-> (the fingerprint's phrases, ambiguous). Never empty: the phrases held by the fewest sibling call-sites,
+    those the day script chose first among equals. Ambiguous when even those are in some sibling's template: such a
+    call-site is then placed only on all its phrases and loses ties (worst case: its calls stay unplaced, never land
+    in a sibling)."""
+    shared = lambda p: sum(1 for s in siblings if p in s)
+    first = {m: i for i, m in enumerate(markers)}
+    ranked = sorted(set(template) | set(markers), key=lambda p: (shared(p), first.get(p, len(first)), p))
+    keep = ranked[:build.MARKERS]
+    return keep, any(shared(p) for p in keep)
 
 
 def _new_site(site, usecase, template, markers, req):
@@ -155,6 +158,8 @@ def process_day(day):
             if site != d["site"]:                      # learned this day: follow its template
                 known[site] = t
                 _version(rec, t, day)
+                if not rec.get("new"):                 # a known call-site its fingerprint missed: new phrases (healing)
+                    rec["relearned"], rec["day_markers"] = True, list(d["markers"] or [])
             elif not rec["versions"]:
                 rec["versions"].append({"version": site_id("v", t), "first": day, "last": day})
             else:
@@ -169,10 +174,10 @@ def process_day(day):
         merge(rows, mapping[g["site"]], day, g["model"] or "", {}, {g["bucket"]: g})
     samples = [{**p, "site": mapping[p["site"]], "day": day} for p in pool]
     placed = _place_leftovers(leftover, recs, rows, day, b)
-    for site, rec in recs.items():                      # new call-sites: phrases none of their siblings hold
-        if rec.get("new"):
+    for site, rec in recs.items():                      # new or relearned call-sites: phrases their siblings lack
+        if rec.get("new") or rec.get("relearned"):
             sibs = [set(r["template"]) for s, r in recs.items() if s != site and (r["usecase"] or "") == (rec["usecase"] or "")]
-            rec["markers"] = distinct_markers(rec["markers"], set(rec["template"]), sibs)
+            rec["markers"], rec["ambiguous"] = distinct_markers(rec.get("day_markers") or rec["markers"], set(rec["template"]), sibs)
     store.replace_coverage([day], b.coverage())
     store.replace_days([day], [r for r in rows.values() if r["day"] == day])
     store.add_to_days([r for r in rows.values() if r["day"] != day])   # calls of earlier days placed only now
@@ -183,7 +188,7 @@ def process_day(day):
     tasks.note("%s: cache findings" % day)
     _cache(recs)
     tasks.note("%s: done%s" % (day, " (" + b.timing + ")" if getattr(b, "timing", None) else ""))
-    b.close()                                          # on a failure the session stays: the next run resumes from it
+    _queue_quality(day, day_sites, mapping, recs, b)   # the audit of the audit; it closes the session when done
     return len(day_sites)
 
 
@@ -206,6 +211,25 @@ def merge(rows, site, day, model, numbers, gaps=None):
         for k in GAPS:
             b[k] += g.get(k) or 0
     return e
+
+
+def _queue_quality(day, day_sites, mapping, recs, b):
+    """Queue the day's audit of the audit: the call-sites to spot-check and where their calls sit in this session.
+    The session stays open for it (it closes it); with the spot check off, it is closed here."""
+    from modules import quality
+    n = quality.sites_per_day()
+    by_site, calls = {}, {}
+    for d in day_sites:
+        by_site.setdefault(mapping[d["site"]], []).append(d["site"])
+        calls[mapping[d["site"]]] = calls.get(mapping[d["site"]], 0) + d["n"]
+    sample = {}
+    for site in quality.pick(recs, calls, n) if n else []:
+        uc = recs[site]["usecase"] or ""
+        sib = max((s for s in calls if s != site and (recs.get(s, {}).get("usecase") or "") == uc), key=lambda s: calls[s], default=None)
+        sample[site] = {"usecase": uc, "day_sites": by_site[site], "sibling_day_site": by_site[sib][0] if sib else None}
+    if not sample:
+        b.close()
+    tasks.add("quality_day", {"day": day, "sample": sample, "session_id": b.s.id if sample else None}, key="quality:" + day)
 
 
 def _place_leftovers(leftover, recs, rows, day, b):

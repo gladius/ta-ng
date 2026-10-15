@@ -46,6 +46,7 @@ callsites = Table(
     # identity
     Column("template", Text, nullable=False),                  # JSON list of phrases its calls share (linking, versions)
     Column("markers", Text),                                   # JSON list of MARKERS phrases: the fingerprint (placement, router)
+    Column("ambiguous", Boolean),                              # some phrases also in siblings: placed only on all of them
     Column("signature", Text, nullable=False),                 # JSON: the first lines of a sample prompt
     Column("calls", Integer, nullable=False),
     Column("first_day", String(10)),
@@ -209,11 +210,17 @@ def templates(usecase):
 
 def fingerprints():
     """Every call-site's fingerprint, for the day script's placement: [{usecase, site, markers}], the phrases joined
-    by '|'. Markers only: a few hundred bytes per call-site, so thousands fit in one BigQuery request."""
+    by '|', and `need` (all of them for an ambiguous one; 0: the usual HITS). Markers only: a few hundred bytes per
+    call-site, so thousands fit in one BigQuery request."""
     eng = db.ready()
     with eng.connect() as c:
-        rows = c.execute(select(callsites.c.usecase, callsites.c.site, callsites.c.markers)).all()
-    return [{"usecase": r[0], "site": r[1], "markers": "|".join(json.loads(r[2] or "[]"))} for r in rows if r[2]]
+        rows = c.execute(select(callsites.c.usecase, callsites.c.site, callsites.c.markers, callsites.c.ambiguous)).all()
+    out = []
+    for uc, site, markers, ambiguous in rows:
+        phrases = json.loads(markers or "[]")
+        if phrases:                                # an ambiguous fingerprint must match all its phrases
+            out.append({"usecase": uc, "site": site, "markers": "|".join(phrases), "need": len(phrases) if ambiguous else 0})
+    return out
 
 
 def save_identity(rec, window):
@@ -221,6 +228,7 @@ def save_identity(rec, window):
     first_day, last_day, versions, static_chars, dynamic_chars, static_after, tool_sets."""
     eng = db.ready()
     vals = {"usecase": rec["usecase"] or "", "template": json.dumps(sorted(rec["template"])), "markers": json.dumps(rec.get("markers") or []),
+            "ambiguous": bool(rec.get("ambiguous")),
             "signature": json.dumps(rec.get("signature") or []), "calls": int(rec["calls"]),
             "first_day": rec["first_day"], "last_day": rec["last_day"], "versions": json.dumps(rec["versions"]),
             "static_chars": rec.get("static_chars"), "dynamic_chars": rec.get("dynamic_chars"),

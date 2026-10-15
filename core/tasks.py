@@ -21,6 +21,7 @@ KINDS = {
     "process_days": "core.ledger.refresh:process_missing",
     "profile_site": "core.profiler:profile",
     "reload_usecases": "core.ledger.refresh:list_usecases",
+    "quality_day": "modules.quality:run",
 }
 FORGET_ARGS = {"profile_site"}
 HEARTBEAT_S = 20
