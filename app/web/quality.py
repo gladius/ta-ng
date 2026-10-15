@@ -7,11 +7,21 @@ from modules import quality
 api = APIRouter(prefix="/api/suite/quality", dependencies=[Depends(require_key)], include_in_schema=False)
 
 
+@api.post("/run")
+def run(day: str):
+    """Check a processed day again (its kept sample calls are fetched from that day's log: one read of the day)."""
+    from core import tasks
+    from core.identity import store
+    if day not in store.days_done():
+        raise HTTPException(404, "that day is not processed")
+    return {"task_id": tasks.add("quality_day", {"day": day}, key="quality:" + day)}
+
+
 @api.get("")
 def report(day: str | None = None):
+    from core import tasks
     r = quality.report(day)
-    if not r:
-        raise HTTPException(404, "no day checked yet")
+    r["running"] = [k[len("quality:"):] for k in tasks.pending("quality:")]
     from core.identity import store
     names = {}
     for item in r["failures"] + r["spot_checks"]:

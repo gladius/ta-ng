@@ -1,10 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { get } from '../api'
 import { Failed, Loading, Page } from '../ui'
 
 type Item = { kind: string; usecase: string | null; site: string | null; name: string | null; ok: boolean; detail: Record<string, unknown> }
-type Report = { day: string; kinds: Record<string, { checked: number; failed: number }>; failures: Item[]; spot_checks: Item[] }
+type Report = { day: string | null; kinds: Record<string, { checked: number; failed: number }>; failures: Item[]; spot_checks: Item[]
+  days: string[]; running: string[]; trust: { level: 'trustworthy' | 'mostly' | 'not yet'; reasons: string[] } | null }
+const LEVEL = { trustworthy: 'Trustworthy', mostly: 'Mostly trustworthy', 'not yet': 'Not trustworthy yet' }
 
 const KIND: Record<string, string> = {
   consistency: 'Numbers add up', placement: 'Calls placed in a call-site', unpriced: 'Calls with a price',
@@ -28,14 +31,26 @@ function detail(i: Item): string {
 
 /** The audit of the audit: after a day is processed, how far to trust it. */
 export default function Quality() {
-  const q = useQuery({ queryKey: ['quality'], queryFn: () => get<Report>('/suite/quality') })
-  const crumbs = [{ label: 'Agentic workloads' }, { label: 'Audit quality' }]
+  const [day, setDay] = useState<string>('')
+  const q = useQuery({ queryKey: ['quality', day], queryFn: () => get<Report>('/suite/quality' + (day ? `?day=${day}` : '')),
+    refetchInterval: (query) => (query.state.data?.running.length ? 5000 : false) })
+  const run = useMutation({ mutationFn: (d: string) => get<unknown>(`/suite/quality/run?day=${d}`, { method: 'POST' }), onSuccess: () => q.refetch() })
+  const crumbs = [{ label: 'Audit quality' }]
   if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
   if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
   const r = q.data
+  const target = day || r.day || r.days[0] || ''
+  const busy = r.running.includes(target) || run.isPending
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>Audit quality</h1><span className="muted">day {r.day}</span></div></div>
+      <div className="head">
+        <div><h1>Audit quality</h1><span className="muted">{r.day ? `day ${r.day}` : 'no day checked yet'}</span></div>
+        <div className="row">
+          {r.days.length > 0 && <select className="input" value={target} onChange={(e) => setDay(e.target.value)}>{r.days.map((d) => <option key={d} value={d}>{d}</option>)}</select>}
+          <button className="btn" disabled={!target || busy} onClick={() => run.mutate(target)} title="reads that day's kept sample calls from the log (one read of the day) and asks a model">{busy ? 'Checking…' : 'Run the checks'}</button>
+        </div>
+      </div>
+      {r.trust && <p className={'trust ' + r.trust.level.replace(' ', '-')}><b>{LEVEL[r.trust.level]}</b> · {r.trust.reasons.join(' · ')}</p>}
       <section className="panel">
         <table className="grid">
           <thead><tr><th>Check</th><th className="num">Checked</th><th className="num">Failed</th></tr></thead>

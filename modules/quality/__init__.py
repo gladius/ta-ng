@@ -139,19 +139,84 @@ def ask(same_calls, sibling_call, phrases):
     prompt = _PROMPT.format(models=" (sent to several models: %s)" % ", ".join(models) if len(models) > 1 else "",
                             same=same, sibling=(sibling_call["sys"] or "")[:TEXT_CAP] if sibling_call else "none",
                             phrases="\n".join("- %s" % p for p in phrases) or "(none)")
-    r = llm_client.complete(model=_model(), max_tokens=800, response_format={"type": "json_object"},
-                            messages=[{"role": "user", "content": prompt}])
-    txt = llm_client.text(r).strip()
-    return json.loads(txt[txt.find("{"):txt.rfind("}") + 1], strict=False)
+    for attempt in range(2):                      # an empty or cut reply happens now and then: asked once more
+        r = llm_client.complete(model=_model(), max_tokens=1500, response_format={"type": "json_object"},
+                                messages=[{"role": "user", "content": prompt}])
+        txt = llm_client.text(r).strip()
+        try:
+            return json.loads(txt[txt.find("{"):txt.rfind("}") + 1], strict=False)
+        except ValueError:
+            if attempt:
+                raise
 
 
-def run(day, sample, session_id=None):
-    """The day's checks. `sample`: {site: {"usecase", "day_sites": [...], "sibling_day_site": ... or None}}: the call-
-    sites picked for the model spot check and where their calls are in the day's BigQuery session (`session_id`)."""
+def _head(req):
+    """A logged request as the day script sees its head: the tool names, then the system text."""
+    from core.ledger.refresh import _texts
+    system, tools, _ = _texts(req or {})
+    return ("tools: %s\n" % " ".join(sorted(t for t in tools if t)) if any(tools) else "") + (system or "")
+
+
+def _fetched(day):
+    """For a run asked for by hand (the day's BigQuery session is gone): the call-sites picked from the day's numbers
+    and, per call-site, its kept sample calls fetched by id from that day's log (one read of the day)."""
+    from connectors.bigquery import source
+    from core.identity import store
+    eng = db.ready()
+    with eng.connect() as c:
+        rows = c.execute(select(store.site_days.c.site, store.site_days.c.calls).where(store.site_days.c.day == day)).all()
+    calls = {}
+    for site, n in rows:
+        calls[site] = calls.get(site, 0) + (n or 0)
+    recs = {r["site"]: r for r in store.all_sites() if r["site"] in calls}
+    picked = pick(recs, calls, sites_per_day())
+    samples = store.samples(list(recs))
+    wanted = {}
+    for site in picked:
+        uc = recs[site]["usecase"] or ""
+        sib = max((s for s in calls if s != site and s in recs and (recs[s]["usecase"] or "") == uc), key=lambda s: calls[s], default=None)
+        own = [r for r in samples.get(site, []) if r["day"] == day]
+        by_model = {}
+        for r in own:
+            by_model.setdefault(r["model"], r)
+        chosen = (own[:3] + [r for r in by_model.values() if r not in own[:3]])[:4]
+        wanted[site] = {"usecase": uc, "own": chosen, "sibling": next((r for r in samples.get(sib, []) if r["day"] == day), None) if sib else None}
+    ids = {r["id"] for v in wanted.values() for r in v["own"] + ([v["sibling"]] if v["sibling"] else [])}
+    bodies = source.lookup(ids) if ids else {}
+    out = {}
+    for site, v in wanted.items():
+        own = [{"model": r["model"], "sys": _head(bodies[r["id"]][0])} for r in v["own"] if r["id"] in bodies]
+        sib = {"model": v["sibling"]["model"], "sys": _head(bodies[v["sibling"]["id"]][0])} if v["sibling"] and v["sibling"]["id"] in bodies else None
+        if own:
+            out[site] = {"usecase": v["usecase"], "own": own, "sibling": sib}
+    return out
+
+
+def _spot(site, usecase, own, sib, phrases):
+    try:
+        verdict = ask(own[:4], sib, phrases)
+    except Exception as e:
+        return ("model_check", usecase, site, False, {"error": "%s: %s" % (type(e).__name__, str(e)[:200])})
+    data = sorted(p for p, kind in (verdict.get("phrases") or {}).items() if kind == "data")
+    ok = verdict.get("same") is not False and verdict.get("different") is not False and len(data) <= 2
+    return ("model_check", usecase, site, ok,
+            {"same": verdict.get("same"), "same_why": verdict.get("same_why"), "different": verdict.get("different"),
+             "different_why": verdict.get("different_why"), "data_phrases": data, "calls_shown": len(own[:4]),
+             "models": sorted({c["model"] for c in own if c.get("model")})})
+
+
+def run(day, sample=None, session_id=None):
+    """The day's checks. After the day's processing: `sample` {site: {"usecase", "day_sites", "sibling_day_site"}}
+    names the call-sites to spot-check and where their calls are in the day's BigQuery session (`session_id`).
+    Asked for by hand (`sample` None): the call-sites are picked from the day's numbers and their kept sample calls
+    fetched by id from that day's log."""
     from core.identity import store
     from core.ledger import build
     rows = automatic(day)
-    if sample and session_id:
+    if sample is None and sites_per_day():
+        for site, v in _fetched(day).items():
+            rows.append(_spot(site, v["usecase"], v["own"], v["sibling"], (store.get(site) or {}).get("markers") or []))
+    elif sample and session_id:
         b = build.Build(day, day, session_id=session_id)
         try:
             if b.resumed:
@@ -162,20 +227,8 @@ def run(day, sample, session_id=None):
                 for site, v in sample.items():
                     own = [c for ds in v["day_sites"] for c in calls.get(ds, [])]
                     sib = (calls.get(v.get("sibling_day_site")) or [None])[0]
-                    rec = store.get(site) or {}
-                    if not own:
-                        continue
-                    try:
-                        verdict = ask(own[:4], sib, rec.get("markers") or [])
-                    except Exception as e:
-                        rows.append(("model_check", v["usecase"], site, False, {"error": "%s: %s" % (type(e).__name__, str(e)[:200])}))
-                        continue
-                    data = sorted(p for p, kind in (verdict.get("phrases") or {}).items() if kind == "data")
-                    ok = verdict.get("same") is not False and verdict.get("different") is not False and len(data) <= 2
-                    rows.append(("model_check", v["usecase"], site, ok,
-                                 {"same": verdict.get("same"), "same_why": verdict.get("same_why"), "different": verdict.get("different"),
-                                  "different_why": verdict.get("different_why"), "data_phrases": data, "calls_shown": len(own[:4]),
-                                  "models": sorted({c["model"] for c in own if c.get("model")})}))
+                    if own:
+                        rows.append(_spot(site, v["usecase"], own, sib, (store.get(site) or {}).get("markers") or []))
         finally:
             b.close()
     save(day, rows)
@@ -198,9 +251,9 @@ def report(day=None):
     with eng.connect() as c:
         day = day or c.execute(select(checks.c.day).order_by(checks.c.day.desc()).limit(1)).scalar()
         if not day:
-            return None
+            return {"day": None, "kinds": {}, "failures": [], "spot_checks": [], "days": days(), "trust": None}
         rows = c.execute(select(checks).where(checks.c.day == day)).all()
-    out = {"day": day, "kinds": {}, "failures": [], "spot_checks": []}
+    out = {"day": day, "kinds": {}, "failures": [], "spot_checks": [], "days": days()}
     for r in rows:
         k = out["kinds"].setdefault(r.kind, {"checked": 0, "failed": 0})
         k["checked"] += 1
@@ -210,4 +263,29 @@ def report(day=None):
             out["spot_checks"].append(item)
         elif not r.ok:
             out["failures"].append(item)
+    out["trust"] = trust(out["kinds"])
     return out
+
+
+def trust(kinds):
+    """One judgement on the day: trustworthy, mostly, or not yet, and why."""
+    k = lambda name: kinds.get(name, {"checked": 0, "failed": 0})
+    spot, placed, sums = k("model_check"), k("placement"), k("consistency")
+    spot_ok = spot["checked"] - spot["failed"]
+    placed_ok = placed["checked"] - placed["failed"]
+    reasons = ["%d of %d spot checks pass" % (spot_ok, spot["checked"]) if spot["checked"] else "no spot check",
+               "%d of %d usecases placed at 90%% or more" % (placed_ok, placed["checked"]),
+               "numbers add up" if not sums["failed"] else "numbers don't add up in %d usecases" % sums["failed"]]
+    if sums["failed"] or (spot["checked"] and spot_ok < 0.75 * spot["checked"]):
+        level = "not yet"
+    elif spot["checked"] and spot_ok >= 0.9 * spot["checked"] and placed_ok >= 0.9 * placed["checked"]:
+        level = "trustworthy"
+    else:
+        level = "mostly"
+    return {"level": level, "reasons": reasons}
+
+
+def days():
+    """The days processed (newest first), to pick one to check."""
+    from core.identity import store
+    return sorted(store.days_done(), reverse=True)

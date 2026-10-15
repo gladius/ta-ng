@@ -46,7 +46,6 @@ export default function Shell() {
           <Entry icon={Fingerprint} label="Usecases" to="/usecases" />
           <Entry icon={TrendingDown} label="Model audits" to="/audit/models" />
           <Entry icon={Database} label="Cache audit" to="/audit/cache" />
-          <Entry icon={ShieldCheck} label="Audit quality" to="/quality" />
         </div>
         <div className="group">
           <span className="group-name">Router</span>
@@ -55,6 +54,7 @@ export default function Shell() {
         <div className="group foot">
           <Entry icon={BookOpen} label="Model catalog" to="/models" />
           <Entry icon={Clock} label="Schedules" to="/schedules" />
+          <Entry icon={ShieldCheck} label="Audit quality" to="/quality" />
           <Entry icon={Braces} label="API reference" href="/docs" />
         </div>
       </nav>
