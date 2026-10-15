@@ -18,7 +18,7 @@ except ModuleNotFoundError as e:
     if e.name != "connectors.bigquery._local":
         raise                              # a real error inside _local.py must show, not vanish
 
-LOOKUP_DAYS = 30        # a lookup by id reads only these days of the log (its partitions), not the whole table
+LOOKUP_DAYS = 2         # a lookup by plain request_id reads these last days (BigQuery has no index: every day is a full read)
 
 
 def _json(v):
@@ -88,17 +88,31 @@ def to_trace(request, response, agent):
 
 
 def lookup(request_ids, days=LOOKUP_DAYS):
-    """{request_id: (OpenAI-format request body, response or None)} for the ids logged in the last `days` days, in
-    one query; unknown ids are absent. The body's `model` is the one that answered (BQ_MODEL_COLUMN, else the
-    response's)."""
+    """{request_id: (OpenAI-format request body, response or None)}; unknown ids are absent. Two kinds of id:
+    a log id (a caller's request_id: the last `days` days are read) or a row key from the day processing,
+    `<log id>@<unix micros>[#n]` (exactly that call, read from its own day only: the log id alone may be shared by
+    several calls). The body's `model` is the one that answered (BQ_MODEL_COLUMN, else the response's)."""
+    import datetime
     from core.ledger import bq
     c = bq.cfg()
     params_col, model_col = credentials.get_config("BQ_PARAMS_COLUMN"), credentials.get_config("BQ_MODEL_COLUMN")
     extra = "".join(", `%s` AS %s" % (col, a) for col, a in ((params_col, "params"), (model_col, "served")) if col)
-    sql = ("SELECT `{id}` AS id, `{req}` AS request, `{resp}` AS response{x} FROM `{table}` "
-           "WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND `{id}` IN UNNEST(@ids)"
-           ).format(x=extra, **c)
-    rows = bq.query(sql, {"ids": sorted(request_ids), "days": days}, timeout=120)
+    plain = sorted(i for i in request_ids if "@" not in i)
+    keys = {i.split("#")[0]: i for i in request_ids if "@" in i}          # one row per id@time; #n repeats share it
+    rows = []
+    if plain:
+        sql = ("SELECT CAST(`{id}` AS STRING) AS k, `{req}` AS request, `{resp}` AS response{x} FROM `{table}` "
+               "WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND `{id}` IN UNNEST(@ids)"
+               ).format(x=extra, **c)
+        rows += bq.query(sql, {"ids": plain, "days": days}, timeout=120)
+    if keys:
+        dates = sorted({datetime.datetime.fromtimestamp(int(k.split("@")[1]) / 1e6, datetime.timezone.utc).date() for k in keys})
+        sql = ("SELECT k, request, response{xs} FROM (SELECT CONCAT(CAST(`{id}` AS STRING), '@', "
+               "CAST(UNIX_MICROS(CAST(`{time}` AS TIMESTAMP)) AS STRING)) AS k, `{req}` AS request, `{resp}` AS response{x} "
+               "FROM `{table}` WHERE DATE(`{time}`) IN UNNEST(@dates)) WHERE k IN UNNEST(@keys) "
+               "QUALIFY ROW_NUMBER() OVER (PARTITION BY k) = 1"
+               ).format(x=extra, xs="".join(", " + a for col, a in ((params_col, "params"), (model_col, "served")) if col), **c)
+        rows += [dict(r, k=keys[r["k"]]) for r in bq.query(sql, {"keys": sorted(keys), "dates": dates}, timeout=600)]
     out = {}
     for row in rows:
         req, resp = _json(row["request"]), _json(row["response"])
@@ -111,5 +125,5 @@ def lookup(request_ids, days=LOOKUP_DAYS):
         served = (row["served"] if model_col else None) or (resp or {}).get("model")
         if served:
             body["model"] = served
-        out[row["id"]] = (body, resp)
+        out[row["k"]] = (body, resp)
     return out

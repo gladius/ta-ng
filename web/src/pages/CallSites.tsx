@@ -9,7 +9,7 @@ import { VerdictChip, type Verdict } from './ModelAudits'
 type Profile = { name: string; does: string; task: string; output: string; fixed: string | null; per_call: string | null; model: string; created_at: string | null } | null
 type CacheDecision = { cause: Cause | null; action: string; worth: number; proof: Proof; share: number; models: string[]; built_at: string | null } | null
 type Site = {
-  site: string; usecase: string | null; name: string; signature: string[]; calls: number; first_day: string; last_day: string
+  site: string; usecase: string | null; name: string; signature: string[]; markers: string[]; calls: number; first_day: string; last_day: string
   versions: { version: string; first: string; last: string }[]; static_chars: number; dynamic_chars: number; static_after: number
   tool_sets: number; unsure: boolean; window_days: number; updated_at: string | null; profile: Profile
 }
@@ -18,7 +18,8 @@ type Models = { candidates: Record<string, Verdict & { audit: string; at: string
 type Days = { window: number; done: string[]; queued: string[]; missing: string[] }
 type UsecaseRow = { usecase: string | null; calls: number; first_day: string; last_day: string; sites: number | null; analysed_at: string | null; error: string | null; decisions?: { models?: { sites: number; with_cheaper: number; saving: number; cost: number } } }
 type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; skipped: string[]; usecases: UsecaseRow[] }
-type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean; days: Days }
+type Coverage = { calls: number; other_format: number; no_usage: number; unpriced: number; repeated: number; placed: number; unplaced: number }
+type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean; days: Days; coverage: Coverage }
 type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null } }
 
 const ucPath = (u: string | null) => `/usecases/${encodeURIComponent(u ?? 'None')}`
@@ -98,6 +99,9 @@ export function CallSiteUsecase() {
       </div>
       {u.analysing && !u.sites.length && <p className="empty">Processing {u.days.queued.length} day(s) of the log…</p>}
       {!u.analysing && !u.sites.length && u.days.missing.length > 0 && <p className="empty">No day of the log processed yet.</p>}
+      {u.coverage?.calls > 0 && <p className="muted">Analysed {u.coverage.placed.toLocaleString('en-US')} of {u.coverage.calls.toLocaleString('en-US')} calls
+        {[['other format', u.coverage.other_format], ['no usage logged', u.coverage.no_usage], ['no price', u.coverage.unpriced], ['logged twice', u.coverage.repeated], ['not placed', u.coverage.unplaced]]
+          .filter(([, n]) => (n as number) > 0).map(([k, n]) => ` · ${k}: ${(n as number).toLocaleString('en-US')}`).join('')}</p>}
       {u.error && <p className="error" role="alert">The last processing failed: {u.error}</p>}
       {u.decisions?.models && u.decisions.models.with_cheaper > 0 && <p><b>A cheaper model passes on {u.decisions.models.with_cheaper} of {u.decisions.models.sites} call-sites</b>: about {money(u.decisions.models.saving, 2)} of {money(u.decisions.models.cost, 2)} spent in the window.</p>}
       {u.sites.map((s) => (
@@ -167,7 +171,8 @@ export function CallSite() {
       <section className="panel story">
         <div className="pad">
           <h2>Identity: how its calls are recognised</h2>
-          <pre className="sig">{s.signature.join('\n')}</pre>
+          <p className="muted">Recognised by these phrases of its instructions (lower case, numbers as #):</p>
+          <pre className="sig">{s.markers.length ? s.markers.map((m) => `“${m}”`).join('\n') : '—'}</pre>
           {s.versions.length > 1 && (
             <>
               <h3>Versions</h3>

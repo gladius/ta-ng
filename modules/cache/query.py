@@ -46,7 +46,7 @@ def _site_block(rec, series):
     cache = rec["cache"] or {}
     days = _series_total(series.get(rec["site"]) or {})
     static = rec.get("static_chars") or 0
-    return {"site": rec["site"], "usecase": rec["usecase"], "anchors": rec["signature"], "unsure": rec["unsure"],
+    return {"site": rec["site"], "usecase": rec["usecase"], "anchors": rec.get("markers") or [], "unsure": rec["unsure"],
             "versions": rec["versions"],
             "layout": {"static_chars": static, "dynamic_chars": rec.get("dynamic_chars"),
                        "static_after_dynamic": (rec.get("static_after") or 0) / static if static else 0.0, "tool_sets": rec.get("tool_sets")},

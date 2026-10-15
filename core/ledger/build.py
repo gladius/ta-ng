@@ -19,6 +19,7 @@ Cache layout per day-site: the prefix as a provider's cache sees it (each call a
 call-site, word by word, raw: a changed number breaks it; PAIRS pairs, the median); fixed vs changing text from the
 windows of a bounded sample. Scored by tools/identity_score.py on the synthetic log and the hard bench.
 """
+import credentials
 from core.ledger import bq
 
 WINDOW = 5
@@ -37,9 +38,21 @@ POOL = 5                # request ids kept per day-site and model for model audi
 LEFTOVER = 500          # unplaced calls returned per usecase and day
 BUCKETS = [("1m", 60), ("5m", 300), ("15m", 900), ("1h", 3600), ("6h", 21600), ("24h", 86400)]
 
-_SYSTEM = """COALESCE(JSON_VALUE(`{req}`, '$.messages[0].content'),
-           ARRAY_TO_STRING(ARRAY(SELECT JSON_VALUE(p, '$.text') FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.messages[0].content')) p), '\\n'),
-           '')"""
+# a message's text: a string content, or the text parts of a list content
+_TEXT = """COALESCE(JSON_VALUE(m, '$.content'),
+                ARRAY_TO_STRING(ARRAY(SELECT JSON_VALUE(p, '$.text') FROM UNNEST(JSON_QUERY_ARRAY(m, '$.content')) p), '\\n'), '')"""
+# the system text of a chat call (the head of the request, after the tool names): the first message's text when it is
+# the system prompt (most calls: no walk over the messages); otherwise every system / developer message; with none
+# (a team putting its instructions in a "user" message, or an empty first message) the first message that has text,
+# capped at HEAD_CAP characters
+_SYSTEM = """IF(JSON_VALUE(`{req}`, '$.messages[0].role') IN ('system', 'developer'),
+  (SELECT {text} FROM UNNEST([JSON_QUERY(`{req}`, '$.messages[0]')]) m),
+  COALESCE(NULLIF(ARRAY_TO_STRING(ARRAY(SELECT {text} FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.messages')) m WITH OFFSET o
+                                        WHERE JSON_VALUE(m, '$.role') IN ('system', 'developer') ORDER BY o), '\\n'), ''),
+           (SELECT SUBSTR(x, 1, {head_cap}) FROM (SELECT {text} AS x, o FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.messages')) m WITH OFFSET o)
+            WHERE LENGTH(TRIM(x)) > 0 ORDER BY o LIMIT 1),
+           ''))"""
+HEAD_CAP = 8000
 
 # the masked words of a text, as the windows see them
 # (a literal '#' in the text, e.g. a markdown heading, is dropped first so '#' only ever marks a number)
@@ -60,34 +73,65 @@ _PLACE = """(SELECT AS STRUCT site, hits FROM (
 
 SCRIPT = """
 DECLARE r INT64 DEFAULT 0;
+CREATE TEMP TABLE prices AS SELECT * FROM UNNEST(@prices);
 
--- 1. the log, read once: every chat call of the days, its numbers and its system prompt (and the masked text the
---    fingerprints are searched in)
+-- 1. the log, read once: every row of the days (all formats), its numbers, and for chat calls the head of the request
+--    (tool names, then the system prompt) and its masked text, which fingerprints are searched in
+CREATE TEMP TABLE src0 AS
+SELECT m.*, CONCAT(' ', ARRAY_TO_STRING({words_sys}, ' '), ' ') AS norm, FARM_FINGERPRINT(sys) AS prefix_key
+FROM (
+  SELECT s.* EXCEPT (cost_logged, sys_text, model_key),
+         CONCAT(IF(ARRAY_LENGTH(tool_names) > 0, CONCAT('tools: ', ARRAY_TO_STRING(ARRAY(SELECT x FROM UNNEST(tool_names) x ORDER BY x), ' '), '\\n'), ''),
+                sys_text) AS sys,
+         -- the logged cost, else tokens x the catalog price; unknown (NULL) when the call has no usage or no price
+         COALESCE(cost_logged, IF(has_usage, ((prompt_tokens - cached - written) * pr.input + cached * pr.cache_read
+                                               + written * COALESCE(NULLIF(pr.cache_write, 0), pr.input) + completion_tokens * pr.output) / 1e6, NULL)) AS cost,
+         pr.input AS price_input, pr.cache_read AS price_cache_read,
+         FARM_FINGERPRINT(ARRAY_TO_STRING(ARRAY(SELECT x FROM UNNEST(tool_names) x ORDER BY x), ',')) AS tools_hash
+  FROM (
+    SELECT COALESCE(CAST(`{id}` AS STRING), '') AS log_id, UNIX_MICROS(CAST(`{time}` AS TIMESTAMP)) AS ts_us,
+           COALESCE(`{usecase}`, '') AS usecase, DATE(`{time}`) AS day, `{time}` AS ts,
+           CONCAT(COALESCE(`{usecase}`, ''), '\\x1f', CAST(DATE(`{time}`) AS STRING)) AS unit,
+           JSON_QUERY(`{req}`, '$.messages') IS NOT NULL AS chat,
+           JSON_VALUE(`{resp}`, '$.usage.prompt_tokens') IS NOT NULL AS has_usage,
+           COALESCE({served}, JSON_VALUE(`{resp}`, '$.model'), JSON_VALUE(`{req}`, '$.model')) AS model,
+           REGEXP_REPLACE(REGEXP_REPLACE(LOWER(COALESCE({served}, JSON_VALUE(`{resp}`, '$.model'), JSON_VALUE(`{req}`, '$.model'))),
+                                         r'^.*/', ''), r'[-_@:](\\d{{4}}-?\\d{{2}}-?\\d{{2}}|\\d{{6,8}}|v\\d+|latest|preview|exp)$', '') AS model_key,
+           ARRAY(SELECT JSON_VALUE(t, '$.function.name') FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.tools')) t
+                 WHERE JSON_VALUE(t, '$.function.name') IS NOT NULL) AS tool_names,   -- an array can't hold NULL (built-in tools)
+           CAST(JSON_VALUE(`{resp}`, '$.usage.prompt_tokens') AS INT64) AS prompt_tokens,
+           GREATEST(COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.cache_read_input_tokens') AS INT64), 0),
+                    COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.prompt_tokens_details.cached_tokens') AS INT64), 0)) AS cached,
+           COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.cache_creation_input_tokens') AS INT64), 0) AS written,
+           CAST(JSON_VALUE(`{resp}`, '$.usage.completion_tokens') AS INT64) AS completion_tokens,
+           CAST(JSON_VALUE(`{resp}`, '$.usage.cost') AS FLOAT64) AS cost_logged,
+           CAST(`{latency}` AS FLOAT64) AS duration_ms,
+           ARRAY_LENGTH(JSON_QUERY_ARRAY(`{req}`, '$.messages')) AS n_messages,
+           JSON_QUERY(`{req}`, '$.tools') IS NOT NULL AS has_tools,
+           {system} AS sys_text,
+           SUBSTR(JSON_VALUE(`{req}`, '$.messages[1].content'), 1, 2000) AS first_user
+    FROM `{table}`
+    WHERE DATE(`{time}`) BETWEEN @day_from AND @day_to AND {skip}) s
+  LEFT JOIN prices pr ON pr.model = s.model_key) m;
+
+-- the day's make-up per usecase, before anything is dropped (shown as coverage)
+CREATE TEMP TABLE cov0 AS
+SELECT usecase, day, COUNT(*) AS calls, COUNTIF(NOT chat) AS other_format, COUNTIF(chat AND NOT has_usage) AS no_usage,
+       COUNTIF(chat AND has_usage AND cost IS NULL) AS unpriced,
+       COUNTIF(chat) - COUNT(DISTINCT IF(chat, CONCAT(log_id, '@', CAST(ts_us AS STRING)), NULL)) AS repeated
+FROM src0 GROUP BY 1, 2;
+
+-- chat calls, each once: a row logged twice (same id, same microsecond) is one call; the few repeats are found on
+-- two narrow columns, so the wide rows are never sorted
+CREATE TEMP TABLE dups AS SELECT log_id, ts_us FROM src0 WHERE chat GROUP BY 1, 2 HAVING COUNT(*) > 1;
 CREATE TEMP TABLE src AS
-SELECT *, CONCAT(' ', ARRAY_TO_STRING({words_sys}, ' '), ' ') AS norm FROM (
-SELECT CAST(`{id}` AS STRING) AS id, COALESCE(`{usecase}`, '') AS usecase, DATE(`{time}`) AS day, `{time}` AS ts,
-       CONCAT(COALESCE(`{usecase}`, ''), '\\x1f', CAST(DATE(`{time}`) AS STRING)) AS unit,
-       COALESCE(JSON_VALUE(`{resp}`, '$.model'), JSON_VALUE(`{req}`, '$.model')) AS model,
-       FARM_FINGERPRINT(COALESCE(TO_JSON_STRING(ARRAY(SELECT JSON_VALUE(t, '$.function.name')
-                                 FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.tools')) t
-                                 WHERE JSON_VALUE(t, '$.function.name') IS NOT NULL ORDER BY 1)), '')) AS tools_hash,
-       ARRAY(SELECT JSON_VALUE(t, '$.function.name') FROM UNNEST(JSON_QUERY_ARRAY(`{req}`, '$.tools')) t
-             WHERE JSON_VALUE(t, '$.function.name') IS NOT NULL) AS tool_names,   -- an array can't hold NULL (built-in tools)
-       FARM_FINGERPRINT(CONCAT(COALESCE(TO_JSON_STRING(JSON_QUERY(`{req}`, '$.tools')), ''),
-                               COALESCE(TO_JSON_STRING(JSON_QUERY(`{req}`, '$.messages[0].content')), ''))) AS prefix_key,
-       COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.prompt_tokens') AS INT64), 0) AS prompt_tokens,
-       GREATEST(COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.cache_read_input_tokens') AS INT64), 0),
-                COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.prompt_tokens_details.cached_tokens') AS INT64), 0)) AS cached,
-       COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.cache_creation_input_tokens') AS INT64), 0) AS written,
-       COALESCE(CAST(JSON_VALUE(`{resp}`, '$.usage.completion_tokens') AS INT64), 0) AS completion_tokens,
-       CAST(JSON_VALUE(`{resp}`, '$.usage.cost') AS FLOAT64) AS cost,
-       CAST(`{latency}` AS FLOAT64) AS duration_ms,
-       ARRAY_LENGTH(JSON_QUERY_ARRAY(`{req}`, '$.messages')) AS n_messages,
-       JSON_QUERY(`{req}`, '$.tools') IS NOT NULL AS has_tools,
-       {system} AS sys,
-       SUBSTR(JSON_VALUE(`{req}`, '$.messages[1].content'), 1, 2000) AS first_user
-FROM `{table}`
-WHERE DATE(`{time}`) BETWEEN @day_from AND @day_to AND JSON_QUERY(`{req}`, '$.messages') IS NOT NULL AND {skip});
+SELECT s.* EXCEPT (chat), CONCAT(s.log_id, '@', CAST(s.ts_us AS STRING)) AS id, s.cost + s.cached * (s.price_input - s.price_cache_read) / 1e6 AS cost_nocache
+FROM src0 s LEFT JOIN dups d USING (log_id, ts_us) WHERE s.chat AND d.log_id IS NULL
+UNION ALL
+SELECT * EXCEPT (chat, rn), CONCAT(log_id, '@', CAST(ts_us AS STRING)) AS id, cost + cached * (price_input - price_cache_read) / 1e6 AS cost_nocache
+FROM (SELECT s.*, ROW_NUMBER() OVER (PARTITION BY s.log_id, s.ts_us ORDER BY s.prompt_tokens DESC) AS rn
+      FROM src0 s JOIN dups d USING (log_id, ts_us) WHERE s.chat)
+WHERE rn = 1;
 
 -- 2. place every call by the fingerprints the app knows (its usecase's), one pass, row by row
 CREATE TEMP TABLE fp AS
@@ -144,11 +188,10 @@ WHILE r < {rounds} DO
   -- the fingerprint: MARKERS phrases of the template no other call-site of the unit shares (this round's, or known)
   INSERT INTO templates
   SELECT t.unit, k.site, t.ph,
-         ROW_NUMBER() OVER (PARTITION BY t.g ORDER BY o.h IS NULL DESC, kn.ph IS NULL DESC, t.n DESC, t.ph) <= {markers} AS marker
+         ROW_NUMBER() OVER (PARTITION BY t.g ORDER BY o.h IS NULL DESC, t.n DESC, t.ph) <= {markers} AS marker
   FROM newt t JOIN tk k USING (g)
   LEFT JOIN (SELECT unit, h FROM newt GROUP BY 1, 2 HAVING COUNT(DISTINCT g) > 1) o ON o.unit = t.unit AND o.h = t.h
-  LEFT JOIN (SELECT usecase, ph FROM UNNEST(@known), UNNEST(SPLIT(template, '|')) ph) kn
-         ON kn.usecase = SPLIT(t.unit, '\\x1f')[OFFSET(0)] AND kn.ph = t.ph;
+;
   CREATE OR REPLACE TEMP TABLE fp AS
   SELECT unit, ARRAY_AGG(STRUCT(CAST(site AS STRING) AS site, phrases)) AS sites FROM (
     SELECT unit, site, ARRAY_AGG(ph) AS phrases FROM templates WHERE marker AND site IN (SELECT site FROM tk) GROUP BY 1, 2)
@@ -195,14 +238,13 @@ SELECT st.site, CAST(st.static AS INT64) AS static_chars, CAST(st.chars - st.sta
 FROM st LEFT JOIN (SELECT site, COUNT(DISTINCT tools_hash) AS tool_sets FROM call_rows GROUP BY 1) ts USING (site);
 
 -- 5. the ledger: day-site x model (a day-site is one usecase and day)
-CREATE TEMP TABLE prices AS SELECT * FROM UNNEST(@prices);
 CREATE TEMP TABLE ledger_daily AS
 SELECT c.day, c.usecase, c.site, c.model, COUNT(*) AS calls,
        SUM(c.prompt_tokens) AS prompt_tokens, SUM(c.cached) AS cached_tokens, SUM(c.written) AS written_tokens,
        SUM(c.completion_tokens) AS completion_tokens, COUNTIF(c.cached > 0) AS calls_cached,
-       SUM(c.cost) AS cost, SUM(c.cost + c.cached * (p.input - p.cache_read) / 1e6) AS cost_nocache,
+       SUM(c.cost) AS cost, SUM(c.cost_nocache) AS cost_nocache, COUNTIF(c.cost IS NULL) AS calls_unpriced,
        AVG(c.duration_ms) AS avg_ms, AVG(c.n_messages) AS avg_messages, COUNTIF(c.has_tools) AS calls_with_tools
-FROM call_rows c LEFT JOIN prices p ON p.model = c.model
+FROM call_rows c
 GROUP BY 1, 2, 3, 4;
 
 -- 6. gaps: time since the previous call sharing the prefix, bucketed, per day-site and model
@@ -235,14 +277,16 @@ QUALIFY ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY FARM_FINGERPRINT(id
      OR ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY prompt_tokens DESC, id) = 1
      OR ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY completion_tokens DESC, id) <= 2
      OR ROW_NUMBER() OVER (PARTITION BY site, model ORDER BY duration_ms DESC, id) <= 2;
+CREATE TEMP TABLE coverage AS
+SELECT c.*, COALESCE(p.placed, 0) AS placed, c.calls - c.other_format - c.repeated - COALESCE(p.placed, 0) AS unplaced
+FROM cov0 c LEFT JOIN (SELECT s.usecase, s.day, COUNT(*) AS placed FROM src s JOIN placed USING (id) GROUP BY 1, 2) p USING (usecase, day);
 CREATE TEMP TABLE leftover_count AS SELECT COUNT(*) AS n FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL;
 CREATE TEMP TABLE leftover AS
 SELECT s.id, s.usecase, s.day, s.model, s.prompt_tokens, s.cached AS cached_tokens, s.written AS written_tokens,
-       s.completion_tokens, s.cost, s.cost + s.cached * (pr.input - pr.cache_read) / 1e6 AS cost_nocache,
+       s.completion_tokens, s.cost, s.cost_nocache,
        ARRAY(SELECT DISTINCT ph FROM UNNEST(w.phs) ph) AS template
 FROM (SELECT * FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL
       QUALIFY ROW_NUMBER() OVER (PARTITION BY s.usecase, s.day ORDER BY FARM_FINGERPRINT(s.id)) <= {leftover}) s
-LEFT JOIN prices pr ON pr.model = s.model
 LEFT JOIN (SELECT id, ARRAY_AGG(ph) AS phs FROM ({win_leftover}) GROUP BY 1) w USING (id);
 """
 
@@ -253,6 +297,7 @@ _LAYOUT = "SELECT * EXCEPT (site), CAST(site AS STRING) AS site FROM site_layout
 _POOL = "SELECT * FROM pool"
 _LEFTOVER = "SELECT * FROM leftover"
 _LEFTOVER_COUNT = "SELECT n FROM leftover_count"
+_COVERAGE = "SELECT * FROM coverage"
 _SAMPLE = "SELECT sys, first_user, tool_names FROM site_sample WHERE site = @site"
 _SAMPLE_ID = "SELECT sys, first_user, tool_names FROM src WHERE id = @id"
 
@@ -275,7 +320,9 @@ def _names():
     layout = "SELECT id, CAST(site AS STRING) AS unit, sys FROM lay_smp"
     leftover = ("SELECT s.id, s.unit, s.sys FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL "
                 "QUALIFY ROW_NUMBER() OVER (PARTITION BY s.usecase, s.day ORDER BY FARM_FINGERPRINT(s.id)) <= %d" % LEFTOVER)
-    return {**c, "system": _SYSTEM.format(**c), "words_sys": words, "skip": bq.SKIP_FILTER.format(col=c["usecase"]),
+    model_col = credentials.get_config("BQ_MODEL_COLUMN")
+    return {**c, "system": _SYSTEM.format(text=_TEXT, head_cap=HEAD_CAP, **c), "words_sys": words,
+            "served": "CAST(`%s` AS STRING)" % model_col if model_col else "CAST(NULL AS STRING)", "skip": bq.SKIP_FILTER.format(col=c["usecase"]),
             "win_sample": _WIN.format(q=sample, **win), "win_layout": _WIN.format(q=layout, **win),
             "win_leftover": _WIN.format(q=leftover, **win),
             "place": _PLACE.format(hits=HITS), "min_calls": MIN_CALLS, "core": CORE, "same": SAME, "markers": MARKERS,
@@ -292,7 +339,8 @@ def usecases(days=30):
 
 def _prices():
     from app.catalog import PRICE
-    return [{"model": m, "input": float(p["input"]), "cache_read": float(p["cache_read"])} for m, p in PRICE.items()]
+    return [{"model": m, "input": float(p["input"]), "cache_read": float(p["cache_read"]), "output": float(p["output"]),
+             "cache_write": float(p.get("cache_write") or 0)} for m, p in PRICE.items()]
 
 
 def _request(row):
@@ -322,17 +370,19 @@ class Build:
     def __init__(self, day_from, day_to, known=(), session_id=None):
         """With `session_id`, a session whose script already finished (its tables are reused: no read of the day)."""
         self.s = bq.Session(session_id) if session_id else bq.Session()
-        self.resumed = bool(session_id) and self.s.has("leftover")
+        self.resumed = bool(session_id) and self.s.has("coverage")
+        self.timing = None
         if self.resumed:
             return
         if session_id:                                      # the session is gone or incomplete: start afresh
             self.s = bq.Session()
-        known = [{"usecase": k["usecase"] or "", "site": str(k["site"]), "markers": k["markers"], "template": k["template"]}
-                 for k in known] or [{"usecase": "\x00", "site": "0", "markers": "", "template": ""}]   # a typed, empty array
+        known = [{"usecase": k["usecase"] or "", "site": str(k["site"]), "markers": k["markers"]}
+                 for k in known] or [{"usecase": "\x00", "site": "0", "markers": ""}]   # a typed, empty array
         from core import tasks
         self.s.script(SCRIPT.format(**_names()), {"day_from": day_from, "day_to": day_to, "prices": _prices(), "known": known,
                                                   "skip": bq.skipped()},
                       progress=lambda text: tasks.note("%s: %s" % (day_from, _plain(text))))
+        self.timing = getattr(self.s, "timing", None)
 
     def _read(self, sql, params=None):
         return [dict(r) for r in self.s.query(sql, params, timeout=4 * 3600)]
@@ -351,6 +401,9 @@ class Build:
 
     def pool(self):
         return self._read(_POOL)
+
+    def coverage(self):
+        return self._read(_COVERAGE)
 
     def leftover(self):
         """(the unplaced calls, capped per usecase and day; how many there were in all)"""

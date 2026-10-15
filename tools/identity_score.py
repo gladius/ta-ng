@@ -19,7 +19,8 @@ from core.ledger import build, bq, refresh  # noqa: E402
 
 _SQL = """
 SELECT a.usecase, CAST(a.site AS STRING) AS site, {truth} AS truth, COUNT(*) AS n
-FROM call_rows a JOIN `{table}` l ON CAST(l.`{id}` AS STRING) = a.id AND a.day = DATE(l.`{time}`)
+FROM call_rows a JOIN `{table}` l ON CAST(l.`{id}` AS STRING) = a.log_id AND UNIX_MICROS(CAST(l.`{time}` AS TIMESTAMP)) = a.ts_us
+                     AND a.day = DATE(l.`{time}`)
 GROUP BY 1, 2, 3
 """
 _LEFT = "SELECT s.usecase, COUNT(*) AS n FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL GROUP BY 1"

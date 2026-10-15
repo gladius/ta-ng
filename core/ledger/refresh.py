@@ -110,9 +110,18 @@ def _version(rec, template, day):
     rec["template"] = sorted(template)
 
 
+def distinct_markers(markers, template, siblings):
+    """The fingerprint's phrases, none of them in a sibling call-site's template (else that phrase would match the
+    sibling's calls too); topped up from the template's other phrases."""
+    taken = set().union(*siblings) if siblings else set()
+    keep = [m for m in markers if m not in taken]
+    keep += [p for p in sorted(template) if p not in taken and p not in keep][:max(0, build.MARKERS - len(keep))]
+    return keep[:build.MARKERS]
+
+
 def _new_site(site, usecase, template, markers, req):
     return {"site": site, "usecase": usecase, "template": sorted(template), "markers": list(markers), "versions": [],
-            "signature": [l for l in (_texts(req or {})[0][:300]).split("\n") if l], "request": req}
+            "signature": [], "request": req, "new": True}
 
 
 def process_day(day):
@@ -160,6 +169,11 @@ def process_day(day):
         merge(rows, mapping[g["site"]], day, g["model"] or "", {}, {g["bucket"]: g})
     samples = [{**p, "site": mapping[p["site"]], "day": day} for p in pool]
     placed = _place_leftovers(leftover, recs, rows, day, b)
+    for site, rec in recs.items():                      # new call-sites: phrases none of their siblings hold
+        if rec.get("new"):
+            sibs = [set(r["template"]) for s, r in recs.items() if s != site and (r["usecase"] or "") == (rec["usecase"] or "")]
+            rec["markers"] = distinct_markers(rec["markers"], set(rec["template"]), sibs)
+    store.replace_coverage([day], b.coverage())
     store.replace_days([day], [r for r in rows.values() if r["day"] == day])
     store.add_to_days([r for r in rows.values() if r["day"] != day])   # calls of earlier days placed only now
     store.replace_samples([day], samples)
@@ -168,7 +182,7 @@ def process_day(day):
     store.mark_day(day, sum(d["n"] for d in day_sites) + len(placed), n_left - len(placed))
     tasks.note("%s: cache findings" % day)
     _cache(recs)
-    tasks.note("%s: done" % day)
+    tasks.note("%s: done%s" % (day, " (" + b.timing + ")" if getattr(b, "timing", None) else ""))
     b.close()                                          # on a failure the session stays: the next run resumes from it
     return len(day_sites)
 

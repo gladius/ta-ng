@@ -116,9 +116,12 @@ def pick(rows, n=DEFAULT_SAMPLES):
 
 def sample(usecase, site=None, n=DEFAULT_SAMPLES):
     """{site: [samples]} for the usecase (or one of its call-sites), from the request ids the day processing kept
-    per call-site (the extremes and some at random, every day of the window). No BigQuery here."""
+    per call-site (the extremes and some at random), all from the latest day that has any: fetching their prompts
+    then reads one day of the log. No BigQuery here."""
     sites = [site] if site else [r["site"] for r in store.by_usecase(usecase)]
-    return {s: pick(rows, n) for s, rows in store.samples(sites).items()}
+    pools = store.samples(sites)
+    latest = max((r["day"] for rows in pools.values() for r in rows), default=None)
+    return {s: pick([r for r in rows if r["day"] == latest], n) for s, rows in pools.items() if any(r["day"] == latest for r in rows)}
 
 
 # --------------------------------------------------------------------------------------------------- candidates

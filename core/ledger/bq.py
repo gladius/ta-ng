@@ -107,8 +107,7 @@ class Session:
 
     def _cfg(self, params):
         from google.cloud import bigquery
-        cap = float(credentials.get_config("BQ_MAX_TB") or 2) * 1e12
-        return bigquery.QueryJobConfig(query_parameters=_params(params), maximum_bytes_billed=int(cap),
+        return bigquery.QueryJobConfig(query_parameters=_params(params), maximum_bytes_billed=max_bytes(),
                                        connection_properties=[bigquery.ConnectionProperty("session_id", self.id)])
 
     def query(self, sql, params=None, timeout=1800):
@@ -141,6 +140,13 @@ class Session:
                 raise TimeoutError("the day script ran over %d h" % (timeout // 3600))
             time.sleep(every)
         job.result()
+        try:
+            kids = sorted(client().list_jobs(parent_job=job.job_id, max_results=500), key=lambda k: -((k.ended - k.started).total_seconds() if k.ended and k.started else 0))
+            self.timing = "BigQuery %d min; slowest: %s" % ((time.time() - t0) / 60, ", ".join(
+                "%s %d s" % ((k.query or "").strip().splitlines()[0].replace("CREATE OR REPLACE TEMP TABLE ", "").replace("CREATE TEMP TABLE ", "")[:24],
+                            (k.ended - k.started).total_seconds()) for k in kids[:3]))
+        except Exception:
+            self.timing = "BigQuery %d min" % ((time.time() - t0) / 60)
         return job
 
     def close(self):
@@ -150,8 +156,13 @@ class Session:
             pass
 
 
+def max_bytes():
+    """BQ_MAX_TB (default 2): a query that would read more is refused before it runs."""
+    return int(float(credentials.get_config("BQ_MAX_TB") or 2) * 1e12)
+
+
 def query(sql, params=None, timeout=600):
-    """One query outside a session."""
+    """One query outside a session, under the byte cap."""
     from google.cloud import bigquery
-    return list(client().query(sql, job_config=bigquery.QueryJobConfig(query_parameters=_params(params)), location=location())
-                .result(timeout=timeout))
+    return list(client().query(sql, job_config=bigquery.QueryJobConfig(query_parameters=_params(params), maximum_bytes_billed=max_bytes()),
+                               location=location()).result(timeout=timeout))

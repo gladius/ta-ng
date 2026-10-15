@@ -85,7 +85,7 @@ def test_lookup_by_request_id(monkeypatch):
     settings = dict(_SETTINGS, BQ_PARAMS_COLUMN="model_parameters", BQ_MODEL_COLUMN="model")
     monkeypatch.setattr(bq.credentials, "get_config", lambda k, d=None, **kw: settings.get(k))
     routed = dict(_RESP, model="jev-router")                    # a router in front names itself in the response
-    rows = [{"id": "chatcmpl-1", "request": json.dumps(_msgs("Billing agent.")), "response": json.dumps(routed),
+    rows = [{"k": "chatcmpl-1", "request": json.dumps(_msgs("Billing agent.")), "response": json.dumps(routed),
              "params": json.dumps({"max_tokens": 32768, "tools": [{"type": "function", "function": {"name": "refund"}}],
                                    "temperature": 0.2}), "served": "openai/gpt-5.4-mini"}]
     seen = {}
@@ -93,7 +93,7 @@ def test_lookup_by_request_id(monkeypatch):
     got = bq.lookup(["chatcmpl-1", "chatcmpl-2"])
     assert "WHERE DATE(`created_timestamp_utc`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND `request_id` IN " \
            "UNNEST(@ids)" in seen["sql"]                         # only the window's partitions, never the whole table
-    assert seen["params"] == {"ids": ["chatcmpl-1", "chatcmpl-2"], "days": 30}
+    assert seen["params"] == {"ids": ["chatcmpl-1", "chatcmpl-2"], "days": 2}
     body, resp = got["chatcmpl-1"]
     assert body["model"] == "openai/gpt-5.4-mini" and body["max_tokens"] == 32768 and body["temperature"] == 0.2
     assert [t["function"]["name"] for t in body["tools"]] == ["refund"] and resp["id"] == "chatcmpl-1"
@@ -106,3 +106,22 @@ def test_skip_usecases_setting_parses_and_empty_means_none(monkeypatch):
         monkeypatch.setattr(bq.credentials, "get_config", lambda k, d=None, raw=raw, **kw: raw if k == "SKIP_USECASES" else d)
         assert core_bq.skipped() == want
     assert "COALESCE(`vegas_usecase_name`, '')" in core_bq.SKIP_FILTER.format(col="vegas_usecase_name")   # NULL kept
+
+
+
+def test_lookup_by_row_key_reads_only_that_calls_day(monkeypatch):
+    """A day-processing key (<log id>@<unix micros>[#n]) fetches exactly that call, from its own day: the log id alone
+    can be shared by several calls (a transaction id)."""
+    from core.ledger import bq as core_bq
+    monkeypatch.setattr(bq.credentials, "get_config", lambda k, d=None, **kw: _SETTINGS.get(k))
+    seen = {}
+    t = 1760400000000000                                         # 2025-10-14 00:00:00 UTC in microseconds
+    def query(sql, params, timeout=None):
+        seen.update(sql=sql, params=params)
+        return [{"k": "txn-9@%d" % t, "request": json.dumps(_msgs("Billing agent.")), "response": json.dumps(_RESP)}]
+    monkeypatch.setattr(core_bq, "query", query)
+    got = bq.lookup(["txn-9@%d#2" % t])
+    import datetime
+    assert seen["params"]["dates"] == [datetime.date(2025, 10, 14)] and seen["params"]["keys"] == ["txn-9@%d" % t]
+    assert "WHERE DATE(`created_timestamp_utc`) IN UNNEST(@dates)" in seen["sql"] and "INTERVAL @days DAY" not in seen["sql"]
+    assert list(got) == ["txn-9@%d#2" % t]                       # answered under the key that was asked for

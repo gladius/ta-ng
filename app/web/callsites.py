@@ -17,7 +17,7 @@ def _cache_decision(site):
 
 def _with_profile(s):
     p = s.get("profile")
-    return {**s, "name": (p or {}).get("name") or (s["signature"][0][:60] if s["signature"] else s["site"])}
+    return {**s, "name": (p or {}).get("name") or (s["markers"][0][:60] if s.get("markers") else s["site"])}
 
 
 def _reloading():
@@ -47,7 +47,7 @@ def usecase(usecase: str):
     from modules.models import audits
     for s in sites:
         s["decisions"] = {"models": audits.knowledge(s["site"], s), "router": s["choice"]}
-    u = {**u, "decisions": {"models": audits.usecase_rollup(uc)}}
+    u = {**u, "decisions": {"models": audits.usecase_rollup(uc)}, "coverage": store.coverage(uc)}
     return {**u, "sites": [{**_with_profile(s), "cache": _cache_decision(s["site"])} for s in sites],
             "analysing": bool(refresh.running()), "days": days_status()}
 

@@ -22,6 +22,7 @@ KINDS = {
     "profile_site": "core.profiler:profile",
     "reload_usecases": "core.ledger.refresh:list_usecases",
 }
+FORGET_ARGS = {"profile_site"}
 HEARTBEAT_S = 20
 STALE_S = 120
 MAX_ATTEMPTS = 3
@@ -180,6 +181,9 @@ def run(task, token):
         mod, fn = KINDS[task["kind"]].split(":")
         getattr(importlib.import_module(mod), fn)(**json.loads(task["args"]))
         _finish(task["id"], token)
+        if task["kind"] in FORGET_ARGS:                   # prompt text needed only while it runs: not kept
+            with db.ready().begin() as c:
+                c.execute(update(tasks).where(tasks.c.id == task["id"]).values(args="{}"))
     except Exception as e:
         _finish(task["id"], token, "%s: %s" % (type(e).__name__, str(e)[:500]))
     finally:

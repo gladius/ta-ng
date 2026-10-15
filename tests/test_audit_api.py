@@ -429,7 +429,7 @@ def test_items_can_name_logged_calls_by_request_id(client, monkeypatch):
         {"request_id": "chatcmpl-1", "candidates": cands}, {"request_id": "chatcmpl-nope", "candidates": cands},
         {"request_id": "chatcmpl-failed", "candidates": cands}, {"candidates": cands}]})
     assert r.status_code == 422 and r.json()["detail"] == [
-        "chatcmpl-nope: request_id not found in the log's last 30 days", "chatcmpl-failed: the logged call has no response (it failed)",
+        "chatcmpl-nope: request_id not found in the log's last 2 days", "chatcmpl-failed: the logged call has no response (it failed)",
         "item 4: send request (and response) or request_id"]
     job_id = _post(client, {"items": [{"request_id": "chatcmpl-1", "candidates": cands},     # mixed with a full item
                                       dict(_item(2), candidates=cands)]})

@@ -72,7 +72,7 @@ callsites = Table(
     Column("choice", Text),                                    # JSON {model, audit, guard, until, by, at} or null
 )
 NUMBERS = ("calls", "prompt_tokens", "cached_tokens", "written_tokens", "completion_tokens", "calls_cached", "cost",
-           "cost_nocache", "calls_with_tools", "avg_ms", "avg_messages")
+           "cost_nocache", "calls_unpriced", "calls_with_tools", "avg_ms", "avg_messages")
 site_days = Table(
     "site_days", db.metadata,
     Column("site", String(32), primary_key=True),
@@ -104,6 +104,13 @@ unplaced = Table(
     Column("cost", Float),
     Column("cost_nocache", Float),
     Column("template", Text, nullable=False),                  # JSON list of window hashes
+)
+COVERAGE = ("calls", "other_format", "no_usage", "unpriced", "repeated", "placed", "unplaced")
+usecase_days = Table(                                      # what each usecase's day was made of, and how much was analysed
+    "usecase_days", db.metadata,
+    Column("usecase", Text, primary_key=True),
+    Column("day", String(10), primary_key=True),
+    *[Column(k, Integer) for k in COVERAGE],
 )
 day_sessions = Table(                                      # the BigQuery session of a day's last script run: a failure
     "day_sessions", db.metadata,                           # after the script resumes from its temp tables (24 h)
@@ -201,13 +208,12 @@ def templates(usecase):
 
 
 def fingerprints():
-    """Every call-site's fingerprint, for the day script's placement: [{usecase, site, markers, template}], the
-    phrases joined by '|'."""
+    """Every call-site's fingerprint, for the day script's placement: [{usecase, site, markers}], the phrases joined
+    by '|'. Markers only: a few hundred bytes per call-site, so thousands fit in one BigQuery request."""
     eng = db.ready()
     with eng.connect() as c:
-        rows = c.execute(select(callsites.c.usecase, callsites.c.site, callsites.c.markers, callsites.c.template)).all()
-    return [{"usecase": r[0], "site": r[1], "markers": "|".join(json.loads(r[2] or "[]")), "template": "|".join(json.loads(r[3] or "[]"))}
-            for r in rows if r[2]]
+        rows = c.execute(select(callsites.c.usecase, callsites.c.site, callsites.c.markers)).all()
+    return [{"usecase": r[0], "site": r[1], "markers": "|".join(json.loads(r[2] or "[]"))} for r in rows if r[2]]
 
 
 def save_identity(rec, window):
@@ -355,7 +361,7 @@ def trim(cutoff):
     """Drop the days before `cutoff` (ISO date) everywhere. -> the sites left with no day."""
     eng = db.ready()
     with eng.begin() as c:
-        for t in (site_days, site_samples, unplaced, processed_days):
+        for t in (site_days, site_samples, unplaced, processed_days, usecase_days):
             c.execute(delete(t).where(t.c.day < cutoff))
         gone = c.execute(select(callsites.c.site).where(callsites.c.site.notin_(select(site_days.c.site).distinct()))).scalars().all()
     return gone
@@ -425,6 +431,27 @@ def day_session(day, session_id=None):
             return session_id
         r = c.execute(select(day_sessions.c.session_id, day_sessions.c.at).where(day_sessions.c.day == day)).first()
     return r[0] if r and (_now() - r[1]).total_seconds() < 20 * 3600 else None
+
+
+def replace_coverage(days, rows):
+    eng = db.ready()
+    with eng.begin() as c:
+        if days:
+            c.execute(delete(usecase_days).where(usecase_days.c.day.in_(list(days))))
+        if rows:
+            c.execute(usecase_days.insert(), [{"usecase": r["usecase"] or "", "day": str(r["day"]), **{k: int(r.get(k) or 0) for k in COVERAGE}}
+                                              for r in rows])
+
+
+def coverage(usecase=None):
+    """{coverage counts summed over the window}, for one usecase or all."""
+    eng = db.ready()
+    stmt = select(*[func.sum(getattr(usecase_days.c, k)) for k in COVERAGE])
+    if usecase is not None:
+        stmt = stmt.where(usecase_days.c.usecase == (usecase or ""))
+    with eng.connect() as c:
+        r = c.execute(stmt).first()
+    return {k: int(v or 0) for k, v in zip(COVERAGE, r)}
 
 
 # ------------------------------------------------------------------------------------------- processed_days
