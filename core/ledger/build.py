@@ -20,7 +20,7 @@ from core.ledger import bq
 
 MIN_CALLS = 5            # a call-site has at least this many calls a day; a seed's phrases must place this many
 PREFIX = 300             # masked characters of the head that key the free pass (seeds are its biggest keys)
-SEEDS = 3                # seeds per usecase and round
+SEEDS = 5                # seeds per usecase and round
 HEADS = 3                # calls of a seed shown to the model
 PAIRS = 30               # consecutive-call pairs per day-site for the prefix
 POOL = 5                 # request ids kept per day-site and model for model audits (plus the extremes)

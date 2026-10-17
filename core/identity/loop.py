@@ -28,7 +28,7 @@ from core.ledger import build
 MIN_CALLS = build.MIN_CALLS
 PHRASES = 5              # phrases asked for
 MIN_PHRASES = 3          # phrases a fingerprint needs after the verbatim check
-MAX_ROUNDS = 40
+MAX_ROUNDS = 60
 DONE_SHARE = 0.01        # a usecase is done when under this share of its chat calls is unplaced
 GIVE_UP = 2              # rounds in a row accepting nothing -> the usecase is done (the rest stays unplaced)
 OVERLAP = 0.5            # two candidates sharing this share of the smaller one's calls are one template
