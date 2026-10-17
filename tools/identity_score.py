@@ -1,12 +1,12 @@
-"""Score the day script's grouping on the synthetic log, whose `synthetic` column holds the true call-site.
+"""Score the grouping (the day script's placement plus the loop) on a table whose true call-site is known.
 
     BQ_TABLE=trust-router-sandbox.litellm.llm_log .venv/bin/python tools/identity_score.py [--days 7]
     .venv/bin/python tools/identity_score.py --bench            # the hard bench (tools/grouping_bench.py --make)
 
-Runs the day script over the last --days days at once (one BigQuery session) and scores call_rows against the truth:
-the orchestrator's roles are distinct call-sites; every other usecase is one. Purity = share of a found site's calls
-from its majority true site; completeness = share of a true site's calls in its majority found site. Sites found per
-day are linked across days the way the app does (core.ledger.refresh.link)."""
+Paid: the loop asks the model once per call-site (about 2 cents each). Runs the day script over the last --days days
+at once (one BigQuery session) with nothing known, runs the loop, and scores `placed` against the truth: purity =
+share of a found site's calls from its majority true site; completeness = share of a true site's calls in its majority
+found site. The app's database is not touched (the loop's records are kept in memory)."""
 import argparse
 import datetime
 import os
@@ -15,15 +15,15 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.ledger import build, bq, refresh  # noqa: E402
+from core.identity import loop, store  # noqa: E402
+from core.ledger import build, bq  # noqa: E402
 
 _SQL = """
-SELECT a.usecase, CAST(a.site AS STRING) AS site, {truth} AS truth, COUNT(*) AS n
-FROM call_rows a JOIN `{table}` l ON CAST(l.`{id}` AS STRING) = a.log_id AND UNIX_MICROS(CAST(l.`{time}` AS TIMESTAMP)) = a.ts_us
-                     AND a.day = DATE(l.`{time}`)
-GROUP BY 1, 2, 3
+SELECT s.usecase, p.site, {truth} AS truth, COUNT(*) AS n
+FROM placed p JOIN src s USING (id) JOIN `{table}` l ON CAST(l.`{id}` AS STRING) = s.log_id AND UNIX_MICROS(CAST(l.`{time}` AS TIMESTAMP)) = s.ts_us
+WHERE s.chat GROUP BY 1, 2, 3
 """
-_LEFT = "SELECT s.usecase, COUNT(*) AS n FROM src s LEFT JOIN placed p USING (id) WHERE p.id IS NULL GROUP BY 1"
+_LEFT = "SELECT s.usecase, COUNT(*) AS n FROM calls s LEFT JOIN placed p USING (id) WHERE p.id IS NULL GROUP BY 1"
 
 
 def main(days, bench):
@@ -36,32 +36,34 @@ def main(days, bench):
     c = bq.cfg()
     truth = "l.true_site" if bench else "COALESCE(JSON_VALUE(l.synthetic, '$.role'), 'main')"
     today = datetime.date.today()
+    made = {}
+    store.save_site = lambda rec: made.__setitem__(rec["site"], rec)       # in memory, not the app's database
+    from core import tasks
+    tasks.note = lambda text: print("  ..", text, flush=True)
     b = build.Build(today - datetime.timedelta(days), today - datetime.timedelta(1))
     try:
-        known, link = {}, {}
-        for d in sorted(b.day_sites(), key=lambda d: (str(d["day"]), d["site"])):
-            k = known.setdefault(d["usecase"] or "", {})
-            t = set(d["template"] or [])
-            site = refresh.link(t, k) or refresh.site_id(d["usecase"], t)
-            k[site] = t
-            link[d["site"]] = site
+        loop.run(b, str(today - datetime.timedelta(1)), lambda uc: [{"site": s, "name": r["profile"]["name"], "phrases": r["phrases"], "calls": r["placed"]}
+                                                                    for s, r in made.items() if (r["usecase"] or "") == (uc or "")])
         rows = b.s.query(_SQL.format(truth=truth, **c))
         left = {r["usecase"] or "": r["n"] for r in b.s.query(_LEFT)}
     finally:
         b.close()
-    by = {}
+    by = {uc: [] for uc in left}
     for r in rows:
         by.setdefault(r["usecase"] or "", []).append(r)
     print("%-24s %5s %7s %7s %6s %6s %8s" % ("usecase", "sites", "truth", "purity", "compl", "calls", "unplaced"))
     for uc in sorted(by, key=lambda u: -sum(r["n"] for r in by[u])):
         found, truth = {}, Counter()
         for r in by[uc]:
-            found.setdefault(link[r["site"]], Counter())[r["truth"]] += r["n"]
+            found.setdefault(r["site"], Counter())[r["truth"]] += r["n"]
             truth[r["truth"]] += r["n"]
         n = sum(truth.values())
-        purity = sum(max(cnt.values()) for cnt in found.values()) / n
-        compl = sum(max(cnt[t] for cnt in found.values()) for t in truth) / n
+        purity = sum(max(cnt.values()) for cnt in found.values()) / n if n else 0
+        compl = sum(max(cnt[t] for cnt in found.values()) for t in truth) / n if n else 0
         print("%-24s %5d %7d %5.0f%% %5.0f%% %6d %8d" % (uc, len(found), len(truth), 100 * purity, 100 * compl, n, left.get(uc, 0)))
+    for s, r in made.items():
+        print("  %-28s %-24s %5d %s %s" % ((r["usecase"] or "")[:28], r["profile"]["name"][:24], r["placed"],
+                                           "MIXED" if r.get("mixed") else "     ", " | ".join(r["phrases"])[:100]))
 
 
 if __name__ == "__main__":

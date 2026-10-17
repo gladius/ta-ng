@@ -9,7 +9,7 @@ api = APIRouter(prefix="/api/suite/quality", dependencies=[Depends(require_key)]
 
 @api.post("/run")
 def run(day: str):
-    """Check a processed day again (its kept sample calls are fetched from that day's log: one read of the day)."""
+    """Check a processed day again (our own numbers; no read of the log)."""
     from core import tasks
     from core.identity import store
     if day not in store.days_done():
@@ -24,7 +24,7 @@ def report(day: str | None = None):
     r["running"] = [k[len("quality:"):] for k in tasks.pending("quality:")]
     from core.identity import store
     names = {}
-    for item in r["failures"] + r["spot_checks"]:
+    for item in r["failures"]:
         if item["site"] and item["site"] not in names:
             rec = store.get(item["site"])
             names[item["site"]] = ((rec or {}).get("profile") or {}).get("name") or item["site"]

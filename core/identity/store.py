@@ -3,9 +3,10 @@
 usecases        the cheap list from the log (calls in the window, days; `listed_at`) plus its call-site count and when
                 its days were last processed (`analysed_at`).
 callsites       one row per call-site, each part written by one owner only:
-                  identity        the day processing (core/ledger/refresh.py): template (the window hashes its calls
-                                  share), the start of a sample prompt, versions, prompt layout
-                  profile         the profiler, once
+                  identity        the loop (core/identity/loop.py) and the day processing (core/ledger/refresh.py):
+                                  the fingerprint phrases (markers), its versions (each with phrases, need, days,
+                                  placed count, the model's reason), the prompt's regions (signature), the layout
+                  profile         the loop, from the same model call (name, what it does, task, output, fixed, per_call)
                   cache_findings  the cache analysis (its latest diagnosis)
                   choice          the router or a person: the model this call-site uses, the audit it relied on, ...
                 What the audits found is not stored here: it is a query over audit_verdicts (modules/models/audits.py).
@@ -13,11 +14,10 @@ site_days       one row per call-site, day and model: the day's numbers and its 
                 (processed again: replaced); days older than the window are dropped. Pages sum these rows.
 site_samples    a few request ids per call-site, day and model (the extremes and some at random): what a model audit
                 re-runs, fetched from the log by id for just those days.
-unplaced        calls the day script could not place (no template text in common with enough other calls that day),
-                with their window hashes: grouped across days by the processing, capped per usecase and day.
+unplaced        calls no fingerprint placed that day (shown as such), capped per usecase and day.
 processed_days  which days of the log have been processed, and when.
 
-A request belongs to a call-site when its system prompt holds HITS of the call-site's marker phrases."""
+A request belongs to a call-site when its head holds `need` of one of its versions' phrases."""
 import datetime
 import json
 from collections import defaultdict
@@ -44,14 +44,14 @@ callsites = Table(
     Column("site", String(32), primary_key=True),
     Column("usecase", Text, nullable=False, default=""),
     # identity
-    Column("template", Text, nullable=False),                  # JSON list of phrases its calls share (linking, versions)
-    Column("markers", Text),                                   # JSON list of MARKERS phrases: the fingerprint (placement, router)
-    Column("ambiguous", Boolean),                              # some phrases also in siblings: placed only on all of them
-    Column("signature", Text, nullable=False),                 # JSON: the first lines of a sample prompt
+    Column("template", Text, nullable=False),                  # unused ("[]")
+    Column("markers", Text),                                   # JSON list of phrases: the current version's fingerprint (placement, router)
+    Column("ambiguous", Boolean),                              # unused (False)
+    Column("signature", Text, nullable=False),                 # JSON [{kind: fixed|per_call, what}]: the prompt's regions in order
     Column("calls", Integer, nullable=False),
     Column("first_day", String(10)),
     Column("last_day", String(10)),
-    Column("versions", Text, nullable=False),                  # JSON [{version, first, last}]
+    Column("versions", Text, nullable=False),                  # JSON [{version, phrases, need, first, last, placed, reason, model}]
     Column("static_chars", Integer),
     Column("dynamic_chars", Integer),
     Column("static_after", Integer),                           # fixed characters after the first per-call text
@@ -104,7 +104,7 @@ unplaced = Table(
     Column("completion_tokens", Integer),
     Column("cost", Float),
     Column("cost_nocache", Float),
-    Column("template", Text, nullable=False),                  # JSON list of window hashes
+    Column("template", Text, nullable=False),                  # unused ("[]")
 )
 COVERAGE = ("calls", "other_format", "no_usage", "unpriced", "repeated", "placed", "unplaced")
 usecase_days = Table(                                      # what each usecase's day was made of, and how much was analysed
@@ -200,43 +200,76 @@ def usecase_list(q=None, page=1, per_page=50):
 
 
 # --------------------------------------------------------------------------------------------------- callsites
-def templates(usecase):
-    """{site: set of template phrases} of the usecase's known call-sites."""
-    eng = db.ready()
-    with eng.connect() as c:
-        rows = c.execute(select(callsites.c.site, callsites.c.template).where(callsites.c.usecase == (usecase or ""))).all()
-    return {r[0]: set(json.loads(r[1] or "[]")) for r in rows}
-
-
 def fingerprints():
-    """Every call-site's fingerprint, for the day script's placement: [{usecase, site, markers}], the phrases joined
-    by '|', and `need` (all of them for an ambiguous one; 0: the usual HITS). Markers only: a few hundred bytes per
-    call-site, so thousands fit in one BigQuery request."""
+    """Every call-site's fingerprints, for the day script's placement: one entry per version with phrases,
+    [{usecase, site, markers, need}], the phrases joined by '|'. A few hundred bytes per call-site, so thousands fit
+    in one BigQuery request."""
     eng = db.ready()
     with eng.connect() as c:
-        rows = c.execute(select(callsites.c.usecase, callsites.c.site, callsites.c.markers, callsites.c.ambiguous)).all()
+        rows = c.execute(select(callsites.c.usecase, callsites.c.site, callsites.c.markers, callsites.c.versions)).all()
     out = []
-    for uc, site, markers, ambiguous in rows:
-        phrases = json.loads(markers or "[]")
-        if phrases:                                # an ambiguous fingerprint must match all its phrases
-            out.append({"usecase": uc, "site": site, "markers": "|".join(phrases), "need": len(phrases) if ambiguous else 0})
+    for uc, site, markers, versions in rows:
+        vs = [v for v in json.loads(versions or "[]") if v.get("phrases")] or [{"phrases": json.loads(markers or "[]")}]
+        for v in vs:
+            if v["phrases"]:
+                out.append({"usecase": uc, "site": site, "markers": "|".join(v["phrases"]), "need": int(v.get("need") or _need(v["phrases"]))})
     return out
 
 
-def save_identity(rec, window):
-    """Upsert a call-site's identity part (the processing's). rec: site, usecase, template, signature, calls,
-    first_day, last_day, versions, static_chars, dynamic_chars, static_after, tool_sets."""
+def _need(phrases):
+    return len(phrases) - 1 if len(phrases) >= 4 else len(phrases)
+
+
+def brief(usecase):
+    """The usecase's call-sites as the loop shows them to the model: [{site, name, phrases, calls}]."""
     eng = db.ready()
-    vals = {"usecase": rec["usecase"] or "", "template": json.dumps(sorted(rec["template"])), "markers": json.dumps(rec.get("markers") or []),
-            "ambiguous": bool(rec.get("ambiguous")),
-            "signature": json.dumps(rec.get("signature") or []), "calls": int(rec["calls"]),
-            "first_day": rec["first_day"], "last_day": rec["last_day"], "versions": json.dumps(rec["versions"]),
-            "static_chars": rec.get("static_chars"), "dynamic_chars": rec.get("dynamic_chars"),
-            "static_after": rec.get("static_after"), "tool_sets": rec.get("tool_sets"),
-            "unsure": int(rec["calls"]) < UNSURE_BELOW, "window_days": window, "seen_at": _now()}
+    with eng.connect() as c:
+        rows = c.execute(select(callsites.c.site, callsites.c.name, callsites.c.markers, callsites.c.calls)
+                         .where(callsites.c.usecase == (usecase or "")).order_by(callsites.c.calls.desc())).all()
+    return [{"site": r.site, "name": r.name, "phrases": json.loads(r.markers or "[]"), "calls": r.calls or 0} for r in rows]
+
+
+def save_site(rec):
+    """A call-site the loop made or gave a new version (rec: core.identity.loop._record). New: the row with its first
+    version and profile. A version of a known one (version_of): the version appended, the fingerprint and profile
+    renewed. The counts over the window are set by save_identity after the day's numbers are in."""
+    eng = db.ready()
+    version = {"version": _version_id(rec["phrases"]), "phrases": rec["phrases"], "need": rec["need"], "first": rec["day"], "last": rec["day"],
+               "placed": rec.get("placed") or 0, "reason": rec.get("reason") or "", "model": rec["profile"]["model"],
+               "mixed": bool(rec.get("mixed")), "mixed_why": rec.get("mixed_why") or ""}
+    lay = {k: rec[k] for k in ("static_chars", "dynamic_chars", "static_after") if rec.get(k) is not None}
+    with eng.begin() as c:
+        row = c.execute(select(callsites.c.versions, callsites.c.calls).where(callsites.c.site == rec["site"])).first()
+        if row is None:
+            c.execute(callsites.insert().values(site=rec["site"], usecase=rec["usecase"] or "", template="[]", markers=json.dumps(rec["phrases"]),
+                                                ambiguous=False, signature=json.dumps(rec.get("regions") or []), calls=rec.get("placed") or 0,
+                                                first_day=rec["day"], last_day=rec["day"], versions=json.dumps([version]),
+                                                unsure=(rec.get("placed") or 0) < UNSURE_BELOW, window_days=7, seen_at=_now(), **lay))
+        else:
+            versions = [v for v in json.loads(row.versions or "[]") if v.get("version") != version["version"]] + [version]
+            c.execute(update(callsites).where(callsites.c.site == rec["site"]).values(
+                markers=json.dumps(rec["phrases"]), signature=json.dumps(rec.get("regions") or []), versions=json.dumps(versions),
+                seen_at=_now(), **lay))
+    p = rec["profile"]
+    set_profile(rec["site"], p)
+
+
+def _version_id(phrases):
+    import hashlib
+    return hashlib.sha1("|".join(sorted(phrases)).encode()).hexdigest()[:12]
+
+
+def save_identity(rec, window):
+    """Upsert a call-site's summary over the window (the processing's). rec: site, usecase, calls, first_day, last_day,
+    versions (their `last` days kept up), and the layout when known."""
+    eng = db.ready()
+    vals = {"usecase": rec["usecase"] or "", "calls": int(rec["calls"]), "first_day": rec["first_day"], "last_day": rec["last_day"],
+            "versions": json.dumps(rec["versions"]), "unsure": int(rec["calls"]) < UNSURE_BELOW, "window_days": window, "seen_at": _now(),
+            **{k: rec[k] for k in ("static_chars", "dynamic_chars", "static_after", "tool_sets") if rec.get(k) is not None}}
     with eng.begin() as c:
         if c.execute(update(callsites).where(callsites.c.site == rec["site"]).values(**vals)).rowcount == 0:
-            c.execute(callsites.insert().values(site=rec["site"], **vals))
+            c.execute(callsites.insert().values(site=rec["site"], template="[]", markers=json.dumps(rec.get("markers") or []),
+                                                ambiguous=False, signature="[]", **vals))
 
 
 def drop_sites(sites):
@@ -409,7 +442,7 @@ def replace_unplaced(days, rows):
         for i in range(0, len(rows), 500):
             c.execute(unplaced.insert(), [{**{k: r.get(k) for k in ("id", "usecase", "day", "model", "prompt_tokens", "cached_tokens",
                                                                    "written_tokens", "completion_tokens", "cost", "cost_nocache")},
-                                           "usecase": r["usecase"] or "", "template": json.dumps(list(r["template"]))}
+                                           "usecase": r["usecase"] or "", "template": "[]"}
                                           for r in rows[i:i + 500]])
 
 
@@ -417,7 +450,7 @@ def unplaced_rows(usecase):
     eng = db.ready()
     with eng.connect() as c:
         rows = c.execute(select(unplaced).where(unplaced.c.usecase == (usecase or ""))).all()
-    return [{**r._mapping, "template": json.loads(r.template)} for r in rows]
+    return [dict(r._mapping) for r in rows]
 
 
 def drop_unplaced(ids):

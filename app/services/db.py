@@ -52,7 +52,7 @@ def ready():
 
 
 def _create(eng):
-    """Missing tables, then missing nullable columns. Never alters or drops: see tools/migrate_validation_schema.py."""
+    """Missing tables, then missing nullable columns. Never alters or drops a column (that is a manual ALTER TABLE)."""
     metadata.create_all(eng)
     insp = inspect(eng)
     with eng.begin() as c:
@@ -112,14 +112,9 @@ def health():
         target = "%s%s/%s" % (u.host or "?", (":%s" % u.port) if u.port else "", u.database or "?")
     out = {"ok": False, "backend": eng.dialect.name, "target": target, "entries": None, "last_write": None}
     try:
-        from app.services import store
-        store._ensure()
         with eng.connect() as c:
-            row = c.execute(text("SELECT count(*), max(created_at) FROM kv")).first()
+            c.execute(text("SELECT 1")).first()
         out["ok"] = True
-        out["entries"] = int(row[0]) if row and row[0] is not None else 0
-        lw = row[1] if row else None                            # raw SQL: SQLite returns a str, Postgres a datetime
-        out["last_write"] = lw.isoformat() if hasattr(lw, "isoformat") else (str(lw) if lw is not None else None)
     except Exception as e:                                       # report the error type only, never its details
         out["error"] = type(e).__name__
     return out

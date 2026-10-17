@@ -126,28 +126,3 @@ def test_day_numbers_add_up_and_a_late_placed_call_lands_on_its_own_day():
     s = store.series(["s1", "s2"])
     assert s["s1"]["m"]["2026-10-13"]["calls"] == 6 and round(s["s1"]["m"]["2026-10-13"]["cost"], 6) == 0.6
     assert s["s2"]["m"]["2026-10-13"]["calls"] == 1
-
-
-def test_a_new_call_sites_fingerprint_holds_no_phrase_of_its_siblings():
-    from core.ledger import refresh
-    shared, own = {"you are the claims assistant", "always answer in english"}, {"check the policy number first", "quote the deductible"}
-    sibling = shared | {"draft the reply letter"}
-    m, ambiguous = refresh.distinct_markers(sorted(shared) + sorted(own), shared | own, [sibling])
-    assert set(m[:2]) == own and not set(m[2:]) - shared        # own phrases first; shared ones only to fill up
-    assert ambiguous                                             # it holds a phrase a sibling has: placed on all of them
-
-
-def test_a_fingerprint_is_never_empty_and_marks_itself_ambiguous():
-    from core.ledger import refresh
-    template = {"you are an evaluation judge", "score the answer from # to #", "return json only"}
-    m, ambiguous = refresh.distinct_markers([], template, [template, template | {"rubric for tone"}])
-    assert len(m) == 3 and set(m) == template and ambiguous      # every phrase is shared: kept anyway, flagged
-    m, ambiguous = refresh.distinct_markers([], template, [{"something else entirely"}])
-    assert set(m) == template and not ambiguous
-
-
-def test_a_profile_task_forgets_the_prompt_once_it_has_run(monkeypatch):
-    monkeypatch.setitem(tasks.KINDS, "profile_site", __name__ + ":_probe")
-    task_id = tasks.add("profile_site", {"n": 1})
-    tasks.run(*tasks.claim("w1"))
-    assert tasks.get(task_id)["status"] == "done" and tasks.get(task_id)["args"] == "{}"

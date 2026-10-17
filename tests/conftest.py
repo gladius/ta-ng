@@ -29,7 +29,6 @@ def _no_gateway(monkeypatch):
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_store():
     from app.services import db
-    from app.services import store  # noqa: F401  ensure the kv table is registered on db.metadata before drop_all
 
     test_url = os.environ.get("TEST_DATABASE_URL")
     tmp_path = None

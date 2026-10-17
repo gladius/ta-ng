@@ -27,9 +27,21 @@ def skipped():
     return [p.strip() for p in (credentials.get_config("SKIP_USECASES") or "").split(",") if p.strip()]
 
 
-# a usecase column is kept unless it matches a pattern of @skip; an empty @skip keeps everything; an untagged call
-# (NULL usecase) is compared as '' so it is kept unless a pattern matches ''
-SKIP_FILTER = "NOT EXISTS (SELECT 1 FROM UNNEST(@skip) p WHERE COALESCE(`{col}`, '') LIKE p)"
+def only():
+    """ONLY_USECASES: comma-separated LIKE patterns; set, only these usecases are read and listed (validating the
+    auditor on two usecases before all). Empty: every usecase but the skipped ones."""
+    return [p.strip() for p in (credentials.get_config("ONLY_USECASES") or "").split(",") if p.strip()]
+
+
+def filters():
+    """The query parameters of SKIP_FILTER."""
+    return {"skip": skipped(), "only": only()}
+
+
+# a usecase column is kept unless it matches a pattern of @skip, and, when @only is set, only if it matches one of
+# @only; an empty list keeps everything; an untagged call (NULL usecase) is compared as ''
+SKIP_FILTER = ("NOT EXISTS (SELECT 1 FROM UNNEST(@skip) p WHERE COALESCE(`{col}`, '') LIKE p)"
+               " AND (COALESCE(ARRAY_LENGTH(@only), 0) = 0 OR EXISTS (SELECT 1 FROM UNNEST(@only) p WHERE COALESCE(`{col}`, '') LIKE p))")
 
 
 def configured():
