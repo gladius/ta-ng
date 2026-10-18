@@ -105,9 +105,9 @@ as a full pass; it should abstain); in dev without a gateway every target model 
 3. Closed loop (router, cache marks at the gateway): after B7 produces recommendations, not before.
 4. Executive page: B7's findings per usecase are its rows. Build it once B7 exists.
 
-## E. The production-side n-gram fingerprint (2026-10-18): what we found and what to check there
+## E. The n-gram fingerprint from the other session (2026-10-18): what we found and what to check there
 
-The production session wrote `core/ledger/bq_fingerprint.py` (not in this repo): bucket = tool set + first 300 masked
+The other session wrote `core/ledger/bq_fingerprint.py` (not in this repo): bucket = tool set + first 300 masked
 characters (the `key` column), ML.NGRAMS 4-grams of `norm`, a phrase = a 4-gram found in exactly one bucket of the
 usecase and in at least half of that bucket's calls, top 5 by share (at least 3), buckets of 10+ calls only, placed
 through `hits()`/`place()` as round -1 before the loop; `prefix_map()` = per token position, share of calls holding
@@ -128,7 +128,7 @@ bucket" then discards every real template phrase, because the template text is i
 The false sites are saved as real and the loop never sees those calls again. Also: top phrases are masked numbers
 ("# # # #", "# # # and"); sites have no name or profile, so the model call per site stays; site ids hash the day's
 phrases, which come from the day's statistics, so the same template gets a new id on another day; about 1,200 4-grams
-per call, so prod is roughly 9 billion n-gram rows a day (~0.7 TB read twice, ~$9, tens of minutes).
+per call, so a full day is roughly 9 billion n-gram rows a day (~0.7 TB read twice, ~$9, tens of minutes).
 
 What n-grams are good for: the region map. Per site, each 4-gram's share of calls says which words are static and
 which are per-call anywhere in the prompt. That beats the token-position map, which shows the whole tail as dynamic
@@ -139,7 +139,7 @@ work; ML.BAG_OF_WORDS works as a window function; CREATE TEMP MODEL k-means and 
 available; AI.GENERATE needs the Vertex AI API and roles in the enterprise project and sends prompts outside the
 gateway; AI.GENERATE_EMBEDDING needs a CREATE MODEL in a dataset.
 
-### Checks for the production session (paste as is; it reports counts only, no prompt text)
+### Checks for the other session (paste as is; it reports counts only, no prompt text)
 
 ```
 Before we wire bq_fingerprint into the loop, run these checks on the temp tables of your last
@@ -186,5 +186,5 @@ to the store yet.
 
 Reading the answer: check 2 nonzero means templates were split and the saved sites are wrong (the sandbox failure);
 check 3 with many sites under 20 says the same from the other side; check 5 with few repeats means the store fills
-with duplicate sites day after day; all clean means production's usecases have no changing value in their first 300
+with duplicate sites day after day; all clean means those usecases have no changing value in their first 300
 characters today, the hole is still there but not biting, and the region map part is safe either way.
