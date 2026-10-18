@@ -104,3 +104,87 @@ as a full pass; it should abstain); in dev without a gateway every target model 
 2. Prices: 89% of rows have no logged cost; catalog or gateway `/model/info` (needs your OK).
 3. Closed loop (router, cache marks at the gateway): after B7 produces recommendations, not before.
 4. Executive page: B7's findings per usecase are its rows. Build it once B7 exists.
+
+## E. The production-side n-gram fingerprint (2026-10-18): what we found and what to check there
+
+The production session wrote `core/ledger/bq_fingerprint.py` (not in this repo): bucket = tool set + first 300 masked
+characters (the `key` column), ML.NGRAMS 4-grams of `norm`, a phrase = a 4-gram found in exactly one bucket of the
+usecase and in at least half of that bucket's calls, top 5 by share (at least 3), buckets of 10+ calls only, placed
+through `hits()`/`place()` as round -1 before the loop; `prefix_map()` = per token position, share of calls holding
+the same word.
+
+The same SQL, transcribed, run here on the two tables whose true call-site is known (no model calls):
+
+| Table | Exact | Failures | Unplaced |
+|---|---|---|---|
+| hard bench, 16 usecases | 13 usecases exact | twins merged (purity 51%); the 3 usecases with a date first became 7 false sites each ("today is monday", "today is tuesday", ...) | 76 calls in the date usecases |
+| synthetic log, 3 days, 14 usecases | 13 usecases exact | plan-advisor became 5 false sites ("customer tom becker", "customer james kim", "current plan global traveler") | 1,184 of 1,943 plan-advisor calls |
+
+The loop on the same tables: everything exact except the twins, 0 unplaced.
+
+Why: the statistic is sound; two design choices are not. (1) The bucket is taken as the call-site, so a changing value
+in the first 300 characters (name, weekday, plan, language) splits one template into many buckets. (2) "In exactly one
+bucket" then discards every real template phrase, because the template text is in all the pieces, and keeps the value.
+The false sites are saved as real and the loop never sees those calls again. Also: top phrases are masked numbers
+("# # # #", "# # # and"); sites have no name or profile, so the model call per site stays; site ids hash the day's
+phrases, which come from the day's statistics, so the same template gets a new id on another day; about 1,200 4-grams
+per call, so prod is roughly 9 billion n-gram rows a day (~0.7 TB read twice, ~$9, tens of minutes).
+
+What n-grams are good for: the region map. Per site, each 4-gram's share of calls says which words are static and
+which are per-call anywhere in the prompt. That beats the token-position map, which shows the whole tail as dynamic
+after the first inserted value of varying length. Cheap on a sample of 50 calls per site, no model.
+
+Inside a session on a read-only project (checked on the sandbox 2026-10-18): ML.NGRAMS, TEXT_ANALYZE, COSINE_DISTANCE
+work; ML.BAG_OF_WORDS works as a window function; CREATE TEMP MODEL k-means and ML.PREDICT work; ML.TF_IDF is not
+available; AI.GENERATE needs the Vertex AI API and roles in the enterprise project and sends prompts outside the
+gateway; AI.GENERATE_EMBEDDING needs a CREATE MODEL in a dataset.
+
+### Checks for the production session (paste as is; it reports counts only, no prompt text)
+
+```
+Before we wire bq_fingerprint into the loop, run these checks on the temp tables of your last
+run and report numbers only (no prompt text, no phrases from customer data). Do not save sites
+to the store yet.
+
+1. Per usecase: chat calls, buckets with >= 10 calls (_fp_buckets), sites the pipeline produced
+   (_fp_sites), calls placed in round -1, calls left unplaced.
+
+2. Split templates: pairs of buckets that share >= 80% of their frequent 4-grams. Each such
+   pair is one template counted as two sites.
+
+   WITH f AS (
+     SELECT r.usecase, r.bucket, r.ng
+     FROM _fp_ngrams r JOIN _fp_buckets b ON b.usecase = r.usecase AND b.bucket = r.bucket
+     GROUP BY r.usecase, r.bucket, r.ng, b.bsz
+     HAVING COUNT(DISTINCT r.id) >= 0.5 * b.bsz),
+   sz AS (SELECT usecase, bucket, COUNT(*) AS n FROM f GROUP BY 1, 2),
+   pairs AS (
+     SELECT a.usecase, a.bucket AS b1, b.bucket AS b2, COUNT(*) AS shared, sa.n AS n1, sb.n AS n2
+     FROM f a JOIN f b ON a.usecase = b.usecase AND a.ng = b.ng AND a.bucket < b.bucket
+     JOIN sz sa ON sa.usecase = a.usecase AND sa.bucket = a.bucket
+     JOIN sz sb ON sb.usecase = b.usecase AND sb.bucket = b.bucket
+     GROUP BY 1, 2, 3, 5, 6)
+   SELECT p.usecase, (SELECT COUNT(*) FROM sz s WHERE s.usecase = p.usecase) AS buckets,
+          COUNTIF(shared >= 0.8 * LEAST(n1, n2)) AS pairs_sharing_80pct
+   FROM pairs p GROUP BY 1 ORDER BY 3 DESC
+
+3. Thin sites: per site, how many 4-grams passed the "exactly one bucket and >= 50%" filter
+   (COUNT(*) per usecase, bucket in _fp_candidates). Report the distribution: sites with < 20,
+   20 to 100, > 100. A real template has hundreds; a template split by a value in its opening
+   has a handful, and those are the value itself.
+
+4. Number-only phrases: how many sites have 2 or more of their top-5 phrases made of '#'
+   tokens with at most one real word (like "# # # #" or "# # # and").
+
+5. Stability: run the pipeline on a second day and report how many site ids from day 1 appear
+   again on day 2, and how many are new. Site ids hash the phrases, so a changed phrase set
+   means a new site for the same template.
+
+6. For the two chosen usecases only, your own judgement without quoting text: of the sites
+   found, how many look like the same template to you (same instructions, different values)?
+```
+
+Reading the answer: check 2 nonzero means templates were split and the saved sites are wrong (the sandbox failure);
+check 3 with many sites under 20 says the same from the other side; check 5 with few repeats means the store fills
+with duplicate sites day after day; all clean means production's usecases have no changing value in their first 300
+characters today, the hole is still there but not biting, and the region map part is safe either way.
