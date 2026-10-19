@@ -190,15 +190,71 @@ def _record(c, site, day, placed, version_of=None, mixed_=(False, "")):
             "static_chars": lay[0] if lay else None, "dynamic_chars": lay[1] if lay else None, "static_after": lay[2] if lay else None}
 
 
-def run(b, day, known_of, candidate=_candidate, homogeneity=mixed):
+def describe(b, pre, known_of, day):
+    """The pre-pass's call-sites (placed as round -1, saved nameless) get what the loop gives its own: one model call
+    on three of their calls -> name, profile, regions, cache note; "not one template" is stored as mixed. The
+    statistics grouped them and their phrases stay the fingerprint; the reader describes them and flags a merge. A
+    failed call leaves the site nameless."""
+    if not pre:
+        return {}
+    heads_of = {site: b.site_heads(rec["usecase"], site, -1, []) for site, rec in pre.items()}   # one session query at a time
+
+    def one(site):
+        try:
+            return ask(heads_of[site], known_of(pre[site]["usecase"]))
+        except Exception as e:
+            tasks.note("%s: describing %s failed: %s: %s" % (day, site, type(e).__name__, str(e)[:120]))
+            return None
+    jobs = [site for site in pre if len(heads_of[site]) == build.HEADS]
+    with ThreadPoolExecutor(WORKERS) as ex:
+        answers = dict(zip(jobs, ex.map(one, jobs)))
+    # the model's same_as: this site is another one's template (a repeated head differing by a per-call value, say):
+    # its calls move there and it becomes a version of it; chains resolve to the site that stays
+    into = {}
+    for site, a in answers.items():
+        same = str(a.get("same_as") or "")
+        if a and same and same != site and (same in pre or same in {s["site"] for s in known_of(pre[site]["usecase"])}):
+            into[site] = same
+    for site in list(into):
+        seen, t = {site}, into[site]
+        while t in into and t not in seen:
+            seen.add(t)
+            t = into[t]
+        if t in seen or t == site:
+            into.pop(site)
+        else:
+            into[site] = t
+    out = {}
+    for site, rec in pre.items():
+        a = answers.get(site)
+        if not a:
+            out[site] = rec
+            continue
+        c = {"usecase": rec["usecase"], "phrases": rec["phrases"], "need": rec["need"], "heads": heads_of[site], "answer": a}
+        mixed_ = (a.get("same_template") is False, str(a.get("same_as_why") or a.get("does") or "")[:200])
+        if site in into:
+            target = into[site]
+            placed = b.move(site, target)
+            store.drop_sites([site])
+            full = _record(c, target, day, placed, version_of=target, mixed_=mixed_)
+        else:
+            full = _record(c, site, day, rec["placed"], mixed_=mixed_)
+        full["profile"]["model"] = "bq_minhash+" + model()
+        out[full["site"]] = full
+        store.save_site(full)
+    tasks.note("%s: pre-pass call-sites described: %d of %d, %d merged by the model" % (day, sum(1 for r in out.values() if r["profile"]["name"]), len(pre), len(into)))
+    return out
+
+
+def run(b, day, known_of, candidate=_candidate, homogeneity=mixed, prepass=bq_minhash.run):
     """The loop over the day's unplaced calls in session `b` (a build.Build after READ). known_of(usecase) -> the
     usecase's call-sites [{site, name, phrases, calls}]. -> {site: record} of the call-sites made or given a version
-    this day (their calls are placed in the session). `candidate` is the model step (swapped in tests)."""
+    this day (their calls are placed in the session). `candidate` is the model step and `prepass` the statistics
+    step (both swapped in tests)."""
     chat = b.chat_counts()
     live = {uc for uc, n in chat.items() if n >= MIN_CALLS}
     stale, out, known = {}, {}, {}
-    if bq_minhash.on():                                      # GROUPING_PREPASS: statistics first, saved as known call-sites
-        out.update(bq_minhash.run(b, live, day))
+    out.update(describe(b, prepass(b, live, day), known_of, day))      # statistics first, then named by the model
     for rnd in range(1, MAX_ROUNDS + 1):
         if not live:
             break

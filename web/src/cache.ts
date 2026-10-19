@@ -17,6 +17,7 @@ export type Ttl = {
   default_ttl: number; best_ttl: number; saving: number; calls: number; beyond_default: number; loss: number
   histogram: Record<string, number>
 }
+export type Grams = { n: number; chars: number; words: string; shares: string } | null
 export type Trend = { recent: number; before: number; delta: number } | null
 export type Profile = { name: string; does: string; task: string; output: string; fixed: string; per_call: string } | null
 export type Story = { now: string; why: string; action: string; worth: number; share: number; proof: Proof; cause: Cause | null }
@@ -25,7 +26,7 @@ export type Site = {
   site: string; anchors: string[]; unsure: boolean; versions: { version: string; first: string; last: string; days: number }[]
   layout: { static_chars: number; dynamic_chars: number; static_after_dynamic: number; tool_sets: number }
   models: Record<string, SiteModel>; days: Record<string, Totals>; total: Totals; saving: number
-  profile: Profile; story: Story; trend: Trend
+  profile: Profile; story: Story; trend: Trend; grams: Grams
 }
 export type Overview = {
   built_at: string | null; window: number; daily: Record<string, Totals>; total: Totals; saving: number; trend: Trend

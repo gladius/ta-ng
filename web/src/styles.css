@@ -408,3 +408,21 @@ tr.dim { opacity: 0.45; }
 .trust.mostly { border-color: var(--gold); }
 .trust.not-yet { border-color: var(--red); }
 .trust.not-yet b { color: var(--red); }
+
+/* The prompt map: one square per word 4-gram of a sample prompt, in order; grey = in (nearly) every call, red = varies.
+   Squares before the model's cache minimum are faded: nothing there can be cached on its own. */
+.pmap-wrap { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.pmap { display: grid; grid-template-columns: repeat(auto-fill, 13px); gap: 3px; }
+.pmap i { width: 13px; height: 13px; border-radius: 3px; background: var(--acceptable); }
+.pmap i.varied { background: var(--red); }
+.pmap i.under { opacity: 0.45; }
+.pmap i.edge { outline: 2px solid var(--gold); outline-offset: 1px; }
+.pmap-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; font-size: 12px; color: var(--ink-2); }
+.pmap-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
+.pmap-facts b { font-weight: 600; }
+.pmap-facts .warn { color: var(--red); }
+.legend.pmap-legend { padding: 0; border: 0; }
+.pmap-legend i { background: var(--acceptable); }
+.pmap-legend i.varied { background: var(--red); }
+.pmap-legend i.under { opacity: 0.45; }
+.legend i.edge { width: 10px; height: 10px; background: transparent; outline: 2px solid var(--gold); outline-offset: 1px; }

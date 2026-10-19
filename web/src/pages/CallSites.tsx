@@ -2,7 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { get } from '../api'
-import { CAUSE, usecaseName, type Cause, type Proof } from '../cache'
+import { CAUSE, usecaseName, type Cause, type Grams, type Proof } from '../cache'
+import { PromptMap } from '../PromptMap'
 import { count, Failed, Kpi, Loading, money, Page, pct, when } from '../ui'
 import { VerdictChip, type Verdict } from './ModelAudits'
 
@@ -11,7 +12,7 @@ type CacheDecision = { cause: Cause | null; action: string; worth: number; proof
 type Site = {
   site: string; usecase: string | null; name: string; signature: string[]; markers: string[]; calls: number; first_day: string; last_day: string
   versions: { version: string; first: string; last: string }[]; static_chars: number; dynamic_chars: number; static_after: number
-  tool_sets: number; unsure: boolean; window_days: number; updated_at: string | null; profile: Profile
+  tool_sets: number; unsure: boolean; window_days: number; updated_at: string | null; profile: Profile; grams: Grams
 }
 type Pick = { model: string; cost_vs_original_pct?: number; latency_vs_original_pct?: number; audit: string } | null
 type Models = { candidates: Record<string, Verdict & { audit: string; at: string; trigger: string; valid?: boolean }>; cheapest?: Pick; fastest?: Pick } | null
@@ -20,7 +21,7 @@ type UsecaseRow = { usecase: string | null; calls: number; first_day: string; la
 type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; skipped: string[]; usecases: UsecaseRow[] }
 type Coverage = { calls: number; other_format: number; no_usage: number; unpriced: number; repeated: number; placed: number; unplaced: number }
 type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean; days: Days; coverage: Coverage }
-type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null } }
+type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null }; cache_mins: Record<string, number> }
 
 const ucPath = (u: string | null) => `/usecases/${encodeURIComponent(u ?? 'None')}`
 const sitePath = (u: string | null, site: string) => `${ucPath(u)}/callsites/${site}`
@@ -181,7 +182,7 @@ export function CallSite() {
             </>
           )}
           <h3>Layout</h3>
-          <LayoutBar s={s} />
+          {s.grams ? <PromptMap grams={s.grams} mins={s.cache_mins} /> : <LayoutBar s={s} />}
         </div>
         <div className="pad">
           <h2>Profile: what it is</h2>

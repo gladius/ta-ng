@@ -69,7 +69,7 @@ def process_day(day, redo=False):
             tasks.note("%s: %d call-sites made or given a version; totals" % (day, len(made)))
             b.finish(day)
         tasks.note("%s: writing the day" % day)
-        day_sites, ledger, gaps, layout, pool = b.day_sites(), b.ledger(), b.gaps(), b.layout(), b.pool()
+        day_sites, ledger, gaps, layout, pool, grams = b.day_sites(), b.ledger(), b.gaps(), b.layout(), b.pool(), b.grams()
         leftover, n_left = b.leftover()
         coverage = b.coverage()
     finally:
@@ -81,6 +81,8 @@ def process_day(day, redo=False):
         rec = recs[d["site"]]
         for v in rec["versions"]:
             v["last"] = max(v.get("last") or day, day) if v.get("first", day) <= day else v.get("last")
+        if d["site"] in grams:
+            rec["grams"] = grams[d["site"]]
         if d["site"] in layout:
             lay = layout[d["site"]]
             rec["tool_sets"] = lay["tool_sets"]

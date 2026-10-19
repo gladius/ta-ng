@@ -75,6 +75,9 @@ def one(site: str):
     s = store.get(site)
     if not s:
         raise HTTPException(404, "unknown call-site")
+    from modules.cache import rules
     from modules.models import audits
+    models = sorted(store.series([site]).get(site, {}), key=lambda m: -sum(d.get("calls") or 0 for d in store.series([site])[site][m].values()))
     return {**_with_profile(s), "decisions": {"cache": _cache_decision(site), "models": audits.knowledge(site, s),
-                                              "router": s["choice"]}}
+                                              "router": s["choice"]},
+            "cache_mins": {m: rules.for_model(m)[2] for m in models}}       # smallest cacheable prefix per model, busiest first

@@ -120,7 +120,7 @@ def test_the_loop_makes_one_call_site_per_template_and_leaves_the_rare_rest():
     _clean()
     day = Day(_calls(A, 200, tag="a") + _calls(B, 50, tools="classify", tag="b") + _calls(C, 30, tag="c") + _calls(B, 3, usecase="other", tag="o"))
     asked = []
-    made = loop.run(day, "2026-10-10", store.brief, candidate=fake_model, homogeneity=lambda heads: (asked.append(heads), (False, ""))[1])
+    made = loop.run(day, "2026-10-10", store.brief, prepass=lambda *a: {}, candidate=fake_model, homogeneity=lambda heads: (asked.append(heads), (False, ""))[1])
     assert len(made) == 3 and sorted(r["placed"] for r in made.values()) == [30, 50, 200]
     assert len(asked) == 3 and all(len(h) == 3 for h in asked)         # every new call-site checked on three other calls
     assert len(day.placed) == 280                                   # "other": 3 calls, under MIN_CALLS, never seeded
@@ -136,13 +136,13 @@ def test_the_loop_makes_one_call_site_per_template_and_leaves_the_rare_rest():
 def test_a_changed_template_becomes_a_version_of_the_known_call_site():
     _clean()
     day1 = Day(_calls(A, 100))
-    made = loop.run(day1, "2026-10-10", store.brief, candidate=fake_model, homogeneity=lambda heads: (True, "two different prompts"))
+    made = loop.run(day1, "2026-10-10", store.brief, prepass=lambda *a: {}, candidate=fake_model, homogeneity=lambda heads: (True, "two different prompts"))
     (site, rec), = made.items()
     assert rec["mixed"] and store.get(site)["versions"][0]["mixed_why"] == "two different prompts"   # a no is shown, never silent
     known = store.fingerprints()
     day2 = Day(_calls(A, 60) + _calls(A2, 40, tag="v2"), known)   # the old calls placed by the known fingerprint
     assert len(day2.placed) == 60
-    made2 = loop.run(day2, "2026-10-11", store.brief, candidate=fake_model, homogeneity=lambda heads: (False, ""))
+    made2 = loop.run(day2, "2026-10-11", store.brief, prepass=lambda *a: {}, candidate=fake_model, homogeneity=lambda heads: (False, ""))
     assert len(day2.placed) == 100
     assert list(made2) == [site] and made2[site]["version_of"] == site          # the same call-site, a new version
     s = store.get(site)

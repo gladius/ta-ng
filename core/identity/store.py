@@ -56,6 +56,7 @@ callsites = Table(
     Column("dynamic_chars", Integer),
     Column("static_after", Integer),                           # fixed characters after the first per-call text
     Column("tool_sets", Integer),
+    Column("grams", Text),                                     # JSON {n, chars, words, shares}: the prompt map (one digit per 4-gram)
     Column("unsure", Boolean, nullable=False),
     Column("window_days", Integer, nullable=False),
     Column("seen_at", DateTime, nullable=False),
@@ -265,7 +266,8 @@ def save_identity(rec, window):
     eng = db.ready()
     vals = {"usecase": rec["usecase"] or "", "calls": int(rec["calls"]), "first_day": rec["first_day"], "last_day": rec["last_day"],
             "versions": json.dumps(rec["versions"]), "unsure": int(rec["calls"]) < UNSURE_BELOW, "window_days": window, "seen_at": _now(),
-            **{k: rec[k] for k in ("static_chars", "dynamic_chars", "static_after", "tool_sets") if rec.get(k) is not None}}
+            **{k: rec[k] for k in ("static_chars", "dynamic_chars", "static_after", "tool_sets") if rec.get(k) is not None},
+            **({"grams": json.dumps(rec["grams"])} if rec.get("grams") else {})}
     with eng.begin() as c:
         if c.execute(update(callsites).where(callsites.c.site == rec["site"]).values(**vals)).rowcount == 0:
             c.execute(callsites.insert().values(site=rec["site"], template="[]", markers=json.dumps(rec.get("markers") or []),
@@ -314,6 +316,7 @@ def _row(r):
     d["versions"] = json.loads(d["versions"] or "[]")
     d["cache"] = json.loads(d["cache_findings"]) if d["cache_findings"] else None
     d["choice"] = json.loads(d["choice"]) if d["choice"] else None
+    d["grams"] = json.loads(d["grams"]) if d.get("grams") else None
     d.pop("cache_findings")
     for k in ("seen_at", "profiled_at"):
         d[k] = _iso(d[k])

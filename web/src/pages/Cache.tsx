@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { get, post } from '../api'
+import { PromptMap } from '../PromptMap'
 import {
   CAUSE, reuse, saved, siteName, ttlName, usecaseName, type Cause, type Overview, type Proof, type Site, type SitePage,
   type Totals, type Trend, type Ttl, type UsecasePage,
@@ -308,7 +309,8 @@ export function CacheSite() {
         <Kpi label="Still possible" value={usd(s.story.worth)} note={`over ${s.window} days`} best={s.story.worth > 0 ? 'opportunity' : undefined} />
       </div>
       <section className="panel story">
-        <div className="pad"><h2>What happens now</h2><p>{s.story.now} {s.story.why}</p><PrefixBar s={s} /></div>
+        <div className="pad"><h2>What happens now</h2><p>{s.story.now} {s.story.why}</p><PrefixBar s={s} />
+          {s.grams && <PromptMap grams={s.grams} mins={Object.fromEntries(Object.entries(s.models).sort((a, b) => b[1].calls - a[1].calls).map(([m, v]) => [m, v.diagnosis?.evidence.cache_min ?? 1024]))} />}</div>
         <div className="pad"><h2>What to do</h2><div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} /></div><p><b>{s.story.action}</b>{s.story.worth > 0 && <> Worth about <b>{usd(s.story.worth)}</b> over {s.window} days at today's traffic.</>}</p>
           {s.story.proof === 'proof' && <p className="muted">A prompt change can change answers. Before anyone applies it, the changed prompt is run on the same model against the original and judged; the result shows here.</p>}
         </div>

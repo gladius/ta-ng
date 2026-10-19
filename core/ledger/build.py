@@ -27,6 +27,7 @@ POOL = 5                 # request ids kept per day-site and model for model aud
 LEFTOVER = 500           # unplaced calls returned per usecase and day
 BUCKETS = [("1m", 60), ("5m", 300), ("15m", 900), ("1h", 3600), ("6h", 21600), ("24h", 86400)]
 HEAD_CAP = 8000          # characters kept of a first message that is not a system prompt
+MAP_SAMPLE = 100         # calls per day-site the prompt map's shares are counted over
 
 # a message's text: a string content, or the text parts of a list content
 _TEXT = """COALESCE(JSON_VALUE(m, '$.content'),
@@ -175,6 +176,7 @@ SELECT id, site, @round FROM (
 WHERE rn = 1
 """
 _SITE_COUNTS = "SELECT site, COUNT(DISTINCT id) AS n FROM placed WHERE site IN UNNEST(@sites) GROUP BY 1"
+_MOVE = "UPDATE placed SET site = @to WHERE site = @frm"
 _SITE_HEADS = """
 SELECT s.sys, s.model FROM src s JOIN placed p ON p.id = s.id
 WHERE s.usecase = @usecase AND p.site = @site AND p.round = @round AND s.chat AND s.id NOT IN UNNEST(@not)
@@ -232,6 +234,21 @@ SELECT c.site, c.usecase, c.id, c.model, s.sys, s.first_user, s.tool_names,
 FROM call_rows c JOIN src s USING (id) WHERE s.chat
 QUALIFY ROW_NUMBER() OVER (PARTITION BY c.site ORDER BY FARM_FINGERPRINT(c.id)) <= 3
      OR ROW_NUMBER() OVER (PARTITION BY c.site, c.model ORDER BY FARM_FINGERPRINT(c.id)) = 1;
+-- 7b. the prompt map (after site_calls: its rn = 1 call is the sample head): the sample head's word 4-grams in order, each with the share of MAP_SAMPLE calls holding it
+--     (one digit per gram, 0-9), the head's masked words and length: the static / per-call squares the pages draw
+CREATE OR REPLACE TEMP TABLE site_grams AS
+WITH head AS (SELECT sc.site, s.norm, LENGTH(s.sys) AS chars FROM site_calls sc JOIN src s USING (id) WHERE sc.rn = 1),
+grams AS (SELECT h.site, i, g FROM head h, UNNEST(ML.NGRAMS(REGEXP_EXTRACT_ALL(h.norm, r'[a-z#]+'), [4, 4])) g WITH OFFSET i),
+sample AS (SELECT c.site, c.id, s.norm FROM call_rows c JOIN src s USING (id) WHERE s.chat
+           QUALIFY ROW_NUMBER() OVER (PARTITION BY c.site ORDER BY FARM_FINGERPRINT(CONCAT(c.id, 'map'))) <= {map_sample}),
+n AS (SELECT site, COUNT(*) AS n FROM sample GROUP BY 1),
+cnt AS (SELECT site, g, COUNT(DISTINCT id) AS k FROM sample, UNNEST(ML.NGRAMS(REGEXP_EXTRACT_ALL(norm, r'[a-z#]+'), [4, 4])) g GROUP BY 1, 2),
+shares AS (SELECT g.site, g.i, LEAST(9, CAST(FLOOR(10 * COALESCE(c.k, 0) / n.n) AS INT64)) AS d
+           FROM grams g JOIN n USING (site) LEFT JOIN cnt c ON c.site = g.site AND c.g = g.g),
+agg AS (SELECT site, STRING_AGG(CAST(d AS STRING), '' ORDER BY i) AS shares FROM shares GROUP BY 1)
+SELECT h.site, n.n, h.chars, ARRAY_TO_STRING(REGEXP_EXTRACT_ALL(h.norm, r'[a-z#]+'), ' ') AS words, a.shares
+FROM head h JOIN n USING (site) JOIN agg a USING (site);
+
 CREATE OR REPLACE TEMP TABLE pool AS
 SELECT site, model, day, id, prompt_tokens, completion_tokens, duration_ms FROM call_rows
 WHERE cost IS NOT NULL AND completion_tokens > 0
@@ -255,6 +272,7 @@ _DAYSITES = "SELECT * FROM day_sites"
 _LEDGER = "SELECT * FROM ledger_daily"
 _GAPS = "SELECT * FROM cache_gaps"
 _LAYOUT = "SELECT * FROM site_layout"
+_GRAMS = "SELECT * FROM site_grams"
 _POOL = "SELECT * FROM pool"
 _LEFTOVER = "SELECT * FROM leftover"
 _LEFTOVER_COUNT = "SELECT n FROM leftover_count"
@@ -277,7 +295,7 @@ def _names():
     model_col = credentials.get_config("BQ_MODEL_COLUMN")
     return {**c, "system": _SYSTEM.format(text=_TEXT, head_cap=HEAD_CAP, **c), "words_sys": _WORDS.format(text="sys"),
             "served": "CAST(`%s` AS STRING)" % model_col if model_col else "CAST(NULL AS STRING)", "skip": bq.SKIP_FILTER.format(col=c["usecase"]),
-            "place": _PLACE, "prefix": PREFIX, "seeds": SEEDS, "heads": HEADS, "pairs": PAIRS, "pool": POOL, "leftover": LEFTOVER,
+            "place": _PLACE, "prefix": PREFIX, "seeds": SEEDS, "heads": HEADS, "pairs": PAIRS, "pool": POOL, "leftover": LEFTOVER, "map_sample": MAP_SAMPLE,
             "cases": " ".join("WHEN gap <= %d THEN '%s'" % (secs, name) for name, secs in BUCKETS)}
 
 
@@ -301,7 +319,7 @@ def _request(row):
 
 _STEPS = (("src", "reading the day's calls"), ("cov0", "reading the day's calls"), ("calls", "reading the day's calls"),
           ("fp", "placing calls by the known fingerprints"), ("placed", "placing calls by the known fingerprints"),
-          ("call_rows", "collecting the placed calls"), ("pairs", "cache prefix"), ("lcp", "cache prefix"), ("site_layout", "prompt layout"),
+          ("call_rows", "collecting the placed calls"), ("pairs", "cache prefix"), ("lcp", "cache prefix"), ("site_layout", "prompt layout"), ("site_grams", "prompt map"),
           ("prices", "totals"), ("ledger_daily", "totals"), ("cache_gaps", "cache gaps"), ("day_sites", "collecting the results"),
           ("site_calls", "collecting the results"), ("pool", "audit samples"), ("coverage", "coverage"), ("leftover", "unplaced calls"))
 
@@ -367,6 +385,11 @@ class Build:
         self.s.query(_PLACE_ROUND, {"accepted": [{"cand": c, "site": s} for c, s in accepted.items()], "round": rnd})
         return {r["site"]: r["n"] for r in self._read(_SITE_COUNTS, {"sites": sorted(set(accepted.values()))})}
 
+    def move(self, frm, to):
+        """The calls placed in `frm` go to `to` (the reader found one template); -> calls now in `to`."""
+        self.s.query(_MOVE, {"frm": frm, "to": to})
+        return {r["site"]: r["n"] for r in self._read(_SITE_COUNTS, {"sites": [to]})}.get(to, 0)
+
     def site_heads(self, usecase, site, rnd, not_ids):
         """HEADS calls placed in `site` this round, the seeds left out (text), for the homogeneity check."""
         return self._read(_SITE_HEADS.format(heads=HEADS), {"usecase": usecase, "site": site, "round": rnd, "not": list(not_ids) or [""]})
@@ -383,6 +406,10 @@ class Build:
 
     def layout(self):
         return {r["site"]: r for r in self._read(_LAYOUT)}
+
+    def grams(self):
+        """{site: {n, chars, words, shares}}: the prompt map per day-site."""
+        return {r["site"]: {"n": r["n"], "chars": r["chars"], "words": r["words"], "shares": r["shares"]} for r in self._read(_GRAMS)}
 
     def pool(self):
         return self._read(_POOL)

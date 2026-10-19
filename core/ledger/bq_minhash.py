@@ -1,5 +1,5 @@
-"""The BigQuery pre-pass (GROUPING_PREPASS=1): call-sites found by statistics alone, no model call, placed as round -1
-before the loop seeds. Written by the production-side session, scored on the bench and the synthetic log (FLOW.md E).
+"""The BigQuery pre-pass: call-sites found by statistics alone, placed as round -1 before the loop seeds; the loop then
+describes each with one model call (loop.describe). Written by the other session, scored on the bench (FLOW.md E).
 
 Both phases read only the calls no known fingerprint placed, in the session's `src` (build.READ ran) and `placed`:
   Phase 1, direct: a masked head repeated MIN_CALLS times or more is a call-site; its phrases are the most
@@ -9,8 +9,8 @@ Both phases read only the calls no known fingerprint placed, in the session's `s
     split by its first 10 words; a cluster of 3+ heads whose first 80 characters agree is a call-site; its phrases
     are the 4-grams in 70% of its heads.
 Every candidate is then proved the loop's way: counted over the usecase's calls (build.hits), accepted only with
-MIN_CALLS free calls and no call already placed elsewhere, placed (build.place), saved (store.save_site) without a
-name: the profile's model is "bq_minhash" so the pages can tell. The loop then treats these as known call-sites.
+MIN_CALLS free calls and no call already placed elsewhere, placed (build.place), saved (store.save_site) nameless
+(profile model "bq_minhash"); loop.describe then names them. The loop treats them as known call-sites.
 Known failure modes (bench): twin templates sharing their opening merge; a changing value in the first 80 characters
 (a date first) yields no site, so those calls fall through to the loop."""
 import re
@@ -80,30 +80,42 @@ FROM c4 WHERE nm >= 0.7 * ssz GROUP BY 1, 2 HAVING COUNT(*) >= {MIN_PHRASES};
 _PHASE2_READ = "SELECT usecase, phrases, sz FROM _mh_ph ORDER BY usecase, sz DESC"
 
 
-def on():
-    import credentials
-    return (credentials.get_config("GROUPING_PREPASS") or "").strip().lower() in ("1", "true", "yes", "on")
-
-
 def need(phrases):
     return len(phrases) - 1 if len(phrases) >= 4 else len(phrases)
 
 
 def phrases(norm, k=TOP_PHRASES):
-    """The k most word-rich 4-grams of one masked head (phase 1); a gram needs 3 real words (not '#')."""
+    """k word-rich 4-grams of one masked head (phase 1), spread over its length: a per-call value near the start
+    then touches one phrase of five, and the other repeated heads of the template still match `need` of them."""
     words = re.findall(r"[a-z#]+", norm)
     grams = [" ".join(words[i:i + 4]) for i in range(max(0, len(words) - 3))]
     rich = [g for g in grams if sum(1 for w in g.split() if w != "#") >= 3]
-    return sorted(rich, key=lambda g: -sum(1 for w in g.split() if w != "#"))[:k]
+    if len(rich) <= k:
+        return rich
+    picks = []
+    for j in range(k):
+        g = rich[int((j + 0.5) * len(rich) / k)]
+        if g not in picks:
+            picks.append(g)
+    return picks
 
 
 def sample_pct(calls):
     return max(1, min(5, int(SAMPLE_CALLS / max(1, calls) * 100)))
 
 
-def pick(cands, counts):
-    """The candidates proved by count: MIN_CALLS free calls, no call already placed in another call-site."""
-    return [c for c in cands if counts.get(c["cand"], {}).get("free", 0) >= MIN_CALLS and not counts.get(c["cand"], {}).get("collisions")]
+OVERLAP = 0.5            # two candidates sharing this share of the smaller one's calls are one template (as the loop)
+
+
+def pick(cands, counts, overlaps=()):
+    """The candidates proved by count: MIN_CALLS free calls, no call already placed in another call-site, and of two
+    candidates matching mostly the same calls (one template with several repeated heads) only the bigger."""
+    free = {k: v.get("free", 0) for k, v in counts.items()}
+    drop = set()
+    for a, b, n in overlaps:
+        if n >= OVERLAP * min(free.get(a, 0), free.get(b, 0)):
+            drop.add(a if free.get(a, 0) < free.get(b, 0) else b)
+    return [c for c in cands if c["cand"] not in drop and free.get(c["cand"], 0) >= MIN_CALLS and not counts.get(c["cand"], {}).get("collisions")]
 
 
 def record(c, day, placed):
@@ -140,8 +152,8 @@ def run(b, live, day):
         tasks.note("%s: pre-pass found nothing" % day)
         return {}
     tasks.note("%s: pre-pass, %d candidates (%d repeated heads, %d clusters), counting" % (day, len(cands), n1, len(cands) - n1))
-    counts, _ = b.hits(cands)
-    accepted = pick(cands, counts)
+    counts, overlaps = b.hits(cands)
+    accepted = pick(cands, counts, overlaps)
     placed = b.place({c["cand"]: c["cand"] for c in accepted}, -1)
     out = {}
     for c in accepted:

@@ -6,37 +6,11 @@ Prod numbers: 15.6M rows a day, about 200 usecases, 51% not chat, 2.2 TB billed 
 "Day one" = the first run, nothing known yet. "Steady state" = every run after that, when most calls are placed by
 fingerprints already known and only new shapes need work.
 
-## A. What runs today
+## A. What ran before (replaced 2026-10-17)
 
-### A1. BigQuery, one session, `core/ledger/build.py`
-
-| # | Temp table | What it does | Reads | Verdict |
-|---|---|---|---|---|
-| 1 | `src0` | The one read of the day: numbers, model, usage, cost, tool names, system text, masked text `norm` | **2.2 TB, ~$14, ~10 min**. Unavoidable | keep |
-| 2 | `cov0` | Per usecase: calls, other format, no usage, unpriced, repeated | src0 narrow columns | keep |
-| 3 | `dups`, `src` | Chat calls once; copies every wide column again | **a second wide pass over src0** (my mistake) | fix: unique keys in the single read |
-| 4 | `fp`, `placed` | Place by known fingerprints, substring match on `norm` | src.norm once | keep |
-| 5 | rounds ×3: `cw` … `tk`, `templates` | Learn new sites from word-window frequencies: windows, top-10 key, splitter (twins), 90% core, Jaccard merge, 5 marker phrases | sample ≤5000 per usecase, then re-scan src.norm per round | **drop** — counts words, cannot tell instruction from data; errors are silent |
-| 6 | `call_rows` | Placed calls without text | src | keep |
-| 7 | `pairs`, `lcp`, `lay_*`, `site_layout` | Prompt layout per site for the cache (fixed part, where per-call text starts) | 30 pairs per site, window scan on samples | keep, simplify (see B5) |
-| 8 | `ledger_daily` | Day-site × model: calls, tokens, cached, cost, cost without cache, latency | call_rows | keep |
-| 9 | `cache_gaps` | Time since the previous call with the same prefix, bucketed | call_rows | keep |
-| 10 | `day_sites`, `site_calls`, `site_sample`, `pool`, `leftover`, `coverage` | What Python downloads: sites, templates, markers, 3 sample calls per site, request ids, unplaced (≤500 per usecase) | src text for samples only | keep |
-
-### A2. Python after the session, `core/ledger/refresh.py`
-
-| # | Step | Verdict |
-|---|---|---|
-| 11 | `link`: match a day's group to a known call-site by template Jaccard ≥ 0.7 | drop with 5 |
-| 12 | `_version`: new version when ≥ 3 windows and ≥ 10% of the template change | drop with 5 |
-| 13 | `group_leftovers`, `_place_leftovers`: regroup unplaced calls across days | drop with 5 |
-| 14 | `distinct_markers`, ambiguous flag, self-healing markers | drop with 5 |
-| 15 | `merge` numbers into site_days, site_samples, usecase_days (coverage), processed_days, day_sessions | keep |
-| 16 | profile task per new site: Sonnet names it and describes it from one sample | keep, fold into B3 |
-| 17 | `quality_day` task: consistency, placement ≥ 90%, unpriced ≤ 5%, fingerprint, models, volume, 20 Sonnet spot checks | keep the arithmetic checks; drop the spot checks (B3 verifies as it goes) |
-
-### A3. Separate
-Model audits (re-run requests on other models, a judge compares): untouched. Cache page reads 8, 9 and the layout.
+Pure BigQuery word-window grouping (frequency windows, a splitter, Jaccard merges) plus Python linking, versioning and
+leftover regrouping. Dropped because it counted words and could not tell instruction from data, and its errors were
+silent. Its ledger, gaps, layout and coverage tables stayed.
 
 ## B. The proposed run
 
@@ -189,11 +163,25 @@ check 3 with many sites under 20 says the same from the other side; check 5 with
 with duplicate sites day after day; all clean means those usecases have no changing value in their first 300
 characters today, the hole is still there but not biting, and the region map part is safe either way.
 
-### 2026-10-19: the pre-pass is in, behind a switch
+### 2026-10-19: the pre-pass is in
 
-`core/ledger/bq_minhash.py` (the other session's MinHash plan, bound here with four changes: unplaced calls only,
-collisions rejected, parameters instead of string building, `GROUPING_PREPASS=1` default off) runs before the loop's
-rounds and saves nameless call-sites (profile model `bq_minhash`). Phase 2 phrases need 3 real words like phase 1.
+`core/ledger/bq_minhash.py` (the other session's MinHash plan, bound here with three changes: unplaced calls only,
+collisions rejected, parameters instead of string building) always runs before the loop's rounds; its call-sites are
+placed as round -1 and then described by one model call each (loop.describe: name, profile, regions, cache note,
+"one template?" -> mixed), the statistics' phrases staying the fingerprint. No switch: one flow, the model call per
+call-site is the same either way, and a merge is flagged, not silent. Phase 2 phrases need 3 real words like phase 1.
 Bench with the pre-pass on: every call-site exact except the twins (merged, as every method does), 0 unplaced above
-MIN_CALLS, the loop had nothing left to do, no model call. Next: the A/B on the two chosen usecases, same day, switch
-off then on (`redo`), comparing sites, placed counts and phrase quality.
+MIN_CALLS, the loop had nothing left to do.
+
+First full day on the synthetic log (14 usecases) found two things the bench had not: a template with a per-call
+value in its opening came out as 29 call-sites from its repeated heads (fixed: candidates matching mostly the same
+calls are one template, the bigger stays, as in the loop; phase 1 phrases are spread over the head so a value in
+the opening touches one of five), and the reader is the last guard: when the model describing a pre-pass site says
+it is a version of another (`same_as`), its calls move there and it becomes that site's version (build.move).
+
+The prompt map (site_grams in build.FINISH, `grams` on the call-site): the sample head's word 4-grams in order, each
+with the share of 100 calls holding it. The pages draw one square per gram, grey in every call, red varying, faded
+before the model's cache minimum (a picker when the site runs on several models), with the fixed opening in tokens
+against that minimum. Presence, not position, so a varying-length insertion does not paint the tail red.
+
+Next: one day on the two chosen usecases.

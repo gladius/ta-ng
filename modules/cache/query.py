@@ -51,7 +51,7 @@ def _site_block(rec, series):
             "layout": {"static_chars": static, "dynamic_chars": rec.get("dynamic_chars"),
                        "static_after_dynamic": (rec.get("static_after") or 0) / static if static else 0.0, "tool_sets": rec.get("tool_sets")},
             "models": cache.get("models", {}), "days": days, "total": total(list(days.values())), "saving": cache.get("saving", 0),
-            "profile": rec["profile"], "story": cache.get("story") or _EMPTY_STORY, "trend": trend(days),
+            "profile": rec["profile"], "story": cache.get("story") or _EMPTY_STORY, "trend": trend(days), "grams": rec.get("grams"),
             "built_at": cache.get("built_at"), "window": rec["window_days"]}
 
 
