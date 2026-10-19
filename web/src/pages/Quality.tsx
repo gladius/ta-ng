@@ -11,7 +11,8 @@ const LEVEL = { trustworthy: 'Trustworthy', mostly: 'Mostly trustworthy', 'not y
 
 const KIND: Record<string, string> = {
   consistency: 'Numbers add up', placement: 'Calls placed in a call-site', unpriced: 'Calls with a price',
-  fingerprint: 'Every call-site recognisable', models: 'Call-sites on several models', volume: 'Steady volume',
+  fingerprint: 'Every call-site recognisable', named: 'Every call-site named', mixed: 'One template per call-site',
+  same_name: 'No two call-sites alike', models: 'One model per call-site', volume: 'Steady volume',
 }
 const site = (i: Item) => i.site ? <Link to={`/usecases/${encodeURIComponent(i.usecase ?? 'None')}/callsites/${i.site}`}>{i.name ?? i.site}</Link> : null
 
@@ -22,6 +23,9 @@ function detail(i: Item): string {
     case 'unpriced': return `${Math.round(100 * (d.share as number))}% without a price (${d.unpriced})`
     case 'consistency': return `calls ${d.calls} ≠ placed ${d.placed} + not placed ${d.unplaced} + other format ${d.other_format} + twice ${d.repeated}`
     case 'fingerprint': return 'nothing to recognise it by'
+    case 'named': return 'no name'
+    case 'mixed': return d.why ? `more than one template: ${d.why}` : 'more than one template'
+    case 'same_name': return `“${d.name}” also names ${(d.others as string[]).length} other call-site${(d.others as string[]).length > 1 ? 's' : ''} here`
 
     case 'models': return Object.entries(d.calls as Record<string, number>).map(([m, n]) => `${m} ${n}`).join(' · ')
     case 'volume': return `${d.today} calls, ${d.previous_day} the day before`
