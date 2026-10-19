@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { get } from '../api'
-import { CAUSE, usecaseName, type Cause, type Grams, type Proof } from '../cache'
+import { CAUSE, usecaseName, type Cause, type Grams, type MapModel, type Proof } from '../cache'
 import { PromptMap } from '../PromptMap'
 import { count, Failed, Kpi, Loading, money, Page, pct, when } from '../ui'
 import { VerdictChip, type Verdict } from './ModelAudits'
@@ -21,7 +21,7 @@ type UsecaseRow = { usecase: string | null; calls: number; first_day: string; la
 type Usecases = { page: number; per_page: number; total: number; listed_at: string | null; reloading: boolean; running: string[]; skipped: string[]; usecases: UsecaseRow[] }
 type Coverage = { calls: number; other_format: number; no_usage: number; unpriced: number; repeated: number; placed: number; unplaced: number }
 type UsecasePage = UsecaseRow & { sites: (Site & { cache: CacheDecision; decisions: { models?: Models } })[]; analysing: boolean; days: Days; coverage: Coverage }
-type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null }; cache_mins: Record<string, number> }
+type SitePage = Site & { decisions: { cache: CacheDecision; models: Models; router: null }; cache_models: Record<string, MapModel> }
 
 const ucPath = (u: string | null) => `/usecases/${encodeURIComponent(u ?? 'None')}`
 const sitePath = (u: string | null, site: string) => `${ucPath(u)}/callsites/${site}`
@@ -182,7 +182,7 @@ export function CallSite() {
             </>
           )}
           <h3>Layout</h3>
-          {s.grams ? <PromptMap grams={s.grams} mins={s.cache_mins} /> : <LayoutBar s={s} />}
+          {s.grams ? <PromptMap grams={s.grams} models={s.cache_models} /> : <LayoutBar s={s} />}
         </div>
         <div className="pad">
           <h2>Profile: what it is</h2>

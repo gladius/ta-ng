@@ -77,7 +77,12 @@ def one(site: str):
         raise HTTPException(404, "unknown call-site")
     from modules.cache import rules
     from modules.models import audits
-    models = sorted(store.series([site]).get(site, {}), key=lambda m: -sum(d.get("calls") or 0 for d in store.series([site])[site][m].values()))
+    series = store.series([site]).get(site, {})
+    models = {}
+    for m, days in sorted(series.items(), key=lambda kv: -sum(d.get("calls") or 0 for d in kv[1].values())):
+        prov, _, cmin = rules.for_model(m)
+        models[m] = {"provider": prov, "cache_min": cmin,
+                     **{k: sum(d.get(k) or 0 for d in days.values()) for k in ("calls", "calls_cached", "prompt_tokens", "cached_tokens", "written_tokens")}}
     return {**_with_profile(s), "decisions": {"cache": _cache_decision(site), "models": audits.knowledge(site, s),
                                               "router": s["choice"]},
-            "cache_mins": {m: rules.for_model(m)[2] for m in models}}       # smallest cacheable prefix per model, busiest first
+            "cache_models": models}                                      # per model, busiest first: the cache minimum and the window's reuse

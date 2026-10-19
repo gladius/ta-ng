@@ -17,7 +17,8 @@ export type Ttl = {
   default_ttl: number; best_ttl: number; saving: number; calls: number; beyond_default: number; loss: number
   histogram: Record<string, number>
 }
-export type Grams = { n: number; chars: number; words: string; shares: string } | null
+export type Grams = { n: number; segments: { kind: string; chars: number; words: string; shares: string; sample: string }[] } | null
+export type MapModel = { provider: string; cache_min: number; calls: number; calls_cached: number; prompt_tokens: number; cached_tokens: number; written_tokens: number }
 export type Trend = { recent: number; before: number; delta: number } | null
 export type Profile = { name: string; does: string; task: string; output: string; fixed: string; per_call: string } | null
 export type Story = { now: string; why: string; action: string; worth: number; share: number; proof: Proof; cause: Cause | null }

@@ -179,9 +179,14 @@ calls are one template, the bigger stays, as in the loop; phase 1 phrases are sp
 the opening touches one of five), and the reader is the last guard: when the model describing a pre-pass site says
 it is a version of another (`same_as`), its calls move there and it becomes that site's version (build.move).
 
-The prompt map (site_grams in build.FINISH, `grams` on the call-site): the sample head's word 4-grams in order, each
-with the share of 100 calls holding it. The pages draw one square per gram, grey in every call, red varying, faded
-before the model's cache minimum (a picker when the site runs on several models), with the fixed opening in tokens
-against that minimum. Presence, not position, so a varying-length insertion does not paint the tail red.
+The prompt map (site_grams in build.FINISH, `grams` on the call-site): the sample head in the provider's cache order,
+tool schemas, system prompt, first message (Anthropic documents that order; OpenAI and Gemini cache the exact request
+prefix), per segment its word 4-grams in order, each with the share of 100 calls holding it, and the raw sample text.
+The pages draw one square per gram, grey in every call, red varying, faded before the chosen model's cache minimum,
+a gold band over what the model actually reused per call (from the logged cached tokens: exact on Claude, within 128
+tokens on older GPT models, as reported on Gemini), the fixed opening in tokens against the minimum, and the sample
+with the varying words marked. Presence, not position, so a varying-length insertion does not paint the tail red.
+The tool set count per site now hashes the full schema text (a changed description breaks the cache as a changed
+name does); grouping still uses the system text and the tool names only, since tool sets are shared across sites.
 
 Next: one day on the two chosen usecases.

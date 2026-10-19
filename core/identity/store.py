@@ -56,7 +56,7 @@ callsites = Table(
     Column("dynamic_chars", Integer),
     Column("static_after", Integer),                           # fixed characters after the first per-call text
     Column("tool_sets", Integer),
-    Column("grams", Text),                                     # JSON {n, chars, words, shares}: the prompt map (one digit per 4-gram)
+    Column("grams", Text),                                     # JSON {n, segments: [{kind, chars, words, shares, sample}]}: the prompt map, tools / system / first message
     Column("unsure", Boolean, nullable=False),
     Column("window_days", Integer, nullable=False),
     Column("seen_at", DateTime, nullable=False),

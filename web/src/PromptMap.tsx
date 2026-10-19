@@ -1,67 +1,125 @@
 import { useState } from 'react'
-import type { Grams } from './cache'
+import type { Grams, MapModel } from './cache'
 
-/** The prompt as squares: one per word 4-gram of a sample call, in prompt order. Grey squares are in (nearly) every
- *  call of the call-site, red ones vary. The gold edge is where the chosen model's cache minimum falls: the faded
- *  squares before it are too few tokens to cache on their own. Shares come from the day script (MAP_SAMPLE calls). */
-export function PromptMap({ grams, mins }: { grams: Grams; mins: Record<string, number> }) {
-  const models = Object.keys(mins)
-  const [pick, setPick] = useState(models[0] ?? '')
-  if (!grams || !grams.shares) return null
-  const words = grams.words.split(' ')
-  const digits = Array.from(grams.shares, (d) => Number(d))
-  const n = digits.length
-  if (!n) return null
-  // the squares: at most 1,500; beyond that one square stands for several grams (the lowest share of the group wins)
-  const per = Math.max(1, Math.ceil(n / 1500))
-  const cells: { i: number; varied: boolean; share: number }[] = []
-  for (let i = 0; i < n; i += per) {
-    const group = digits.slice(i, i + per)
-    const low = Math.min(...group)
-    cells.push({ i, varied: low < 9, share: low / 10 })
+const KIND: Record<string, string> = { tools: 'tool schemas', system: 'system prompt', user: 'first message' }
+const ACCURACY: Record<string, string> = { anthropic: 'exact', openai: 'within 128 tokens on older models', google: 'as reported; the provider does not say what it covers' }
+
+/** The prompt as squares in the provider's cache order: tool schemas, system prompt, first message. One square per
+ *  word 4-gram of a sample call. Grey squares are in (nearly) every call of the call-site, red ones vary. The gold
+ *  band is what the chosen model actually reused from the cache, from the logged cached tokens; the gold edge is its
+ *  cache minimum; the faded squares before it are too few tokens to cache on their own. Under the map, the sample
+ *  itself with the varying stretches marked. Shares come from the day script (MAP_SAMPLE calls). */
+export function PromptMap({ grams, models }: { grams: Grams; models: Record<string, MapModel> }) {
+  const names = Object.keys(models)
+  const [pick, setPick] = useState(names[0] ?? '')
+  const [open, setOpen] = useState(false)
+  if (!grams || !grams.segments?.length) return null
+  const segs = grams.segments.filter((s) => s.shares.length > 0)
+  if (!segs.length) return null
+  // every gram of every segment in order, with its estimated token position (four characters a token)
+  type Cell = { seg: number; i: number; share: number; token: number; first: boolean }
+  const cells: Cell[] = []
+  let tokens = 0
+  for (const [k, s] of segs.entries()) {
+    const words = s.words.split(' ')
+    const masked = words.reduce((a, w) => a + w.length + 1, 0) || 1
+    const digits = Array.from(s.shares, (d) => Number(d))
+    let upto = 0
+    for (const [i, d] of digits.entries()) {
+      upto += words[i].length + 1
+      cells.push({ seg: k, i, share: d / 10, token: tokens + Math.round((s.chars * upto / masked) / 4), first: i === 0 })
+    }
+    tokens += Math.round(s.chars / 4)
   }
-  // tokens, estimated: the prompt's characters spread over its masked words, four characters a token
-  const masked = words.reduce((a, w) => a + w.length + 1, 0) || 1
-  const tokensAt = (gram: number) => {
-    const upto = words.slice(0, Math.min(words.length, gram + 4)).reduce((a, w) => a + w.length + 1, 0)
-    return Math.round((grams.chars * upto / masked) / 4)
+  const per = Math.max(1, Math.ceil(cells.length / 2000))             // at most 2,000 squares; beyond, one square per `per` grams
+  const squares: (Cell & { varied: boolean })[] = []
+  for (let i = 0; i < cells.length; i += per) {
+    const group = cells.slice(i, i + per)
+    squares.push({ ...group[0], share: Math.min(...group.map((c) => c.share)), varied: group.some((c) => c.share < 0.9), first: group.some((c) => c.first) })
   }
-  const total = Math.round(grams.chars / 4)
-  const min = pick ? mins[pick] ?? 1024 : 1024
-  const firstVaried = digits.findIndex((d) => d < 9)
-  const fixedLead = firstVaried < 0 ? total : tokensAt(firstVaried) - Math.round(grams.chars * 5 / masked / 4)
-  const edge = cells.findIndex((c) => tokensAt(c.i) >= min)
-  const same = digits.filter((d) => d >= 9).length
+  const m = pick ? models[pick] : undefined
+  const min = m?.cache_min ?? 1024
+  const reused = m && m.calls ? Math.round(m.cached_tokens / m.calls) : 0                 // tokens read from the cache per call, average
+  const reusedShare = m && m.prompt_tokens ? m.cached_tokens / m.prompt_tokens : 0
+  const callsCached = m && m.calls ? m.calls_cached / m.calls : 0
+  const firstVaried = cells.findIndex((c) => c.share < 0.9)
+  const fixedLead = firstVaried < 0 ? tokens : cells[firstVaried].token
+  const same = cells.filter((c) => c.share >= 0.9).length
+  const edge = squares.findIndex((c) => c.token >= min)
+  const words = (s: number) => segs[s].words.split(' ')
   return (
     <div className="pmap-wrap">
       <div className="pmap-head">
-        <span>1 square ≈ {per === 1 ? '1 n-gram' : `${per} n-grams`}, in prompt order · {n.toLocaleString('en-US')} n-grams, about {total.toLocaleString('en-US')} tokens · shares over {grams.n} calls</span>
-        {models.length > 1 && (
-          <div className="seg" role="group" aria-label="Model for the cache minimum">
-            {models.map((m) => <button key={m} type="button" aria-pressed={m === pick} onClick={() => setPick(m)}>{m}</button>)}
+        <span>1 square ≈ {per === 1 ? '1 n-gram' : `${per} n-grams`}, in the provider's cache order · about {tokens.toLocaleString('en-US')} tokens · shares over {grams.n} calls</span>
+        {names.length > 1 && (
+          <div className="seg" role="group" aria-label="Model">
+            {names.map((n) => <button key={n} type="button" aria-pressed={n === pick} onClick={() => setPick(n)}>{n}</button>)}
           </div>
         )}
       </div>
-      <div className="pmap" role="img" aria-label={`${Math.round(100 * same / n)}% of the prompt is the same in every call; the fixed opening is about ${fixedLead} tokens against a cache minimum of ${min}`}>
-        {cells.map((c, k) => (
-          <i key={c.i} className={[c.varied ? 'varied' : '', tokensAt(c.i) < min ? 'under' : '', k === edge ? 'edge' : ''].join(' ').trim()}
-            title={`${words.slice(c.i, c.i + 3 + per).join(' ')}\n${c.varied ? `in ${Math.round(100 * c.share)}% of calls` : 'in every call'} · ≈ token ${tokensAt(c.i).toLocaleString('en-US')}`} />
+      <div className="pmap-segs">
+        {segs.map((s) => <span key={s.kind} className={'pmap-seg k-' + s.kind} style={{ flex: Math.max(1, s.shares.length) }}><i className={'k-' + s.kind} /> {KIND[s.kind] ?? s.kind} <small>≈ {Math.round(s.chars / 4).toLocaleString('en-US')} tokens</small></span>)}
+      </div>
+      <div className="pmap" role="img" aria-label={`${Math.round(100 * same / cells.length)}% of the prompt is the same in every call; the fixed opening is about ${fixedLead} tokens against a cache minimum of ${min}; about ${reused} tokens are reused per call`}>
+        {squares.map((c, k) => (
+          <i key={k} className={['k-' + segs[c.seg].kind, c.varied ? 'varied' : '', c.token < min ? 'under' : '', k === edge ? 'edge' : '', reused > 0 && c.token <= reused ? 'reused' : '', c.first && k > 0 ? 'first' : ''].join(' ').trim()}
+            title={`${KIND[segs[c.seg].kind] ?? segs[c.seg].kind}: ${words(c.seg).slice(c.i, c.i + 3 + per).join(' ')}\n${c.varied ? `in ${Math.round(100 * c.share)}% of calls` : 'in every call'} · ≈ token ${c.token.toLocaleString('en-US')}`} />
         ))}
       </div>
       <div className="pmap-facts">
-        <span><b>{Math.round(100 * same / n)}%</b> of the prompt is the same in every call</span>
+        <span><b>{Math.round(100 * same / cells.length)}%</b> of the prompt is the same in every call</span>
         <span>fixed opening <b>≈ {Math.max(0, fixedLead).toLocaleString('en-US')} tokens</b></span>
-        <span>{pick && <>cache minimum on <span className="mono">{pick}</span> <b>{min.toLocaleString('en-US')} tokens</b></>}</span>
+        {m && <span>cache minimum on <span className="mono">{pick}</span> <b>{min.toLocaleString('en-US')} tokens</b></span>}
+        {m && (m.calls_cached > 0
+          ? <span>reused today <b>≈ {reused.toLocaleString('en-US')} tokens</b> a call ({Math.round(100 * reusedShare)}% of the prompt, {Math.round(100 * callsCached)}% of calls reuse something{reused > tokens ? ', reaching into the conversation history' : ''}; {ACCURACY[m.provider] ?? 'as reported'})</span>
+          : <span>reused today <b>nothing</b> on this model</span>)}
         {fixedLead < min
-          ? <span className="warn"><b>Below the minimum:</b> the fixed opening alone cannot be cached on this model{firstVaried >= 0 && <>; the first change comes at about token {tokensAt(firstVaried).toLocaleString('en-US')}</>}.</span>
-          : <span>The fixed opening clears the minimum: about <b>{Math.min(fixedLead, total).toLocaleString('en-US')} tokens</b> can be reused per call.</span>}
+          ? <span className="warn"><b>Below the minimum:</b> the fixed opening alone cannot be cached on this model{firstVaried >= 0 && <>; the first change comes at about token {cells[firstVaried].token.toLocaleString('en-US')}</>}.</span>
+          : <span>The fixed opening clears the minimum: about <b>{Math.min(fixedLead, tokens).toLocaleString('en-US')} tokens</b> can be reused per call.</span>}
       </div>
       <div className="legend pmap-legend">
-        <span><i /> same in every call</span>
+        <span><i className="k-tools" /> tool schema, same in every call</span>
+        <span><i className="k-system" /> system prompt, same in every call</span>
+        <span><i className="k-user" /> first message, same in every call</span>
         <span><i className="varied" /> varies across calls</span>
         <span><i className="under" /> before the cache minimum</span>
         <span><i className="edge" /> where the minimum falls</span>
+        <span><i className="reused" /> reused from the cache today</span>
       </div>
+      <button type="button" className="btn small" onClick={() => setOpen(!open)}>{open ? 'Hide the sample prompt' : 'Show the sample prompt with the varying parts marked'}</button>
+      {open && <Sample segs={segs} />}
+    </div>
+  )
+}
+
+/** The sample head, segment by segment, each word painted by the share of the 4-grams it belongs to. */
+function Sample({ segs }: { segs: NonNullable<Grams>['segments'] }) {
+  return (
+    <div className="pmap-sample">
+      {segs.map((s) => {
+        const digits = Array.from(s.shares, (d) => Number(d))
+        const words = s.words.split(' ')
+        // a word varies when one of the grams through it varies; map masked words back onto the raw text in order
+        const varies = words.map((_, i) => [i - 3, i - 2, i - 1, i].some((g) => g >= 0 && g < digits.length && digits[g] < 9))
+        const parts: { text: string; varied: boolean }[] = []
+        const re = /[A-Za-z0-9]+/g
+        let last = 0, wi = 0
+        for (const mt of Array.from(s.sample.matchAll(re))) {
+          if (wi >= words.length) break
+          const before = s.sample.slice(last, mt.index)
+          if (before) parts.push({ text: before, varied: false })
+          parts.push({ text: mt[0], varied: varies[wi] })
+          last = (mt.index ?? 0) + mt[0].length
+          wi++
+        }
+        parts.push({ text: s.sample.slice(last), varied: false })
+        return (
+          <section key={s.kind}>
+            <h4>{KIND[s.kind] ?? s.kind} <span className="muted">{s.chars.toLocaleString('en-US')} characters{s.kind === 'tools' && s.chars >= 8000 ? ', first 8,000 shown' : ''}</span></h4>
+            <pre>{parts.map((p, k) => p.varied ? <mark key={k}>{p.text}</mark> : <span key={k}>{p.text}</span>)}</pre>
+          </section>
+        )
+      })}
     </div>
   )
 }

@@ -62,7 +62,7 @@ SELECT m.*, CONCAT(m.log_id, '@', CAST(m.ts_us AS STRING)) AS id, FARM_FINGERPRI
        m.cost + m.cached * (m.price_input - m.price_cache_read) / 1e6 AS cost_nocache
 FROM (
   SELECT n.*, CONCAT(' ', ARRAY_TO_STRING({words_sys}, ' '), ' ') AS norm FROM (
-    SELECT s.* EXCEPT (cost_logged, sys_text, model_key),
+    SELECT s.* EXCEPT (cost_logged, model_key),
            CONCAT(IF(ARRAY_LENGTH(tool_names) > 0, CONCAT('tools: ', ARRAY_TO_STRING(ARRAY(SELECT x FROM UNNEST(tool_names) x ORDER BY x), ' '), '\\n'), ''),
                   sys_text) AS sys,
            -- the logged cost, else tokens x the catalog price; unknown (NULL) when the call has no usage or no price
@@ -90,7 +90,9 @@ FROM (
              ARRAY_LENGTH(JSON_QUERY_ARRAY(`{req}`, '$.messages')) AS n_messages,
              JSON_QUERY(`{req}`, '$.tools') IS NOT NULL AS has_tools,
              {system} AS sys_text,
-             SUBSTR(JSON_VALUE(`{req}`, '$.messages[1].content'), 1, 2000) AS first_user
+             SUBSTR(JSON_VALUE(`{req}`, '$.messages[1].content'), 1, 2000) AS first_user,
+             SUBSTR(TO_JSON_STRING(JSON_QUERY(`{req}`, '$.tools')), 1, {head_cap}) AS tools_text,      -- the schemas, for the prompt map
+             FARM_FINGERPRINT(COALESCE(TO_JSON_STRING(JSON_QUERY(`{req}`, '$.tools')), '')) AS schema_hash   -- a changed description breaks the cache too
       FROM `{table}`
       WHERE DATE(`{time}`) BETWEEN @day_from AND @day_to AND {skip}) s
     LEFT JOIN prices pr ON pr.model = s.model_key) n) m;
@@ -104,7 +106,7 @@ FROM src GROUP BY 1, 2;
 
 -- chat calls, each once, their numbers only (a row logged twice, same id and microsecond, is one call)
 CREATE TEMP TABLE calls CLUSTER BY usecase AS
-SELECT * EXCEPT (sys, norm, first_user, tool_names, chat) FROM src WHERE chat
+SELECT * EXCEPT (sys, sys_text, norm, first_user, tool_names, tools_text, chat) FROM src WHERE chat
 QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY prompt_tokens DESC) = 1;
 
 -- 2. place every call by the fingerprints the app knows (its usecase's), one pass, row by row
@@ -201,7 +203,7 @@ WITH agg AS (SELECT c.site, AVG(LENGTH(s.sys)) AS chars, AVG(ARRAY_LENGTH(REGEXP
   pre AS (SELECT site, APPROX_QUANTILES(n, 2)[OFFSET(1)] AS lead_words FROM lcp GROUP BY 1)
 SELECT a.site, CAST(a.chars AS INT64) AS chars, CAST(COALESCE(SAFE_DIVIDE(p.lead_words, a.words), 0) * a.chars AS INT64) AS lead_chars, ts.tool_sets
 FROM agg a LEFT JOIN pre p USING (site)
-LEFT JOIN (SELECT site, COUNT(DISTINCT tools_hash) AS tool_sets FROM call_rows GROUP BY 1) ts USING (site);
+LEFT JOIN (SELECT site, COUNT(DISTINCT schema_hash) AS tool_sets FROM call_rows GROUP BY 1) ts USING (site);
 
 -- 5. the ledger: day-site x model (a day-site is one usecase and day)
 CREATE OR REPLACE TEMP TABLE ledger_daily AS
@@ -234,21 +236,29 @@ SELECT c.site, c.usecase, c.id, c.model, s.sys, s.first_user, s.tool_names,
 FROM call_rows c JOIN src s USING (id) WHERE s.chat
 QUALIFY ROW_NUMBER() OVER (PARTITION BY c.site ORDER BY FARM_FINGERPRINT(c.id)) <= 3
      OR ROW_NUMBER() OVER (PARTITION BY c.site, c.model ORDER BY FARM_FINGERPRINT(c.id)) = 1;
--- 7b. the prompt map (after site_calls: its rn = 1 call is the sample head): the sample head's word 4-grams in order, each with the share of MAP_SAMPLE calls holding it
---     (one digit per gram, 0-9), the head's masked words and length: the static / per-call squares the pages draw
+-- 7b. the prompt map, in the provider's cache order (tools, system, first message): per segment of the sample head
+--     (site_calls rn = 1), its word 4-grams in order, each with the share of MAP_SAMPLE calls holding it (one digit
+--     per gram, 0-9), its masked words, its length and its raw text: the static / per-call squares the pages draw
 CREATE OR REPLACE TEMP TABLE site_grams AS
-WITH head AS (SELECT sc.site, s.norm, LENGTH(s.sys) AS chars FROM site_calls sc JOIN src s USING (id) WHERE sc.rn = 1),
-grams AS (SELECT h.site, i, g FROM head h, UNNEST(ML.NGRAMS(REGEXP_EXTRACT_ALL(h.norm, r'[a-z#]+'), [4, 4])) g WITH OFFSET i),
-sample AS (SELECT c.site, c.id, s.norm FROM call_rows c JOIN src s USING (id) WHERE s.chat
+WITH head AS (SELECT sc.site, s.tools_text, s.sys_text, s.first_user FROM site_calls sc JOIN src s USING (id) WHERE sc.rn = 1),
+seg AS (
+  SELECT site, 'tools' AS kind, 0 AS ord, {words_tools} AS w, LENGTH(tools_text) AS chars, tools_text AS sample FROM head
+  UNION ALL SELECT site, 'system', 1, {words_text}, LENGTH(sys_text), sys_text FROM head
+  UNION ALL SELECT site, 'user', 2, {words_user}, LENGTH(first_user), first_user FROM head),
+grams AS (SELECT s.site, s.kind, i, g FROM seg s, UNNEST(ML.NGRAMS(s.w, [4, 4])) g WITH OFFSET i),
+sample AS (SELECT c.site, c.id, s.tools_text, s.sys_text, s.first_user FROM call_rows c JOIN src s USING (id) WHERE s.chat
            QUALIFY ROW_NUMBER() OVER (PARTITION BY c.site ORDER BY FARM_FINGERPRINT(CONCAT(c.id, 'map'))) <= {map_sample}),
 n AS (SELECT site, COUNT(*) AS n FROM sample GROUP BY 1),
-cnt AS (SELECT site, g, COUNT(DISTINCT id) AS k FROM sample, UNNEST(ML.NGRAMS(REGEXP_EXTRACT_ALL(norm, r'[a-z#]+'), [4, 4])) g GROUP BY 1, 2),
-shares AS (SELECT g.site, g.i, LEAST(9, CAST(FLOOR(10 * COALESCE(c.k, 0) / n.n) AS INT64)) AS d
-           FROM grams g JOIN n USING (site) LEFT JOIN cnt c ON c.site = g.site AND c.g = g.g),
-agg AS (SELECT site, STRING_AGG(CAST(d AS STRING), '' ORDER BY i) AS shares FROM shares GROUP BY 1)
-SELECT h.site, n.n, h.chars, ARRAY_TO_STRING(REGEXP_EXTRACT_ALL(h.norm, r'[a-z#]+'), ' ') AS words, a.shares
-FROM head h JOIN n USING (site) JOIN agg a USING (site);
-
+sgram AS (
+  SELECT site, 'tools' AS kind, id, g FROM sample, UNNEST(ML.NGRAMS({words_tools}, [4, 4])) g
+  UNION ALL SELECT site, 'system', id, g FROM sample, UNNEST(ML.NGRAMS({words_text}, [4, 4])) g
+  UNION ALL SELECT site, 'user', id, g FROM sample, UNNEST(ML.NGRAMS({words_user}, [4, 4])) g),
+cnt AS (SELECT site, kind, g, COUNT(DISTINCT id) AS k FROM sgram GROUP BY 1, 2, 3),
+shares AS (SELECT g.site, g.kind, g.i, LEAST(9, CAST(FLOOR(10 * COALESCE(c.k, 0) / n.n) AS INT64)) AS d
+           FROM grams g JOIN n USING (site) LEFT JOIN cnt c ON c.site = g.site AND c.kind = g.kind AND c.g = g.g),
+agg AS (SELECT site, kind, STRING_AGG(CAST(d AS STRING), '' ORDER BY i) AS shares FROM shares GROUP BY 1, 2)
+SELECT s.site, s.kind, s.ord, n.n, COALESCE(s.chars, 0) AS chars, ARRAY_TO_STRING(s.w, ' ') AS words, COALESCE(a.shares, '') AS shares, s.sample
+FROM seg s JOIN n USING (site) LEFT JOIN agg a USING (site, kind);
 CREATE OR REPLACE TEMP TABLE pool AS
 SELECT site, model, day, id, prompt_tokens, completion_tokens, duration_ms FROM call_rows
 WHERE cost IS NOT NULL AND completion_tokens > 0
@@ -295,7 +305,8 @@ def _names():
     model_col = credentials.get_config("BQ_MODEL_COLUMN")
     return {**c, "system": _SYSTEM.format(text=_TEXT, head_cap=HEAD_CAP, **c), "words_sys": _WORDS.format(text="sys"),
             "served": "CAST(`%s` AS STRING)" % model_col if model_col else "CAST(NULL AS STRING)", "skip": bq.SKIP_FILTER.format(col=c["usecase"]),
-            "place": _PLACE, "prefix": PREFIX, "seeds": SEEDS, "heads": HEADS, "pairs": PAIRS, "pool": POOL, "leftover": LEFTOVER, "map_sample": MAP_SAMPLE,
+            "place": _PLACE, "prefix": PREFIX, "seeds": SEEDS, "heads": HEADS, "pairs": PAIRS, "pool": POOL, "leftover": LEFTOVER, "map_sample": MAP_SAMPLE, "head_cap": HEAD_CAP,
+            "words_tools": _WORDS.format(text="tools_text"), "words_text": _WORDS.format(text="sys_text"), "words_user": _WORDS.format(text="first_user"),
             "cases": " ".join("WHEN gap <= %d THEN '%s'" % (secs, name) for name, secs in BUCKETS)}
 
 
@@ -408,8 +419,13 @@ class Build:
         return {r["site"]: r for r in self._read(_LAYOUT)}
 
     def grams(self):
-        """{site: {n, chars, words, shares}}: the prompt map per day-site."""
-        return {r["site"]: {"n": r["n"], "chars": r["chars"], "words": r["words"], "shares": r["shares"]} for r in self._read(_GRAMS)}
+        """{site: {n, segments: [{kind, chars, words, shares, sample}]}}: the prompt map per day-site, tools, system,
+        first message in order; `sample` is the raw text of the sample head's segment."""
+        out = {}
+        for r in sorted(self._read(_GRAMS), key=lambda r: (r["site"], r["ord"])):
+            e = out.setdefault(r["site"], {"n": r["n"], "segments": []})
+            e["segments"].append({"kind": r["kind"], "chars": r["chars"], "words": r["words"], "shares": r["shares"], "sample": r["sample"] or ""})
+        return out
 
     def pool(self):
         return self._read(_POOL)
