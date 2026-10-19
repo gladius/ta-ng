@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core import tasks
 from core.identity import store
-from core.ledger import build
+from core.ledger import bq_minhash, build
 
 MIN_CALLS = build.MIN_CALLS
 PHRASES = 5              # phrases asked for
@@ -197,6 +197,8 @@ def run(b, day, known_of, candidate=_candidate, homogeneity=mixed):
     chat = b.chat_counts()
     live = {uc for uc, n in chat.items() if n >= MIN_CALLS}
     stale, out, known = {}, {}, {}
+    if bq_minhash.on():                                      # GROUPING_PREPASS: statistics first, saved as known call-sites
+        out.update(bq_minhash.run(b, live, day))
     for rnd in range(1, MAX_ROUNDS + 1):
         if not live:
             break

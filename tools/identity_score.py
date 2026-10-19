@@ -2,6 +2,7 @@
 
     BQ_TABLE=trust-router-sandbox.litellm.llm_log .venv/bin/python tools/identity_score.py [--days 7]
     .venv/bin/python tools/identity_score.py --bench            # the hard bench (tools/grouping_bench.py --make)
+    .venv/bin/python tools/identity_score.py --bench --prepass  # with the BigQuery pre-pass (core/ledger/bq_minhash.py)
 
 Paid: the loop asks the model once per call-site (about 2 cents each). Runs the day script over the last --days days
 at once (one BigQuery session) with nothing known, runs the loop, and scores `placed` against the truth: purity =
@@ -62,7 +63,8 @@ def main(days, bench):
         compl = sum(max(cnt[t] for cnt in found.values()) for t in truth) / n if n else 0
         print("%-24s %5d %7d %5.0f%% %5.0f%% %6d %8d" % (uc, len(found), len(truth), 100 * purity, 100 * compl, n, left.get(uc, 0)))
     for s, r in made.items():
-        print("  %-28s %-24s %5d %s %s" % ((r["usecase"] or "")[:28], r["profile"]["name"][:24], r["placed"],
+        name = r["profile"]["name"] or ("[%s]" % r["profile"]["model"])
+        print("  %-28s %-24s %5d %s %s" % ((r["usecase"] or "")[:28], name[:24], r["placed"],
                                            "MIXED" if r.get("mixed") else "     ", " | ".join(r["phrases"])[:100]))
 
 
@@ -72,5 +74,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--bench", action="store_true")
+    ap.add_argument("--prepass", action="store_true", help="GROUPING_PREPASS=1: the BigQuery pre-pass before the loop")
     a = ap.parse_args()
+    if a.prepass:
+        os.environ["GROUPING_PREPASS"] = "1"
     main(a.days, a.bench)

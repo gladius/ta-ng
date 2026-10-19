@@ -188,3 +188,12 @@ Reading the answer: check 2 nonzero means templates were split and the saved sit
 check 3 with many sites under 20 says the same from the other side; check 5 with few repeats means the store fills
 with duplicate sites day after day; all clean means those usecases have no changing value in their first 300
 characters today, the hole is still there but not biting, and the region map part is safe either way.
+
+### 2026-10-19: the pre-pass is in, behind a switch
+
+`core/ledger/bq_minhash.py` (the other session's MinHash plan, bound here with four changes: unplaced calls only,
+collisions rejected, parameters instead of string building, `GROUPING_PREPASS=1` default off) runs before the loop's
+rounds and saves nameless call-sites (profile model `bq_minhash`). Phase 2 phrases need 3 real words like phase 1.
+Bench with the pre-pass on: every call-site exact except the twins (merged, as every method does), 0 unplaced above
+MIN_CALLS, the loop had nothing left to do, no model call. Next: the A/B on the two chosen usecases, same day, switch
+off then on (`redo`), comparing sites, placed counts and phrase quality.
