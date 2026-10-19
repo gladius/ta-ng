@@ -74,7 +74,8 @@ callsites = Table(
     Column("choice", Text),                                    # JSON {model, audit, guard, until, by, at} or null
 )
 NUMBERS = ("calls", "prompt_tokens", "cached_tokens", "written_tokens", "completion_tokens", "calls_cached", "cost",
-           "cost_nocache", "calls_unpriced", "calls_with_tools", "avg_ms", "avg_messages")
+           "cost_nocache", "calls_unpriced", "calls_with_tools", "avg_ms", "avg_messages",
+           "ms_hit", "ms_miss", "timed_hit", "timed_miss")              # latency sums and counts of calls that hit / missed the cache
 site_days = Table(
     "site_days", db.metadata,
     Column("site", String(32), primary_key=True),

@@ -3,6 +3,7 @@
 export type Totals = {
   calls: number; prompt_tokens: number; cached_tokens: number; written_tokens: number; completion_tokens: number
   calls_cached: number; cost: number; cost_nocache: number; calls_with_tools: number; unsure: boolean
+  ms_hit?: number; ms_miss?: number; timed_hit?: number; timed_miss?: number
 }
 export type Cause = 'ok' | 'no_mark' | 'below_min' | 'dynamic_first' | 'tools_vary' | 'gaps' | 'sparse' | 'versions_churn' | 'unexplained' | 'loss'
 export type Proof = 'safe' | 'proof' | null

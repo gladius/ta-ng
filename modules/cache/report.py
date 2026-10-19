@@ -7,7 +7,7 @@ from core.identity import store
 from modules.cache import diagnosis, story, ttl
 
 SUM = ("calls", "prompt_tokens", "cached_tokens", "written_tokens", "completion_tokens", "calls_cached", "cost",
-       "cost_nocache", "calls_with_tools")
+       "cost_nocache", "calls_with_tools", "ms_hit", "ms_miss", "timed_hit", "timed_miss")
 
 
 def total(rows):

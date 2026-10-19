@@ -211,7 +211,9 @@ SELECT c.day, c.usecase, c.site, c.model, COUNT(*) AS calls,
        SUM(c.prompt_tokens) AS prompt_tokens, SUM(c.cached) AS cached_tokens, SUM(c.written) AS written_tokens,
        SUM(c.completion_tokens) AS completion_tokens, COUNTIF(c.cached > 0) AS calls_cached,
        SUM(c.cost) AS cost, SUM(c.cost_nocache) AS cost_nocache, COUNTIF(c.cost IS NULL) AS calls_unpriced,
-       AVG(c.duration_ms) AS avg_ms, AVG(c.n_messages) AS avg_messages, COUNTIF(c.has_tools) AS calls_with_tools
+       AVG(c.duration_ms) AS avg_ms, AVG(c.n_messages) AS avg_messages, COUNTIF(c.has_tools) AS calls_with_tools,
+       SUM(IF(c.cached > 0, c.duration_ms, 0)) AS ms_hit, SUM(IF(c.cached > 0, 0, c.duration_ms)) AS ms_miss,
+       COUNTIF(c.cached > 0 AND c.duration_ms IS NOT NULL) AS timed_hit, COUNTIF(c.cached = 0 AND c.duration_ms IS NOT NULL) AS timed_miss
 FROM call_rows c
 GROUP BY 1, 2, 3, 4;
 

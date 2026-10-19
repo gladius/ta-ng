@@ -16,10 +16,10 @@ const WINDOWS = [7, 30, 90] as const
 
 /** The last `n` days of a per-day series. */
 const lastDays = (days: Record<string, Totals>, n: number) => Object.keys(days).sort().slice(-n).map((d) => [d, days[d]] as const)
-const NUMS = ['calls', 'prompt_tokens', 'cached_tokens', 'written_tokens', 'completion_tokens', 'calls_cached', 'cost', 'cost_nocache', 'calls_with_tools'] as const
+const NUMS = ['calls', 'prompt_tokens', 'cached_tokens', 'written_tokens', 'completion_tokens', 'calls_cached', 'cost', 'cost_nocache', 'calls_with_tools', 'ms_hit', 'ms_miss', 'timed_hit', 'timed_miss'] as const
 const sumDays = (days: Record<string, Totals>, n: number): Totals => {
-  const out: Totals = { calls: 0, prompt_tokens: 0, cached_tokens: 0, written_tokens: 0, completion_tokens: 0, calls_cached: 0, cost: 0, cost_nocache: 0, calls_with_tools: 0, unsure: false }
-  for (const [, d] of lastDays(days, n)) for (const k of NUMS) out[k] += d[k] || 0
+  const out: Totals = { calls: 0, prompt_tokens: 0, cached_tokens: 0, written_tokens: 0, completion_tokens: 0, calls_cached: 0, cost: 0, cost_nocache: 0, calls_with_tools: 0, unsure: false, ms_hit: 0, ms_miss: 0, timed_hit: 0, timed_miss: 0 }
+  for (const [, d] of lastDays(days, n)) for (const k of NUMS) (out as Record<string, number | boolean>)[k] = ((out[k] as number) || 0) + ((d[k] as number) || 0)
   return out
 }
 
@@ -139,6 +139,23 @@ export function CacheOverview() {
   )
 }
 
+/** Prompt tokens three ways: read from the cache, written to it, plain. */
+function SplitBar({ t }: { t: Totals }) {
+  const all = t.prompt_tokens || 1, read = t.cached_tokens / all, write = t.written_tokens / all, plain = Math.max(0, 1 - read - write)
+  return (
+    <div className="split" title={`${pct(read)} read from the cache, ${pct(write)} written to it, ${pct(plain)} plain`}>
+      <span className="split-track"><b className="read" style={{ width: 100 * read + '%' }} /><b className="write" style={{ width: 100 * write + '%' }} /></span>
+      <span className="muted nowrap">{pct(read)} read · {pct(write)} written</span>
+    </div>
+  )
+}
+
+/** Latency of calls that hit the cache against calls that missed, when both were timed. */
+function timeSaved(t: Totals): { hit: number; miss: number } | null {
+  if (!t.timed_hit || !t.timed_miss || !t.ms_hit || !t.ms_miss) return null
+  return { hit: t.ms_hit / t.timed_hit, miss: t.ms_miss / t.timed_miss }
+}
+
 function ShareBar({ share, could }: { share: number; could?: number }) {
   return (
     <div className="share" title={`${pct(share)} of prompt tokens reused${could != null ? `, ${pct(could)} possible` : ''}`}>
@@ -156,7 +173,7 @@ function SiteCard({ s, usecase }: { s: Site; usecase: string | null }) {
         <div><Link to={`/audit/cache/sites/${s.site}`}><b>{siteName(s)}</b></Link>{s.profile && <span className="muted"> · {s.profile.does}</span>} <Link className="muted" to={`/usecases/${encodeURIComponent(usecase ?? 'None')}/callsites/${s.site}`}>the call-site</Link></div>
         {s.story.worth > 0 && <b className="nowrap">{usd(s.story.worth)}</b>}
       </div>
-      <div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} />{s.unsure && <span className="chip warn">few calls</span>}<TrendWord t={s.trend} /></div>
+      <div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} />{s.unsure && <span className="chip warn">few calls</span>}<TrendWord t={s.trend} /><SplitBar t={s.total} /></div>
       <p>{s.story.now} {s.story.why}</p>
       <p><b>{s.story.action}</b></p>
     </section>
@@ -316,11 +333,12 @@ export function CacheSite() {
       <section className="panel">
         <div className="panel-head"><b>By model</b></div>
         <table className="grid">
-          <thead><tr><th>Model</th><th className="num">Calls</th><th>Reused</th><th className="num">Paid</th><th>Diagnosis</th></tr></thead>
+          <thead><tr><th>Model</th><th className="num">Calls</th><th>Reused</th><th>Prompt tokens</th><th>Latency, hit vs miss</th><th className="num">Paid</th><th>Diagnosis</th></tr></thead>
           <tbody>
-            {Object.values(s.models).sort((a, b) => b.calls - a.calls).map((m) => (
-              <tr key={m.model}><td className="mono">{m.model}</td><td className="num mono">{m.calls.toLocaleString('en-US')}</td><td><ShareBar share={reuse(m)} could={m.diagnosis?.achievable_share} /></td><td className="num mono">{usd(m.cost)}</td><td><CauseChip cause={m.diagnosis?.cause ?? null} proof={m.diagnosis?.proof} /></td></tr>
-            ))}
+            {Object.values(s.models).sort((a, b) => b.calls - a.calls).map((m) => { const ts = timeSaved(m); return (
+              <tr key={m.model}><td className="mono">{m.model}</td><td className="num mono">{m.calls.toLocaleString('en-US')}</td><td><ShareBar share={reuse(m)} could={m.diagnosis?.achievable_share} /></td><td><SplitBar t={m} /></td>
+                <td className="mono">{ts ? <>{(ts.hit / 1000).toFixed(1)} s vs {(ts.miss / 1000).toFixed(1)} s{ts.miss > ts.hit && <span className="muted"> · {pct(1 - ts.hit / ts.miss)} faster</span>}</> : <span className="muted">—</span>}</td>
+                <td className="num mono">{usd(m.cost)}</td><td><CauseChip cause={m.diagnosis?.cause ?? null} proof={m.diagnosis?.proof} /></td></tr>) })}
           </tbody>
         </table>
       </section>

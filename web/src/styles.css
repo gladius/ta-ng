@@ -441,3 +441,7 @@ tr.dim { opacity: 0.45; }
 .pmap-sample h4 { margin: 0 0 4px; font-size: 13px; }
 .pmap-sample pre { max-height: 360px; overflow: auto; white-space: pre-wrap; font-size: 12px; line-height: 1.5; padding: 10px 12px; background: var(--base-row); border: 1px solid var(--line-soft); border-radius: 8px; }
 .pmap-sample mark { background: #FDE3E3; color: var(--ink); border-bottom: 2px solid var(--red); }
+.split { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; }
+.split-track { display: inline-flex; width: 110px; height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+.split-track b.read { background: var(--ink); }
+.split-track b.write { background: var(--gold); }
