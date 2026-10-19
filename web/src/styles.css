@@ -415,12 +415,11 @@ tr.dim { opacity: 0.45; }
 .pmap { display: grid; grid-template-columns: repeat(100, 1fr); gap: 2px; max-width: 1200px; }
 .pmap-block { display: flex; flex-direction: column; gap: 6px; }
 .pmap i { aspect-ratio: 1; width: 100%; border-radius: 2px; background: var(--acceptable); }
-.pmap i.k-tools, .legend i.k-tools, .pmap-seg i.k-tools { background: #8FB3DC; }     /* the map may use colour: blue tools, grey system, green first message */
-.pmap i.k-system, .legend i.k-system, .pmap-seg i.k-system { background: var(--acceptable); }
-.pmap i.k-user, .legend i.k-user, .pmap-seg i.k-user { background: #8FC9A3; }
+.pmap i.cached, .legend i.cached { background: #3FA86B; }     /* the map may use colour: green = reused from the cache */
 .pmap i.varied { background: var(--red) !important; }
 .pmap i.under { opacity: 0.45; }
-.pmap i.edge { outline: 2px solid var(--gold); outline-offset: 1px; }
+.pmap i.edge { outline: 2px solid var(--gold); outline-offset: 1px; animation: pmap-pulse 1.4s ease-in-out infinite; }
+@keyframes pmap-pulse { 0%, 100% { outline-color: var(--gold); box-shadow: 0 0 0 0 rgba(247, 181, 0, 0.6); } 50% { outline-color: #B98600; box-shadow: 0 0 0 4px rgba(247, 181, 0, 0); } }
 .pmap-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; font-size: 12px; color: var(--ink-2); }
 .pmap-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
 .pmap-facts b { font-weight: 600; }
@@ -431,8 +430,6 @@ tr.dim { opacity: 0.45; }
 .pmap-legend i.under { opacity: 0.45; }
 .legend i.edge { width: 10px; height: 10px; background: transparent; outline: 2px solid var(--gold); outline-offset: 1px; }
 .pmap-seg { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
-.pmap-seg i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
-.pmap-seg.k-tools { border-top-color: #8FB3DC; } .pmap-seg.k-user { border-top-color: #8FC9A3; }
 .pmap-seg small { color: var(--ink-3); }
 .pmap i.reused { box-shadow: 0 3px 0 0 var(--gold); }
 .legend i.reused { background: var(--acceptable); box-shadow: 0 3px 0 0 var(--gold); }

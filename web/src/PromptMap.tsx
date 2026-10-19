@@ -44,6 +44,7 @@ export function PromptMap({ grams, models, toolSets }: { grams: Grams; models: R
   const fixedLead = firstVaried < 0 ? tokens : cells[firstVaried].token
   const same = cells.filter((c) => c.share >= 0.9).length
   const edge = squares.findIndex((c) => c.token >= min)
+  const cachedUpTo = Math.min(reused, fixedLead)                                        // the cache can only have reused the fixed opening
   const words = (s: number) => segs[s].words.split(' ')
   return (
     <div className="pmap-wrap">
@@ -59,10 +60,10 @@ export function PromptMap({ grams, models, toolSets }: { grams: Grams; models: R
         const own = squares.map((c, idx) => ({ c, idx })).filter(({ c }) => c.seg === k)
         return (
           <div key={sg.kind} className={'pmap-block k-' + sg.kind}>
-            <div className="pmap-seg"><i className={'k-' + sg.kind} /> {KIND[sg.kind] ?? sg.kind} <small>≈ {Math.round(sg.chars / 4).toLocaleString('en-US')} tokens</small></div>
+            <div className="pmap-seg">{KIND[sg.kind] ?? sg.kind} <small>≈ {Math.round(sg.chars / 4).toLocaleString('en-US')} tokens</small></div>
             <div className="pmap" role="img" aria-label={`${KIND[sg.kind] ?? sg.kind}: ${own.filter(({ c }) => !c.varied).length} of ${own.length} squares the same in every call`}>
               {own.map(({ c, idx }) => (
-                <i key={idx} className={['k-' + sg.kind, c.varied ? 'varied' : '', c.token < min ? 'under' : '', idx === edge ? 'edge' : ''].join(' ').trim()}
+                <i key={idx} className={[c.varied ? 'varied' : c.token <= cachedUpTo ? 'cached' : '', c.token < min ? 'under' : '', idx === edge ? 'edge' : ''].join(' ').trim()}
                   title={`${words(c.seg).slice(c.i, c.i + 3 + per).join(' ')}\n${c.varied ? `in ${Math.round(100 * c.share)}% of calls` : 'in every call'} · ≈ token ${c.token.toLocaleString('en-US')}`} />
               ))}
             </div>
@@ -82,12 +83,11 @@ export function PromptMap({ grams, models, toolSets }: { grams: Grams; models: R
           : <span><b>Clears the minimum</b>: about {Math.min(fixedLead, tokens).toLocaleString('en-US')} tokens reusable a call</span>}
       </div>
       <div className="legend pmap-legend">
-        <span><i className="k-tools" /> tool schemas</span>
-        <span><i className="k-system" /> system prompt</span>
-        <span><i className="k-user" /> first message</span>
+        <span><i /> same in every call</span>
+        <span><i className="cached" /> reused from the cache today</span>
         <span><i className="varied" /> varies per call</span>
         <span><i className="under" /> under the minimum</span>
-        <span><i className="edge" /> minimum</span>
+        <span><i className="edge" /> where the minimum falls</span>
       </div>
       <button type="button" className="btn small" onClick={() => setOpen(!open)}>{open ? 'Hide the sample' : 'Show a sample call'}</button>
       {open && <Sample segs={segs} />}
