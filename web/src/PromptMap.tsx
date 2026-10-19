@@ -124,7 +124,7 @@ function Sample({ segs }: { segs: NonNullable<Grams>['segments'] }) {
         parts.push({ text: s.sample.slice(last), varied: false })
         return (
           <section key={s.kind}>
-            <h4>{KIND[s.kind] ?? s.kind} <span className="muted">{s.chars.toLocaleString('en-US')} characters{s.kind === 'tools' && s.chars >= 8000 ? ', first 8,000 shown' : ''}</span></h4>
+            <h4>{KIND[s.kind] ?? s.kind} <span className="muted">{s.chars.toLocaleString('en-US')} characters{s.kind === 'tools' && s.chars >= 16000 ? ', first 16,000 shown' : ''}</span></h4>
             <pre>{parts.map((p, k) => p.varied ? <mark key={k}>{p.text}</mark> : <span key={k}>{p.text}</span>)}</pre>
           </section>
         )

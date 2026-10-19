@@ -98,7 +98,9 @@ def parse_coherence(raw, total):
 
 def _complete(spec, system, messages):
     from app.services import llm_client
-    r = llm_client.complete(model=spec.judge_model, max_tokens=spec.judge_max_tokens, system=system, messages=messages)
+    from app import registry
+    r = llm_client.complete(model=spec.judge_model, max_tokens=spec.judge_max_tokens or registry.max_output(spec.judge_model),
+                            system=system, messages=messages)
     text = llm_client.text(r).strip()
     return text, (cost_of(spec.judge_model, llm_client.usage(r)) or 0.0)
 

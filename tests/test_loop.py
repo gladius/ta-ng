@@ -46,7 +46,7 @@ class Day:
             out[c["usecase"]] = out.get(c["usecase"], 0) + 1
         return out
 
-    def seeds(self, live, rnd):
+    def seeds(self, live, rnd, asked=()):
         rows = []
         for uc in live:
             left = [c for c in self.calls.values() if c["usecase"] == uc and c["id"] not in self.placed]
@@ -55,10 +55,11 @@ class Day:
                 keys.setdefault(c["norm"][:300], []).append(c)
             for k, cs in sorted(keys.items(), key=lambda kv: -len(kv[1]))[:loop.build.SEEDS]:
                 rows += [{"usecase": uc, "key": hash(k), "n": len(cs), "static": False, "n_left": len(left), "id": c["id"], "sys": c["sys"],
-                          "tool_names": [], "model": c["model"]} for c in cs[:loop.build.HEADS]]
+                          "tool_names": [], "model": c["model"]} for c in sorted(cs, key=lambda c: c["id"] in asked)[:loop.build.HEADS]]
             rng = random.Random(rnd)
+            pool = [c for c in left if c["id"] not in asked]
             rows += [{"usecase": uc, "key": None, "n": None, "static": None, "n_left": len(left), "id": c["id"], "sys": c["sys"], "tool_names": [],
-                      "model": c["model"]} for c in rng.sample(left, min(loop.build.HEADS, len(left)))]
+                      "model": c["model"]} for c in rng.sample(pool, min(loop.build.HEADS, len(pool)))]
         return rows
 
     def _hits(self, c):
@@ -166,3 +167,37 @@ def test_the_layout_comes_from_the_models_regions_on_the_first_head():
     fixed, dyn, after = loop.layout(a, head)
     assert fixed == len("Quote the amounts exactly and offer the plan. " * 3) and after == fixed and fixed + dyn == len(head)
     assert loop.layout({"regions": [{"kind": "fixed", "starts_with": "nowhere in the text"}]}, head) is None
+
+
+def test_circuit_breaker_failing_calls_end_the_usecase(monkeypatch):
+    """A seed is asked once; a usecase whose model calls keep failing gives up after GIVE_UP rounds, not at the cap."""
+    _clean()
+    day = Day(_calls(A, 60, tag="a") + _calls(B, 40, usecase="claims", tag="b"))
+    asked, notes = [], []
+
+    def broken(usecase, key, heads, known, avoid=()):
+        asked.append(tuple(h["id"] for h in heads))
+        return {"usecase": usecase, "error": "ValueError: no json object in the reply"}
+    monkeypatch.setattr(loop.tasks, "note", notes.append)
+    assert loop.run(day, "2026-10-10", store.brief, candidate=broken, prepass=lambda *a: {}) == {}
+    assert len(asked) == len(set(asked)), "a seed was asked twice"
+    assert sum("usecases live" in n for n in notes) == loop.GIVE_UP
+    assert sum("gave up" in n for n in notes) == 2 and any("loop done" in n for n in notes)
+
+
+def test_circuit_breaker_counts_calls_left_not_what_the_loop_accepted(monkeypatch):
+    """Call-sites accepted every round but no call leaves the pool (a placement that places nothing): the usecase is
+    out after GIVE_UP rounds, measured on the unplaced calls, never left to run to MAX_ROUNDS."""
+    _clean()
+    day = Day(_calls(A, 200, tag="a") + _calls(B, 50, tools="classify", tag="b"))
+    monkeypatch.setattr(day, "place", lambda accepted, rnd: {s: 0 for s in accepted.values()})
+    notes, asked = [], []
+    monkeypatch.setattr(loop.tasks, "note", notes.append)
+
+    def model(*a, **k):
+        asked.append(1)
+        return fake_model(*a, **k)
+    loop.run(day, "2026-10-10", store.brief, candidate=model, homogeneity=lambda h: (False, ""), prepass=lambda *a: {})
+    assert sum("usecases live" in n for n in notes) == loop.GIVE_UP
+    assert any("gave up: %d rounds took no calls" % loop.GIVE_UP in n for n in notes)
+    assert len(asked) <= loop.GIVE_UP * loop.build.SEEDS * 3

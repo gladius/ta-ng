@@ -14,8 +14,13 @@ and whether these calls are a new version of a call-site the usecase already has
   - two candidates of one round matching mostly the same calls are one template: the bigger stays.
 The calls an accepted candidate matches are placed (build.place) and leave the pool; three of them, not the seeds, are
 shown to the model once more ("one template?"): a no marks the version mixed (shown, never silent). The next round
-seeds from what is left. A usecase is done under DONE_SHARE unplaced, or after GIVE_UP rounds that accepted nothing. The phrases, the
-model's reason, the counts and the day are stored with the call-site: every grouping decision can be checked."""
+seeds from what is left; a call once shown to the model is never seeded again, and a seed whose heads were all shown
+is skipped (the circuit breaker: the same calls are not asked round after round). A usecase is done under DONE_SHARE
+unplaced, or after GIVE_UP rounds in a row that took under MIN_CALLS calls out of its pool, counted in the database
+whatever the round did (failed calls, rejected phrases, a placement that placed nothing); MAX_ROUNDS is a backstop only
+reached by a usecase that places new calls every round. The phrases, the model's
+reason, the counts and the day are stored with the call-site: every grouping decision can be checked; the task's log
+(tasks.note) keeps every round, seed count, failure and why each usecase ended."""
 import hashlib
 import json
 import re
@@ -34,6 +39,8 @@ GIVE_UP = 2              # rounds in a row accepting nothing -> the usecase is d
 OVERLAP = 0.5            # two candidates sharing this share of the smaller one's calls are one template
 VERSION_OF = 0.5         # a candidate hitting this share of a known call-site's calls is its new version
 WORKERS = 8
+TIMEOUT_S = 180          # one model call; the transport retries 429 / 5xx / connection, a hung call does not hold a round
+CALLS = []               # one entry per model call made (the day's log counts them)
 TASKS = ("classify", "extract", "answer", "draft", "summarise", "converse", "orchestrate", "other")
 OUTPUTS = ("json", "text", "tool_calls", "label")
 
@@ -84,6 +91,7 @@ def model():
 
 def ask(heads, known, avoid=()):
     """One model call -> the parsed json (raw)."""
+    from app import registry
     from app.services import llm_client
     known_txt = _KNOWN.format(sites="\n".join("- %s: %s; %s" % (s["site"], s["name"] or "(unnamed)", "; ".join('"%s"' % p for p in s["phrases"][:3]))
                                                for s in known[:40])) if known else ""
@@ -91,14 +99,19 @@ def ask(heads, known, avoid=()):
     body = "\n\n".join("--- request %d%s ---\n%s" % (i + 1, " (model %s)" % h["model"] if h.get("model") else "", h["sys"] or "") for i, h in enumerate(heads))
     prompt = _PROMPT.format(n=len(heads), known=known_txt, tasks=", ".join(TASKS), outputs=", ".join(OUTPUTS), k=PHRASES, avoid=avoid_txt, heads=body)
     for attempt in range(3):                      # an empty or cut reply happens now and then: asked again
-        r = llm_client.complete(model=model(), max_tokens=4000, response_format={"type": "json_object"},
-                                messages=[{"role": "user", "content": prompt}])
+        r = llm_client.complete(model=model(), max_tokens=registry.max_output(model()), response_format={"type": "json_object"},
+                                messages=[{"role": "user", "content": prompt}], timeout=TIMEOUT_S)
+        CALLS.append(1)
         txt = llm_client.text(r).strip()
+        if not txt:                               # json mode as a forced tool call: the object is in the call's arguments
+            tc = getattr(r.choices[0].message, "tool_calls", None) if r.choices else None
+            txt = (tc[0].function.arguments or "").strip() if tc else ""
         try:
             return json.loads(txt[txt.find("{"):txt.rfind("}") + 1], strict=False)
-        except ValueError:
+        except ValueError as e:
             if attempt == 2:
-                raise
+                raise ValueError("no json object in the reply (%s; finish %s): %r"
+                                 % (e, r.choices[0].finish_reason if r.choices else None, txt[:120])) from None
 
 
 def check(answer, heads):
@@ -253,36 +266,64 @@ def run(b, day, known_of, candidate=_candidate, homogeneity=mixed, prepass=bq_mi
     step (both swapped in tests)."""
     chat = b.chat_counts()
     live = {uc for uc, n in chat.items() if n >= MIN_CALLS}
-    stale, out, known = {}, {}, {}
+    stale, out, known, asked, ended = {}, {}, {}, set(), {}
+    calls0, n_seeds, n_failed, n_accepted = len(CALLS), 0, 0, 0
     out.update(describe(b, prepass(b, live, day), known_of, day))      # statistics first, then named by the model
+    rounds, was = 0, {}                                          # was: a usecase's unplaced calls at its last round
     for rnd in range(1, MAX_ROUNDS + 1):
         if not live:
             break
-        tasks.note("%s: round %d, %d usecases live" % (day, rnd, len(live)))
-        rows = b.seeds(sorted(live), rnd)
+        rows = b.seeds(sorted(live), rnd, asked)
         by_uc = {}
         for r in rows:
             by_uc.setdefault(r["usecase"], {}).setdefault(r["key"], []).append(r)
-        jobs = []
         for uc in sorted(live):
             seeds = by_uc.get(uc) or {}
             left = next((rs[0]["n_left"] for rs in seeds.values() if rs), 0)
             if left < MIN_CALLS or left <= DONE_SHARE * chat[uc]:
                 live.discard(uc)
+                ended[uc] = "done, %d calls unplaced" % left
                 continue
+            # the circuit breaker, measured in the database, not in what the loop believes it accepted: a round that
+            # did not take MIN_CALLS calls out of the usecase's pool is stale, whatever happened in it (failed calls,
+            # rejected phrases, a placement that placed nothing); GIVE_UP stale rounds in a row and the usecase is out
+            stale[uc] = 0 if was.get(uc, left + MIN_CALLS) - left >= MIN_CALLS else stale.get(uc, 0) + 1
+            was[uc] = left
+            if stale[uc] >= GIVE_UP:
+                live.discard(uc)
+                ended[uc] = "gave up: %d rounds took no calls out of the pool, %d calls unplaced" % (GIVE_UP, left)
+        if not live:
+            break
+        rounds = rnd
+        tasks.note("%s: round %d, %d usecases live" % (day, rnd, len(live)))
+        jobs = []
+        for uc in sorted(live):
+            seeds = by_uc.get(uc) or {}
             known.setdefault(uc, [{**s, "phrases": list(s["phrases"])} for s in known_of(uc)])
             big = [k for k, rs in seeds.items() if k is not None and rs and rs[0]["n"] >= MIN_CALLS]
             for k in (big or ([None] if None in seeds else [])):
                 heads = [{"id": r["id"], "sys": r["sys"], "model": r["model"]} for r in seeds[k]][:build.HEADS]
-                if len(heads) == build.HEADS:
+                if len(heads) == build.HEADS and not all(h["id"] in asked for h in heads):   # a seed is asked once
                     jobs.append((uc, k, heads))
+                    asked.update(h["id"] for h in heads)
         if not jobs:
+            for uc in live:
+                ended[uc] = "nothing left to seed"
+            live.clear()
             break
+        done = []
+
+        def one(j):
+            c = candidate(j[0], j[1], j[2], known[j[0]])
+            done.append(1)
+            tasks.note("%s: round %d, %d of %d seeds read" % (day, rnd, len(done), len(jobs)))
+            return c
         with ThreadPoolExecutor(WORKERS) as ex:
-            cands = [c for c in ex.map(lambda j: candidate(j[0], j[1], j[2], known[j[0]]), jobs) if c]
+            cands = [c for c in ex.map(one, jobs) if c]
+        n_seeds += len(jobs)
         errors = [c for c in cands if c.get("error")]
         cands = [c for c in cands if not c.get("error")]
-        failed = {c["usecase"] for c in errors}                  # a failed model call is not a round that found nothing
+        n_failed += len(errors)
         if errors:
             tasks.note("%s: round %d, %d model calls failed: %s" % (day, rnd, len(errors), errors[0]["error"]))
         accepted, retry = _decide(b, cands, known, rnd) if cands else ({}, [])
@@ -293,24 +334,26 @@ def run(b, day, known_of, candidate=_candidate, homogeneity=mixed, prepass=bq_mi
             if again:
                 more, _ = _decide(b, again, known, rnd, final=True)
                 accepted.update(more)
+        n_accepted += len(accepted)
         placed = b.place({c: s for c, (s, _) in accepted.items()}, rnd)
         heads_of = {cand: b.site_heads(c["usecase"], site, rnd, [h.get("id") for h in c["heads"] if h.get("id")])
                     for cand, (site, c) in accepted.items()}    # one session query at a time (BigQuery allows no more)
         with ThreadPoolExecutor(WORKERS) as ex:                  # three placed calls, not the seeds: one template?
             checks = dict(zip(accepted, ex.map(lambda cand: homogeneity(heads_of[cand]) if len(heads_of[cand]) == build.HEADS else (False, ""),
                                                accepted)))
-        touched = set()
         for cand, (site, c) in accepted.items():
             uc = c["usecase"]
-            touched.add(uc)
             rec = _record(c, site, day, placed.get(site, 0), version_of=c.get("version_of"), mixed_=checks.get(cand) or (False, ""))
             out[site] = rec
             known[uc] = [s for s in known[uc] if s["site"] != site] + [{"site": site, "name": rec["profile"]["name"], "phrases": c["phrases"], "calls": placed.get(site, 0)}]
             store.save_site(rec)
-        for uc in list(live):
-            stale[uc] = 0 if uc in touched else stale.get(uc, 0) + (0 if uc in failed else 1)
-            if stale[uc] >= GIVE_UP:
-                live.discard(uc)
+        tasks.note("%s: round %d, %d seeds read, %d call-sites accepted, %d failed" % (day, rnd, len(jobs), len(accepted), len(errors)))
+    for uc in live:
+        ended[uc] = "stopped at the round cap (%d)" % MAX_ROUNDS
+    for uc, why in sorted(ended.items()):
+        tasks.note("%s: %s: %s" % (day, uc, why))
+    tasks.note("%s: loop done: %d rounds, %d seeds read, %d failed, %d call-sites accepted, %d model calls"
+               % (day, rounds, n_seeds, n_failed, n_accepted, len(CALLS) - calls0))
     return out
 
 

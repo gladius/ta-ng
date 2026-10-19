@@ -403,7 +403,7 @@ tr.dim { opacity: 0.45; }
 .runs { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; }
 
-.trust { padding: 12px 16px; border-radius: 10px; margin: 0 0 12px; background: var(--paper, #fff); border: 1px solid var(--line); }
+.trust { padding: 12px 16px; border-radius: 10px; margin: 0 0 12px; background: #fff; border: 1px solid var(--line); }
 .trust.trustworthy b { color: var(--ink); }
 .trust.mostly { border-color: var(--gold); }
 .trust.not-yet { border-color: var(--red); }
@@ -442,3 +442,30 @@ tr.dim { opacity: 0.45; }
 .split-track { display: inline-flex; width: 110px; height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
 .split-track b.read { background: var(--ink); }
 .split-track b.write { background: var(--gold); }
+
+/* a run's log, in a dialog on the schedules page: a terminal */
+td.job { min-width: 240px; }
+.tlog-bad { color: var(--red); font-weight: 600; }
+dialog.tlog { width: min(1200px, 94vw); max-height: 88vh; padding: 14px 16px 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); color: var(--ink); }
+dialog.tlog::backdrop { background: rgba(0, 0, 0, .4); }
+.tlog-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 10px; }
+.tlog-head > b { margin-right: 4px; }
+.tlog-head .input { padding: 4px 8px; font-size: 12px; min-width: 0; }
+.tlog-head input.input { width: 180px; margin-left: auto; }
+.tlog-head .pick { font-size: 12px; color: var(--ink-2); }
+.term { margin: 0; padding: 12px 14px; max-height: calc(88vh - 90px); overflow: auto; border-radius: 8px;
+        background: #161514; color: #E7E5E2; font: 12px/1.65 var(--mono); }
+.term > div { display: flex; gap: 12px; white-space: pre-wrap; word-break: break-word; }
+.term > div:hover { background: #22201e; }
+.term .t { flex: none; color: #6E6A66; }
+.term .d { flex: none; color: #9A9693; }
+.term .m { flex: 1; }
+.term .k-bad .m { color: #FF6B6B; }
+.term .k-good .m { color: #6FCF97; }
+.term .k-warn .m { color: #F7B500; }
+.term .k-round .m { color: #7FB8E6; }
+.term .k-dim .m, .term .dim { color: #7d7873; }
+.term .now { background: #2a2620; }
+.term .cursor { color: #E7E5E2; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .term .cursor { animation: none; } }

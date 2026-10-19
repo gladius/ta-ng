@@ -12,7 +12,7 @@ import secrets
 import threading
 import uuid
 
-from sqlalchemy import Column, DateTime, Integer, String, Table, Text, and_, exc, or_, select, update
+from sqlalchemy import Column, DateTime, Integer, String, Table, Text, and_, exc, func, or_, select, update
 
 from app.services import db
 
@@ -43,7 +43,7 @@ tasks = Table(
     Column("worker", String(120)),
     Column("attempts", Integer, nullable=False, default=0),
     Column("error", Text),
-    Column("note", Text),                                # progress, written by the task itself (tasks.note)
+    Column("note", Text),                                # the task's own log, a timed line per tasks.note call
 )
 
 
@@ -147,13 +147,15 @@ _current = threading.local()
 
 
 def note(text):
-    """The running task's progress note (shown on the Schedules page); no-op outside a task."""
+    """A line of the running task's log (shown whole on the Schedules page, its last line as the progress); no-op
+    outside a task."""
     task_id = getattr(_current, "task_id", None)
     if not task_id:
         return
+    line = "%s %s\n" % (_now().strftime("%H:%M:%S"), text)
     try:
         with db.ready().begin() as c:
-            c.execute(update(tasks).where(tasks.c.id == task_id).values(note=text[:300]))
+            c.execute(update(tasks).where(tasks.c.id == task_id).values(note=func.coalesce(tasks.c.note, "") + line))
     except exc.DBAPIError:
         pass
 

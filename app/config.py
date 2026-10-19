@@ -22,7 +22,7 @@ AUDIT_MAX_PARALLEL = int(os.environ.get("AUDIT_MAX_PARALLEL", "8"))
 # judged against it. REF_CHARS caps each output packed into a judge prompt; a longer one marks the input unverified.
 AUDIT_PROFILE_RERUNS = int(os.environ.get("AUDIT_PROFILE_RERUNS", "4"))
 AUDIT_DOWNGRADE_K = int(os.environ.get("AUDIT_DOWNGRADE_K", "5"))
-AUDIT_JUDGE_MAX_TOKENS = int(os.environ.get("AUDIT_JUDGE_MAX_TOKENS", "5000"))
+AUDIT_JUDGE_MAX_TOKENS = int(os.environ.get("AUDIT_JUDGE_MAX_TOKENS", "0"))     # 0: the judge model's maximum output
 
 # Verdict math (validation/engine.py), all fractions. Each cheaper output is judged JUDGE_VOTES times, majority wins;
 # it is safe if its fit rate >= original_consistency - MARGIN. Below COHERENCE_FLOOR the original is too inconsistent

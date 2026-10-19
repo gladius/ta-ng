@@ -26,7 +26,7 @@ PAIRS = 30               # consecutive-call pairs per day-site for the prefix
 POOL = 5                 # request ids kept per day-site and model for model audits (plus the extremes)
 LEFTOVER = 500           # unplaced calls returned per usecase and day
 BUCKETS = [("1m", 60), ("5m", 300), ("15m", 900), ("1h", 3600), ("6h", 21600), ("24h", 86400)]
-HEAD_CAP = 8000          # characters kept of a first message that is not a system prompt
+HEAD_CAP = 16000         # characters kept of a first message that is not a system prompt, and of the tool schema text
 MAP_SAMPLE = 100         # calls per day-site the prompt map's shares are counted over
 
 # a message's text: a string content, or the text parts of a list content
@@ -132,7 +132,8 @@ WHERE best IS NOT NULL;
 
 # the loop's statements (core/identity/loop.py). SEEDS: for the live usecases (@live), the unplaced calls left (n_left),
 # their SEEDS biggest keys (tool set + first PREFIX masked characters) with HEADS calls each, plus HEADS calls at random
-# (key NULL) for when no key is big enough (the template's fixed text starts after a changing one, e.g. a date first)
+# (key NULL) for when no key is big enough (the template's fixed text starts after a changing one, e.g. a date first).
+# Calls already shown to the model (@asked) come last in a key and never in the random pool: a seed is not re-asked.
 _SEEDS = """
 WITH rest AS (
   SELECT s.id, s.usecase, s.key, s.whole, s.sys, s.tool_names, s.model, COUNT(*) OVER (PARTITION BY s.usecase) AS n_left
@@ -142,9 +143,10 @@ keys AS (
   QUALIFY ROW_NUMBER() OVER (PARTITION BY usecase ORDER BY n DESC, key) <= {seeds})
 SELECT l.usecase, l.key, k.n, k.static, l.n_left, l.id, l.sys, l.tool_names, l.model
 FROM rest l JOIN keys k USING (usecase, key)
-QUALIFY ROW_NUMBER() OVER (PARTITION BY l.usecase, l.key ORDER BY FARM_FINGERPRINT(l.id)) <= {heads}
+QUALIFY ROW_NUMBER() OVER (PARTITION BY l.usecase, l.key ORDER BY l.id IN UNNEST(@asked), FARM_FINGERPRINT(l.id)) <= {heads}
 UNION ALL
 SELECT usecase, CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS BOOL), n_left, id, sys, tool_names, model FROM rest
+WHERE id NOT IN UNNEST(@asked)
 QUALIFY ROW_NUMBER() OVER (PARTITION BY usecase ORDER BY FARM_FINGERPRINT(CONCAT(id, CAST(@round AS STRING)))) <= {heads}
 """
 # HITS: for this round's candidates (@cands: usecase, cand, phrases joined by '|', need), every call of the usecase holding `need`
@@ -381,8 +383,8 @@ class Build:
     def chat_counts(self):
         return {r["usecase"]: r["n"] for r in self._read(_CHAT_COUNTS)}
 
-    def seeds(self, live, rnd):
-        return self._read(_SEEDS.format(seeds=SEEDS, heads=HEADS), {"live": list(live), "round": rnd})
+    def seeds(self, live, rnd, asked=()):
+        return self._read(_SEEDS.format(seeds=SEEDS, heads=HEADS), {"live": list(live), "round": rnd, "asked": list(asked) or [""]})
 
     def hits(self, cands):
         """cands: [{usecase, cand, phrases: [..], need}] -> ({cand: {free, collisions: [{site, n}]}}, [(a, b, n)])"""

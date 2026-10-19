@@ -12,7 +12,7 @@ class Spec:
     coherence_floor: float = 0.6   # the original must agree with itself at least this often, else nothing is certified
     margin: float = 0.2            # a candidate may trail the original's self-consistency by this much and still fit
     judge_model: str = "claude-sonnet-5"
-    judge_max_tokens: int = 5000
+    judge_max_tokens: int = 0            # 0: the judge model's maximum output
     max_parallel: int = 8
 
 
