@@ -4,8 +4,8 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { get } from '../api'
 import { CAUSE, usecaseName, type Cause, type Grams, type MapModel, type Proof } from '../cache'
 import { PromptMap } from '../PromptMap'
-import { count, Failed, Kpi, Loading, money, Page, pct, when } from '../ui'
-import { VerdictChip, type Verdict } from './ModelAudits'
+import { count, Failed, Kpi, Loading, money, Page, when } from '../ui'
+import { type Verdict } from './ModelAudits'
 
 type Profile = { name: string; does: string; task: string; output: string; fixed: string | null; per_call: string | null; model: string; created_at: string | null } | null
 type CacheDecision = { cause: Cause | null; action: string; worth: number; proof: Proof; share: number; models: string[]; built_at: string | null } | null
@@ -72,16 +72,6 @@ export function CallSiteUsecases() {
   )
 }
 
-function CacheLine({ c, site }: { c: CacheDecision; site: string }) {
-  if (!c) return <span className="muted">cache: not analysed yet</span>
-  return (
-    <span>
-      <Link to={`/audit/cache/sites/${site}`}>cache</Link>: {c.cause ? <span className={'chip cause-' + c.cause}>{CAUSE[c.cause]}</span> : null} {pct(c.share)} reused
-      {c.worth > 0 && <> · <b>{money(c.worth, 2)}</b> possible{c.proof === 'proof' && ', needs proof'}</>}
-    </span>
-  )
-}
-
 /** One usecase: its call-sites as cards. */
 export function CallSiteUsecase() {
   const { usecase = '' } = useParams()
@@ -104,7 +94,6 @@ export function CallSiteUsecase() {
         {[['other format', u.coverage.other_format], ['no usage logged', u.coverage.no_usage], ['no price', u.coverage.unpriced], ['logged twice', u.coverage.repeated], ['not placed', u.coverage.unplaced]]
           .filter(([, n]) => (n as number) > 0).map(([k, n]) => ` · ${k}: ${(n as number).toLocaleString('en-US')}`).join('')}</p>}
       {u.error && <p className="error" role="alert">The last processing failed: {u.error}</p>}
-      {u.decisions?.models && u.decisions.models.with_cheaper > 0 && <p><b>A cheaper model passes on {u.decisions.models.with_cheaper} of {u.decisions.models.sites} call-sites</b>: about {money(u.decisions.models.saving, 2)} of {money(u.decisions.models.cost, 2)} spent in the window.</p>}
       {u.sites.map((s) => (
         <section key={s.site} className="panel site-card">
           <div className="spread">
@@ -114,10 +103,8 @@ export function CallSiteUsecase() {
           <div className="row">
             {s.profile && <><span className="chip">{s.profile.task}</span><span className="chip">{s.profile.output} out</span></>}
             <span className="chip">{count(s.versions.length, 'version')}</span>
-            {s.unsure && <span className="chip warn">grouping unsure</span>}
-            {!s.profile && <span className="chip">not profiled</span>}
+            {s.unsure && <span className="chip warn">few calls</span>}
           </div>
-          <p><CacheLine c={s.cache} site={s.site} /> · models: {s.decisions?.models ? (s.decisions.models.cheapest ? <><b>cheapest that passes: <span className="mono">{s.decisions.models.cheapest.model}</span></b> ({s.decisions.models.cheapest.cost_vs_original_pct}% cost)</> : 'none cheaper passes yet') : 'not checked yet'} · router: no pin</p>
         </section>
       ))}
     </Page>
@@ -139,7 +126,7 @@ function LayoutBar({ s }: { s: Site }) {
   )
 }
 
-/** One call-site: identity (the fingerprint), profile, and what each module decided. */
+/** One call-site: the prompt, how it is recognised, what it is. The audits judge on their own pages. */
 export function CallSite() {
   const { site = '' } = useParams()
   const q = useQuery({ queryKey: ['callsites', 'site', site], queryFn: () => get<SitePage>(`/suite/callsites/${site}`) })
@@ -157,7 +144,7 @@ export function CallSite() {
           <div className="row">
             {p && <><span className="chip">{p.task}</span><span className="chip">{p.output} out</span></>}
             <span className="chip mono">{s.site}</span>
-            {s.unsure && <span className="chip warn">grouping unsure</span>}
+            {s.unsure && <span className="chip warn">few calls</span>}
           </div>
         </div>
         <Link className="btn primary" to={`/audit/models/new?usecase=${encodeURIComponent(s.usecase ?? 'None')}&site=${s.site}`}>Audit models</Link>
@@ -165,14 +152,15 @@ export function CallSite() {
       <div className="kpis">
         <Kpi label="Calls" value={s.calls.toLocaleString('en-US')} note={`last ${s.window_days} days, ${s.first_day} → ${s.last_day}`} />
         <Kpi label="Prompt versions" value={s.versions.length} note={s.versions.length > 1 ? 'revisions seen in the window' : 'unchanged in the window'} />
-        <Kpi label="Same every call" value={pct(s.static_chars / ((s.static_chars + s.dynamic_chars) || 1))} note="of the system prompt's text" />
-        <Kpi label="Profiled" value={p ? 'yes' : 'no'} note={p ? `${when(p.created_at ?? '')} by ${p.model}` : 'profiled on the next refresh'} />
+        <Kpi label="Models" value={Object.keys(s.cache_models).length} note={Object.keys(s.cache_models).slice(0, 3).join(', ') || 'none in the window'} />
+        <Kpi label="Cache audit" value={s.decisions.cache ? <Link to={`/audit/cache/sites/${s.site}`}>{CAUSE[s.decisions.cache.cause ?? 'ok']}</Link> : 'not yet'} note={s.decisions.cache?.worth ? `${money(s.decisions.cache.worth, 2)} still possible` : 'see the cache audit'} />
       </div>
 
       <section className="panel story">
         <div className="pad">
-          <h2>Identity: how its calls are recognised</h2>
-          <p className="muted">Recognised by these phrases of its instructions (lower case, numbers as #):</p>
+          <h2>The prompt</h2>
+          {s.grams ? <PromptMap grams={s.grams} models={s.cache_models} /> : <LayoutBar s={s} />}
+          <h3>Recognised by</h3>
           <pre className="sig">{s.markers.length ? s.markers.map((m) => `“${m}”`).join('\n') : '—'}</pre>
           {s.versions.length > 1 && (
             <>
@@ -181,11 +169,9 @@ export function CallSite() {
                 <tbody>{s.versions.map((v) => <tr key={v.version}><td className="mono">{v.version.slice(0, 10)}</td><td>{v.first}</td><td>{v.last}</td></tr>)}</tbody></table>
             </>
           )}
-          <h3>Layout</h3>
-          {s.grams ? <PromptMap grams={s.grams} models={s.cache_models} /> : <LayoutBar s={s} />}
         </div>
         <div className="pad">
-          <h2>Profile: what it is</h2>
+          <h2>What it is</h2>
           {p ? (
             <dl className="facts">
               <dt>Same every call</dt><dd>{p.fixed || '—'}</dd>
@@ -193,16 +179,6 @@ export function CallSite() {
               <dt>Task</dt><dd>{p.task}, {p.output} out</dd>
             </dl>
           ) : <p className="muted">Not profiled yet.</p>}
-        </div>
-        <div className="pad">
-          <h2>Decisions</h2>
-          <p><b>Cache</b> · {s.decisions.cache ? <CacheLine c={s.decisions.cache} site={s.site} /> : <span className="muted">not analysed yet</span>}</p>
-          {s.decisions.cache?.action && <p className="muted">{s.decisions.cache.action}</p>}
-          {s.decisions.models?.cheapest && <p><b>Cheapest that passes: <span className="mono">{s.decisions.models.cheapest.model}</span></b> at {s.decisions.models.cheapest.cost_vs_original_pct}% cost{s.decisions.models.fastest && <>; fastest that passes: <span className="mono">{s.decisions.models.fastest.model}</span> at {s.decisions.models.fastest.latency_vs_original_pct}% latency</>}.</p>}
-          <p><b>Models</b> · {s.decisions.models ? Object.entries(s.decisions.models.candidates).map(([cand, v]) => (
-            <span key={cand} className="row"><span className="mono">{cand}</span> <VerdictChip v={v} />{v.cost_vs_original_pct != null && <span className="muted">{v.cost_vs_original_pct}% cost</span>}<Link className="muted" to={`/audit/models/${v.audit}`}>audit {when(v.at)}</Link>{v.valid === false && <span className="chip warn">stale: expired or an older prompt version</span>}</span>
-          )) : <span className="muted">no model checked for this call-site yet</span>}</p>
-          <p><b>Router</b> · <span className="muted">no pin</span></p>
         </div>
       </section>
     </Page>

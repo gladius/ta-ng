@@ -2,7 +2,6 @@ import { useState } from 'react'
 import type { Grams, MapModel } from './cache'
 
 const KIND: Record<string, string> = { tools: 'tool schemas', system: 'system prompt', user: 'first message' }
-const ACCURACY: Record<string, string> = { anthropic: 'exact', openai: 'within 128 tokens on older models', google: 'as reported; the provider does not say what it covers' }
 
 /** The prompt as squares in the provider's cache order: tool schemas, system prompt, first message. One square per
  *  word 4-gram of a sample call. Grey squares are in (nearly) every call of the call-site, red ones vary. The gold
@@ -40,7 +39,6 @@ export function PromptMap({ grams, models }: { grams: Grams; models: Record<stri
   const m = pick ? models[pick] : undefined
   const min = m?.cache_min ?? 1024
   const reused = m && m.calls ? Math.round(m.cached_tokens / m.calls) : 0                 // tokens read from the cache per call, average
-  const reusedShare = m && m.prompt_tokens ? m.cached_tokens / m.prompt_tokens : 0
   const callsCached = m && m.calls ? m.calls_cached / m.calls : 0
   const firstVaried = cells.findIndex((c) => c.share < 0.9)
   const fixedLead = firstVaried < 0 ? tokens : cells[firstVaried].token
@@ -50,43 +48,46 @@ export function PromptMap({ grams, models }: { grams: Grams; models: Record<stri
   return (
     <div className="pmap-wrap">
       <div className="pmap-head">
-        <span>1 square ≈ {per === 1 ? '1 n-gram' : `${per} n-grams`}, in the provider's cache order · about {tokens.toLocaleString('en-US')} tokens · shares over {grams.n} calls</span>
+        <span>1 square ≈ {per === 1 ? '4 words' : `${4 * per} words`} · 100 a row · about {tokens.toLocaleString('en-US')} tokens · from {grams.n} calls</span>
         {names.length > 1 && (
           <div className="seg" role="group" aria-label="Model">
             {names.map((n) => <button key={n} type="button" aria-pressed={n === pick} onClick={() => setPick(n)}>{n}</button>)}
           </div>
         )}
       </div>
-      <div className="pmap-segs">
-        {segs.map((s) => <span key={s.kind} className={'pmap-seg k-' + s.kind} style={{ flex: Math.max(1, s.shares.length) }}><i className={'k-' + s.kind} /> {KIND[s.kind] ?? s.kind} <small>≈ {Math.round(s.chars / 4).toLocaleString('en-US')} tokens</small></span>)}
-      </div>
-      <div className="pmap" role="img" aria-label={`${Math.round(100 * same / cells.length)}% of the prompt is the same in every call; the fixed opening is about ${fixedLead} tokens against a cache minimum of ${min}; about ${reused} tokens are reused per call`}>
-        {squares.map((c, k) => (
-          <i key={k} className={['k-' + segs[c.seg].kind, c.varied ? 'varied' : '', c.token < min ? 'under' : '', k === edge ? 'edge' : '', reused > 0 && c.token <= reused ? 'reused' : '', c.first && k > 0 ? 'first' : ''].join(' ').trim()}
-            title={`${KIND[segs[c.seg].kind] ?? segs[c.seg].kind}: ${words(c.seg).slice(c.i, c.i + 3 + per).join(' ')}\n${c.varied ? `in ${Math.round(100 * c.share)}% of calls` : 'in every call'} · ≈ token ${c.token.toLocaleString('en-US')}`} />
-        ))}
-      </div>
+      {segs.map((sg, k) => {
+        const own = squares.map((c, idx) => ({ c, idx })).filter(({ c }) => c.seg === k)
+        return (
+          <div key={sg.kind} className={'pmap-block k-' + sg.kind}>
+            <div className="pmap-seg"><i className={'k-' + sg.kind} /> {KIND[sg.kind] ?? sg.kind} <small>≈ {Math.round(sg.chars / 4).toLocaleString('en-US')} tokens</small></div>
+            <div className="pmap" role="img" aria-label={`${KIND[sg.kind] ?? sg.kind}: ${own.filter(({ c }) => !c.varied).length} of ${own.length} squares the same in every call`}>
+              {own.map(({ c, idx }) => (
+                <i key={idx} className={['k-' + sg.kind, c.varied ? 'varied' : '', c.token < min ? 'under' : '', idx === edge ? 'edge' : '', reused > 0 && c.token <= reused ? 'reused' : ''].join(' ').trim()}
+                  title={`${words(c.seg).slice(c.i, c.i + 3 + per).join(' ')}\n${c.varied ? `in ${Math.round(100 * c.share)}% of calls` : 'in every call'} · ≈ token ${c.token.toLocaleString('en-US')}`} />
+              ))}
+            </div>
+          </div>
+        )
+      })}
       <div className="pmap-facts">
-        <span><b>{Math.round(100 * same / cells.length)}%</b> of the prompt is the same in every call</span>
+        <span><b>{Math.round(100 * same / cells.length)}%</b> the same in every call</span>
         <span>fixed opening <b>≈ {Math.max(0, fixedLead).toLocaleString('en-US')} tokens</b></span>
-        {m && <span>cache minimum on <span className="mono">{pick}</span> <b>{min.toLocaleString('en-US')} tokens</b></span>}
-        {m && (m.calls_cached > 0
-          ? <span>reused today <b>≈ {reused.toLocaleString('en-US')} tokens</b> a call ({Math.round(100 * reusedShare)}% of the prompt, {Math.round(100 * callsCached)}% of calls reuse something{reused > tokens ? ', reaching into the conversation history' : ''}; {ACCURACY[m.provider] ?? 'as reported'})</span>
-          : <span>reused today <b>nothing</b> on this model</span>)}
+        {m && <span>minimum on <span className="mono">{pick}</span> <b>{min.toLocaleString('en-US')}</b></span>}
+        {m && <span>reused today <b>≈ {reused.toLocaleString('en-US')} tokens</b> a call{m.calls_cached > 0 && <>, {Math.round(100 * callsCached)}% of calls</>}{reused > tokens && ', into the conversation'}</span>}
         {fixedLead < min
-          ? <span className="warn"><b>Below the minimum:</b> the fixed opening alone cannot be cached on this model{firstVaried >= 0 && <>; the first change comes at about token {cells[firstVaried].token.toLocaleString('en-US')}</>}.</span>
-          : <span>The fixed opening clears the minimum: about <b>{Math.min(fixedLead, tokens).toLocaleString('en-US')} tokens</b> can be reused per call.</span>}
+          ? <span className="warn"><b>Below the minimum</b>{firstVaried >= 0 && <>: the first change is at token {cells[firstVaried].token.toLocaleString('en-US')}</>}</span>
+          : <span><b>Clears the minimum</b>: about {Math.min(fixedLead, tokens).toLocaleString('en-US')} tokens reusable a call</span>}
       </div>
       <div className="legend pmap-legend">
-        <span><i className="k-tools" /> tool schema, same in every call</span>
-        <span><i className="k-system" /> system prompt, same in every call</span>
-        <span><i className="k-user" /> first message, same in every call</span>
-        <span><i className="varied" /> varies across calls</span>
-        <span><i className="under" /> before the cache minimum</span>
-        <span><i className="edge" /> where the minimum falls</span>
-        <span><i className="reused" /> reused from the cache today</span>
+        <span><i className="k-tools" /> tool schemas</span>
+        <span><i className="k-system" /> system prompt</span>
+        <span><i className="k-user" /> first message</span>
+        <span><i className="varied" /> varies per call</span>
+        <span><i className="under" /> under the minimum</span>
+        <span><i className="edge" /> minimum</span>
+        <span><i className="reused" /> reused today</span>
       </div>
-      <button type="button" className="btn small" onClick={() => setOpen(!open)}>{open ? 'Hide the sample prompt' : 'Show the sample prompt with the varying parts marked'}</button>
+      <button type="button" className="btn small" onClick={() => setOpen(!open)}>{open ? 'Hide the sample' : 'Show a sample call'}</button>
       {open && <Sample segs={segs} />}
     </div>
   )

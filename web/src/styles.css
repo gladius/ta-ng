@@ -412,8 +412,9 @@ tr.dim { opacity: 0.45; }
 /* The prompt map: one square per word 4-gram of a sample prompt, in order; grey = in (nearly) every call, red = varies.
    Squares before the model's cache minimum are faded: nothing there can be cached on its own. */
 .pmap-wrap { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
-.pmap { display: grid; grid-template-columns: repeat(auto-fill, 13px); gap: 3px; }
-.pmap i { width: 13px; height: 13px; border-radius: 3px; background: var(--acceptable); }
+.pmap { display: grid; grid-template-columns: repeat(100, 1fr); gap: 2px; max-width: 1200px; }
+.pmap-block { display: flex; flex-direction: column; gap: 6px; }
+.pmap i { aspect-ratio: 1; width: 100%; border-radius: 2px; background: var(--acceptable); }
 .pmap i.k-tools, .legend i.k-tools, .pmap-seg i.k-tools { background: #8FB3DC; }     /* the map may use colour: blue tools, grey system, green first message */
 .pmap i.k-system, .legend i.k-system, .pmap-seg i.k-system { background: var(--acceptable); }
 .pmap i.k-user, .legend i.k-user, .pmap-seg i.k-user { background: #8FC9A3; }
@@ -429,14 +430,12 @@ tr.dim { opacity: 0.45; }
 .pmap-legend i.varied { background: var(--red); }
 .pmap-legend i.under { opacity: 0.45; }
 .legend i.edge { width: 10px; height: 10px; background: transparent; outline: 2px solid var(--gold); outline-offset: 1px; }
-.pmap-segs { display: flex; gap: 6px; font-size: 12px; color: var(--ink-2); }
-.pmap-seg { display: flex; align-items: center; gap: 6px; border-top: 2px solid var(--line-strong); padding-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pmap-seg { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
 .pmap-seg i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
 .pmap-seg.k-tools { border-top-color: #8FB3DC; } .pmap-seg.k-user { border-top-color: #8FC9A3; }
 .pmap-seg small { color: var(--ink-3); }
-.pmap i.first { margin-left: 6px; }
-.pmap i.reused { box-shadow: inset 0 0 0 2px var(--gold); }
-.legend i.reused { background: var(--acceptable); box-shadow: inset 0 0 0 2px var(--gold); }
+.pmap i.reused { box-shadow: 0 3px 0 0 var(--gold); }
+.legend i.reused { background: var(--acceptable); box-shadow: 0 3px 0 0 var(--gold); }
 .btn.small { align-self: flex-start; font-size: 12px; padding: 5px 10px; }
 .pmap-sample section { margin-top: 10px; }
 .pmap-sample h4 { margin: 0 0 4px; font-size: 13px; }

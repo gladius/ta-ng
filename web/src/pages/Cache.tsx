@@ -116,7 +116,7 @@ export function CacheOverview() {
             <tbody>
               {pageRows.map((u) => (
                 <tr key={u.usecase}>
-                  <td><Link to={`/audit/cache/usecases/${encodeURIComponent(u.usecase)}`}>{usecaseName(u.usecase)}</Link><div className="muted">{count(u.sites, 'call-site')}{u.unsure && ' · grouping unsure'}</div></td>
+                  <td><Link to={`/audit/cache/usecases/${encodeURIComponent(u.usecase)}`}>{usecaseName(u.usecase)}</Link><div className="muted">{count(u.sites, 'call-site')}{u.unsure && ' · few calls'}</div></td>
                   <td className="num mono">{u.total.calls.toLocaleString('en-US')}</td>
                   <td><ShareBar share={reuse(u.total)} /></td>
                   <td><TrendWord t={u.trend} /></td>
@@ -153,10 +153,10 @@ function SiteCard({ s, usecase }: { s: Site; usecase: string | null }) {
   return (
     <section className="panel site-card">
       <div className="spread">
-        <div><Link to={`/audit/cache/sites/${s.site}`}><b>{siteName(s)}</b></Link>{s.profile && <span className="muted"> · {s.profile.does}</span>} <Link className="muted" to={`/usecases/${encodeURIComponent(usecase ?? 'None')}/callsites/${s.site}`}>identity and profile</Link></div>
+        <div><Link to={`/audit/cache/sites/${s.site}`}><b>{siteName(s)}</b></Link>{s.profile && <span className="muted"> · {s.profile.does}</span>} <Link className="muted" to={`/usecases/${encodeURIComponent(usecase ?? 'None')}/callsites/${s.site}`}>the call-site</Link></div>
         {s.story.worth > 0 && <b className="nowrap">{usd(s.story.worth)}</b>}
       </div>
-      <div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} />{s.unsure && <span className="chip warn">grouping unsure</span>}<TrendWord t={s.trend} /></div>
+      <div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} />{s.unsure && <span className="chip warn">few calls</span>}<TrendWord t={s.trend} /></div>
       <p>{s.story.now} {s.story.why}</p>
       <p><b>{s.story.action}</b></p>
     </section>
@@ -184,7 +184,7 @@ export function CacheUsecase() {
         <Kpi label="Still possible" value={usd(u.saving)} note={`over ${u.window} days`} best={u.saving > 0 ? 'opportunity' : undefined} />
       </div>
       <section className="panel"><div className="panel-head"><b>Reused from cache, per day</b></div><ReuseTrend days={u.days} n={n} /></section>
-      <h2>{count(u.sites.length, 'call-site')} <span className="muted">a call-site is one prompt template this usecase sends; the ones with something to fix come first</span></h2>
+      <h2>{count(u.sites.length, 'call-site')} <span className="muted">the ones with something to fix first</span></h2>
       {u.sites.map((s) => <SiteCard key={s.site} s={s} usecase={u.usecase} />)}
     </Page>
   )
@@ -205,10 +205,7 @@ function PrefixBar({ s }: { s: Site }) {
         <i className="now" style={{ left: 100 * Math.min(1, now) + '%' }} />
         {could > now + 0.02 && <i className="could" style={{ left: 100 * Math.min(1, could) + '%' }} />}
       </div>
-      <p className="muted">
-        A prompt is read left to right. The cache can only reuse the part that is the same every call <em>and</em> comes before anything that differs.
-        The gold mark is how much is reused today ({pct(now)}){could > now + 0.02 && <>; the red mark is how much could be ({pct(could)})</>}.
-      </p>
+      <p className="muted">Gold: reused today ({pct(now)}){could > now + 0.02 && <>; red: possible ({pct(could)})</>}.</p>
     </div>
   )
 }
@@ -293,11 +290,10 @@ export function CacheSite() {
           <h1>{siteName(s)}</h1>
           {s.profile && <p className="lede">{s.profile.does}</p>}
           <div className="row">
-            {s.profile && <><span className="chip">{s.profile.task}</span><span className="chip">{s.profile.output} out</span></>}
             {Object.keys(s.models).map((m) => <span key={m} className="chip mono">{m}</span>)}
             <span className="chip">{count(s.versions.length, 'prompt version')}</span>
-            {s.unsure && <span className="chip warn">grouping unsure</span>}
-            <Link to={`/usecases/${encodeURIComponent(s.usecase ?? 'None')}/callsites/${s.site}`}>identity and profile</Link>
+            {s.unsure && <span className="chip warn">few calls</span>}
+            <Link to={`/usecases/${encodeURIComponent(s.usecase ?? 'None')}/callsites/${s.site}`}>the call-site</Link>
           </div>
         </div>
         <WindowPick n={n} set={setN} max={s.window} />
@@ -309,17 +305,16 @@ export function CacheSite() {
         <Kpi label="Still possible" value={usd(s.story.worth)} note={`over ${s.window} days`} best={s.story.worth > 0 ? 'opportunity' : undefined} />
       </div>
       <section className="panel story">
-        <div className="pad"><h2>What happens now</h2><p>{s.story.now} {s.story.why}</p><PrefixBar s={s} />
-          {s.grams && <PromptMap grams={s.grams} models={Object.fromEntries(Object.entries(s.models).sort((a, b) => b[1].calls - a[1].calls).map(([m, v]) => [m, {
+        <div className="pad"><h2>What happens now</h2><p>{s.story.now} {s.story.why}</p>
+          {s.grams ? <PromptMap grams={s.grams} models={Object.fromEntries(Object.entries(s.models).sort((a, b) => b[1].calls - a[1].calls).map(([m, v]) => [m, {
             provider: v.diagnosis?.evidence.provider ?? 'unknown', cache_min: v.diagnosis?.evidence.cache_min ?? 1024, calls: v.calls, calls_cached: v.calls_cached,
-            prompt_tokens: v.prompt_tokens, cached_tokens: v.cached_tokens, written_tokens: v.written_tokens }]))} />}</div>
+            prompt_tokens: v.prompt_tokens, cached_tokens: v.cached_tokens, written_tokens: v.written_tokens }]))} /> : <PrefixBar s={s} />}</div>
         <div className="pad"><h2>What to do</h2><div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} /></div><p><b>{s.story.action}</b>{s.story.worth > 0 && <> Worth about <b>{usd(s.story.worth)}</b> over {s.window} days at today's traffic.</>}</p>
-          {s.story.proof === 'proof' && <p className="muted">A prompt change can change answers. Before anyone applies it, the changed prompt is run on the same model against the original and judged; the result shows here.</p>}
         </div>
       </section>
       <h2>Evidence</h2>
       <section className="panel">
-        <div className="panel-head"><b>By model</b><span className="muted">the same call-site may be sent to several models; the cache rules differ by provider</span></div>
+        <div className="panel-head"><b>By model</b></div>
         <table className="grid">
           <thead><tr><th>Model</th><th className="num">Calls</th><th>Reused</th><th className="num">Paid</th><th>Diagnosis</th></tr></thead>
           <tbody>
