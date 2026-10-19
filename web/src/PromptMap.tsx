@@ -8,7 +8,7 @@ const KIND: Record<string, string> = { tools: 'tool schemas', system: 'system pr
  *  band is what the chosen model actually reused from the cache, from the logged cached tokens; the gold edge is its
  *  cache minimum; the faded squares before it are too few tokens to cache on their own. Under the map, the sample
  *  itself with the varying stretches marked. Shares come from the day script (MAP_SAMPLE calls). */
-export function PromptMap({ grams, models }: { grams: Grams; models: Record<string, MapModel> }) {
+export function PromptMap({ grams, models, toolSets }: { grams: Grams; models: Record<string, MapModel>; toolSets?: number }) {
   const names = Object.keys(models)
   const [pick, setPick] = useState(names[0] ?? '')
   const [open, setOpen] = useState(false)
@@ -38,7 +38,7 @@ export function PromptMap({ grams, models }: { grams: Grams; models: Record<stri
   }
   const m = pick ? models[pick] : undefined
   const min = m?.cache_min ?? 1024
-  const reused = m && m.calls ? Math.round(m.cached_tokens / m.calls) : 0                 // tokens read from the cache per call, average
+  const reused = m && m.calls_cached ? Math.round(m.cached_tokens / m.calls_cached) : 0   // tokens read from the cache when a call hits
   const callsCached = m && m.calls ? m.calls_cached / m.calls : 0
   const firstVaried = cells.findIndex((c) => c.share < 0.9)
   const fixedLead = firstVaried < 0 ? tokens : cells[firstVaried].token
@@ -62,7 +62,7 @@ export function PromptMap({ grams, models }: { grams: Grams; models: Record<stri
             <div className="pmap-seg"><i className={'k-' + sg.kind} /> {KIND[sg.kind] ?? sg.kind} <small>≈ {Math.round(sg.chars / 4).toLocaleString('en-US')} tokens</small></div>
             <div className="pmap" role="img" aria-label={`${KIND[sg.kind] ?? sg.kind}: ${own.filter(({ c }) => !c.varied).length} of ${own.length} squares the same in every call`}>
               {own.map(({ c, idx }) => (
-                <i key={idx} className={['k-' + sg.kind, c.varied ? 'varied' : '', c.token < min ? 'under' : '', idx === edge ? 'edge' : '', reused > 0 && c.token <= reused ? 'reused' : ''].join(' ').trim()}
+                <i key={idx} className={['k-' + sg.kind, c.varied ? 'varied' : '', c.token < min ? 'under' : '', idx === edge ? 'edge' : ''].join(' ').trim()}
                   title={`${words(c.seg).slice(c.i, c.i + 3 + per).join(' ')}\n${c.varied ? `in ${Math.round(100 * c.share)}% of calls` : 'in every call'} · ≈ token ${c.token.toLocaleString('en-US')}`} />
               ))}
             </div>
@@ -73,7 +73,10 @@ export function PromptMap({ grams, models }: { grams: Grams; models: Record<stri
         <span><b>{Math.round(100 * same / cells.length)}%</b> the same in every call</span>
         <span>fixed opening <b>≈ {Math.max(0, fixedLead).toLocaleString('en-US')} tokens</b></span>
         {m && <span>minimum on <span className="mono">{pick}</span> <b>{min.toLocaleString('en-US')}</b></span>}
-        {m && <span>reused today <b>≈ {reused.toLocaleString('en-US')} tokens</b> a call{m.calls_cached > 0 && <>, {Math.round(100 * callsCached)}% of calls</>}{reused > tokens && ', into the conversation'}</span>}
+        {m && (m.calls_cached > 0
+          ? <span>reused today <b>≈ {reused.toLocaleString('en-US')} tokens</b> on {Math.round(100 * callsCached)}% of calls{reused > fixedLead + 50 && <> — follow-up turns of one conversation, not a shared prefix</>}</span>
+          : <span>reused today <b>nothing</b></span>)}
+        {(toolSets ?? 0) > 1 && <span className="warn">tool list in <b>{toolSets!.toLocaleString('en-US')}</b> different sets</span>}
         {fixedLead < min
           ? <span className="warn"><b>Below the minimum</b>{firstVaried >= 0 && <>: the first change is at token {cells[firstVaried].token.toLocaleString('en-US')}</>}</span>
           : <span><b>Clears the minimum</b>: about {Math.min(fixedLead, tokens).toLocaleString('en-US')} tokens reusable a call</span>}
@@ -85,7 +88,6 @@ export function PromptMap({ grams, models }: { grams: Grams; models: Record<stri
         <span><i className="varied" /> varies per call</span>
         <span><i className="under" /> under the minimum</span>
         <span><i className="edge" /> minimum</span>
-        <span><i className="reused" /> reused today</span>
       </div>
       <button type="button" className="btn small" onClick={() => setOpen(!open)}>{open ? 'Hide the sample' : 'Show a sample call'}</button>
       {open && <Sample segs={segs} />}

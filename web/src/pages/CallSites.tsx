@@ -159,7 +159,7 @@ export function CallSite() {
       <section className="panel story">
         <div className="pad">
           <h2>The prompt</h2>
-          {s.grams ? <PromptMap grams={s.grams} models={s.cache_models} /> : <LayoutBar s={s} />}
+          {s.grams ? <PromptMap grams={s.grams} models={s.cache_models} toolSets={s.tool_sets} /> : <LayoutBar s={s} />}
           <h3>Recognised by</h3>
           <pre className="sig">{s.markers.length ? s.markers.map((m) => `“${m}”`).join('\n') : '—'}</pre>
           {s.versions.length > 1 && (

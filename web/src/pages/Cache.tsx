@@ -308,7 +308,7 @@ export function CacheSite() {
         <div className="pad"><h2>What happens now</h2><p>{s.story.now} {s.story.why}</p>
           {s.grams ? <PromptMap grams={s.grams} models={Object.fromEntries(Object.entries(s.models).sort((a, b) => b[1].calls - a[1].calls).map(([m, v]) => [m, {
             provider: v.diagnosis?.evidence.provider ?? 'unknown', cache_min: v.diagnosis?.evidence.cache_min ?? 1024, calls: v.calls, calls_cached: v.calls_cached,
-            prompt_tokens: v.prompt_tokens, cached_tokens: v.cached_tokens, written_tokens: v.written_tokens }]))} /> : <PrefixBar s={s} />}</div>
+            prompt_tokens: v.prompt_tokens, cached_tokens: v.cached_tokens, written_tokens: v.written_tokens }]))} toolSets={s.layout.tool_sets} /> : <PrefixBar s={s} />}</div>
         <div className="pad"><h2>What to do</h2><div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} /></div><p><b>{s.story.action}</b>{s.story.worth > 0 && <> Worth about <b>{usd(s.story.worth)}</b> over {s.window} days at today's traffic.</>}</p>
         </div>
       </section>
