@@ -99,8 +99,12 @@ function Sample({ segs }: { segs: NonNullable<Grams>['segments'] }) {
       {segs.map((s) => {
         const digits = Array.from(s.shares, (d) => Number(d))
         const words = s.words.split(' ')
-        // a word varies when one of the grams through it varies; map masked words back onto the raw text in order
-        const varies = words.map((_, i) => [i - 3, i - 2, i - 1, i].some((g) => g >= 0 && g < digits.length && digits[g] < 9))
+        // a word varies when every gram through it varies (a fixed word next to a changing stretch keeps one stable
+        // gram on its other side); masked words map back onto the raw text in order
+        const varies = words.map((_, i) => {
+          const through = [i - 3, i - 2, i - 1, i].filter((g) => g >= 0 && g < digits.length)
+          return through.length > 0 && through.every((g) => digits[g] < 9)
+        })
         const parts: { text: string; varied: boolean }[] = []
         const re = /[A-Za-z0-9]+/g
         let last = 0, wi = 0
