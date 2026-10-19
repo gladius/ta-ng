@@ -63,7 +63,7 @@ export function PromptMap({ grams, models, toolSets }: { grams: Grams; models: R
             <div className="pmap-seg">{KIND[sg.kind] ?? sg.kind} <small>≈ {Math.round(sg.chars / 4).toLocaleString('en-US')} tokens</small></div>
             <div className="pmap" role="img" aria-label={`${KIND[sg.kind] ?? sg.kind}: ${own.filter(({ c }) => !c.varied).length} of ${own.length} squares the same in every call`}>
               {own.map(({ c, idx }) => (
-                <i key={idx} className={[c.varied ? 'varied' : c.token <= cachedUpTo ? 'cached' : '', c.token < min ? 'under' : '', idx === edge ? 'edge' : ''].join(' ').trim()}
+                <i key={idx} className={[c.varied ? 'varied' : c.token <= cachedUpTo ? 'cached' : '', c.token < min && reused === 0 ? 'under' : '', idx === edge ? 'edge' : ''].join(' ').trim()}
                   title={`${words(c.seg).slice(c.i, c.i + 3 + per).join(' ')}\n${c.varied ? `in ${Math.round(100 * c.share)}% of calls` : 'in every call'} · ≈ token ${c.token.toLocaleString('en-US')}`} />
               ))}
             </div>
@@ -78,9 +78,11 @@ export function PromptMap({ grams, models, toolSets }: { grams: Grams; models: R
           ? <span>reused today <b>≈ {reused.toLocaleString('en-US')} tokens</b> on {Math.round(100 * callsCached)}% of calls{reused > fixedLead + 50 && <> — follow-up turns of one conversation, not a shared prefix</>}</span>
           : <span>reused today <b>nothing</b></span>)}
         {(toolSets ?? 0) > 1 && <span className="warn">tool list in <b>{toolSets!.toLocaleString('en-US')}</b> different sets</span>}
-        {fixedLead < min
-          ? <span className="warn"><b>Below the minimum</b>{firstVaried >= 0 && <>: the first change is at token {cells[firstVaried].token.toLocaleString('en-US')}</>}</span>
-          : <span><b>Clears the minimum</b>: about {Math.min(fixedLead, tokens).toLocaleString('en-US')} tokens reusable a call</span>}
+        {fixedLead < min && reused > 0
+          ? <span className="warn">The catalog says <b>{min.toLocaleString('en-US')}</b> is the minimum on this model, yet the cache reused {reused.toLocaleString('en-US')}: the catalog minimum may be out of date</span>
+          : fixedLead < min
+            ? <span className="warn"><b>Below the minimum</b>{firstVaried >= 0 && <>: the first change is at token {cells[firstVaried].token.toLocaleString('en-US')}</>}</span>
+            : <span><b>Clears the minimum</b>: about {Math.min(fixedLead, tokens).toLocaleString('en-US')} tokens reusable a call</span>}
       </div>
       <div className="legend pmap-legend">
         <span><i /> same in every call</span>
