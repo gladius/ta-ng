@@ -13,6 +13,7 @@
 A day is processed for all usecases at once: BigQuery bills the columns it reads for every day in range whatever
 the usecase filter, so one usecase alone would cost the same. The window is ANALYSIS_WINDOW_DAYS; older days drop."""
 import datetime
+import time
 from collections import defaultdict
 
 import credentials
@@ -59,7 +60,9 @@ def process_day(day, redo=False):
     """Process one day (ISO date) for every usecase. Blocking: the task start() queues runs it."""
     day = str(day)
     tasks.note("%s: starting" % day)
+    t_day, c_day = time.time(), len(loop.CALLS)
     b = build.Build(day, day, store.fingerprints(), session_id=store.day_session(day), redo=redo)
+    tasks.note("%s: the read and the known call-sites' placement took %.1f min (%s)" % (day, (time.time() - t_day) / 60, loop.bq_line(b.s.totals)))
     store.day_session(day, b.s.id)
     try:
         if b.resumed:
@@ -67,13 +70,17 @@ def process_day(day, redo=False):
         else:
             made = loop.run(b, day, store.brief)
             tasks.note("%s: %d call-sites made or given a version; totals" % (day, len(made)))
-            b.finish(day)
-        tasks.note("%s: writing the day" % day)
-        day_sites, ledger, gaps, layout, pool, grams = b.day_sites(), b.ledger(), b.gaps(), b.layout(), b.pool(), b.grams()
-        leftover, n_left = b.leftover()
-        coverage = b.coverage()
+            with loop.step(b, day, "totals, cache prefix and prompt map"):
+                b.finish(day)
+        with loop.step(b, day, "reading the results"):
+            day_sites, ledger, gaps, layout, pool, grams = b.day_sites(), b.ledger(), b.gaps(), b.layout(), b.pool(), b.grams()
+            leftover, n_left = b.leftover()
+            coverage = b.coverage()
+        bq_day = dict(b.s.totals)
     finally:
         b.close()
+    t_write = time.time()
+    tasks.note("%s: writing the day" % day)
     recs = {r["site"]: r for uc in {d["usecase"] or "" for d in day_sites} for r in store.by_usecase(uc)}
     for d in day_sites:
         if d["site"] not in recs:                            # placed by a fingerprint whose call-site row is gone
@@ -101,7 +108,9 @@ def process_day(day, redo=False):
     store.mark_day(day, sum(d["n"] for d in day_sites), n_left)
     tasks.note("%s: cache findings" % day)
     _cache(recs)
-    tasks.note("%s: done%s" % (day, " (" + b.timing + ")" if getattr(b, "timing", None) else ""))
+    tasks.note("%s: writing took %.1f min" % (day, (time.time() - t_write) / 60))
+    tasks.note("%s: done in %.1f min: %s; %s%s" % (day, (time.time() - t_day) / 60, loop.bq_line(bq_day), loop.calls_line(loop.CALLS[c_day:]),
+                                                  "; slowest statements: " + b.timing if getattr(b, "timing", None) else ""))
     tasks.add("quality_day", {"day": day}, key="quality:" + day)
     return len(day_sites)
 

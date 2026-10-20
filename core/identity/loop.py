@@ -24,6 +24,9 @@ reason, the counts and the day are stored with the call-site: every grouping dec
 import hashlib
 import json
 import re
+import time
+from collections import Counter
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 
 from core import tasks
@@ -39,8 +42,67 @@ GIVE_UP = 2              # rounds in a row accepting nothing -> the usecase is d
 OVERLAP = 0.5            # two candidates sharing this share of the smaller one's calls are one template
 VERSION_OF = 0.5         # a candidate hitting this share of a known call-site's calls is its new version
 WORKERS = 8
-TIMEOUT_S = 180          # one model call; the transport retries 429 / 5xx / connection, a hung call does not hold a round
-CALLS = []               # one entry per model call made (the day's log counts them)
+TIMEOUT_S = 180          # one model call, tried once on a timeout (the seed is logged failed): a hung call holds its round 3 min at most
+REPLY_MAX = 16000        # the reply's cap: the json needs about 1,000 tokens; past this it is a runaway that would hit the timeout
+CALLS = []               # one entry per model call made: {s, in, out, finish, error, cost} (the log sums them)
+SLOW_CALL_S = 60         # a model call slower than this, or failed, gets its own log line
+DAY = {"day": ""}        # the day being processed, the prefix of the lines model calls write
+
+
+def _map(fn, items):
+    """fn over items, WORKERS at a time, the pool's notes kept in the running task's log."""
+    with ThreadPoolExecutor(WORKERS) as ex:
+        return list(ex.map(tasks.bind(fn), items))
+
+
+def _call(t0, r, error=None):
+    """One model call into CALLS; a slow or failed one also into the log."""
+    from app.services import llm_client
+    from validation.pricing import cost_of
+    sec = time.time() - t0
+    u = llm_client.usage(r) if r is not None else {}
+    c = {"s": sec, "in": u.get("input", 0) + u.get("cache_read", 0) + u.get("cache_write", 0), "out": u.get("output", 0),
+         "finish": (r.choices[0].finish_reason if r is not None and r.choices else None), "error": error,
+         "cost": (cost_of(model(), u) or 0) if u else 0}
+    CALLS.append(c)
+    if error or sec >= SLOW_CALL_S:
+        tasks.note("%s: model call %s: %d s, %s tokens in, %s out, finish %s%s" % (
+            DAY["day"], "failed" if error else "slow", sec, f"{c['in']:,}", f"{c['out']:,}", c["finish"], ": " + error if error else ""))
+
+
+def calls_line(calls):
+    """Model calls summed for the log: count, median and slowest seconds, tokens, cost."""
+    if not calls:
+        return "no model calls"
+    secs = sorted(c["s"] for c in calls)
+    bad = sum(1 for c in calls if c["error"])
+    return "%d model calls%s, median %d s, slowest %d s, %s tokens in, %s out, $%.2f" % (
+        len(calls), " (%d failed)" % bad if bad else "", secs[len(secs) // 2], secs[-1],
+        f"{sum(c['in'] for c in calls):,}", f"{sum(c['out'] for c in calls):,}", sum(c["cost"] for c in calls))
+
+
+def bq_line(now, before=None):
+    """BigQuery jobs summed for the log (a session's totals, minus `before`)."""
+    before = before or {"jobs": 0, "s": 0, "bytes": 0, "slot_ms": 0}
+    return "BigQuery %d jobs, %.1f min, %.1f GB read" % (now["jobs"] - before["jobs"], (now["s"] - before["s"]) / 60,
+                                                        (now["bytes"] - before["bytes"]) / 1e9)
+
+
+@contextmanager
+def step(b, day, name):
+    """A phase of the day: its wall time, BigQuery jobs and model calls, as one log line when it ends."""
+    t0, bq0, c0 = time.time(), dict(b.s.totals), len(CALLS)
+    yield
+    tasks.note("%s: %s took %.1f min (%s; %s)" % (day, name, (time.time() - t0) / 60, bq_line(b.s.totals, bq0), calls_line(CALLS[c0:])))
+
+
+def errors_line(errors):
+    """A round's failed seeds grouped by error type, one example each."""
+    kinds = Counter(e.split(":")[0] for e in errors)
+    first = {}
+    for e in errors:
+        first.setdefault(e.split(":")[0], e)
+    return "; ".join("%d %s (%s)" % (n, k, first[k][len(k) + 1:].strip()[:140]) for k, n in kinds.most_common())
 TASKS = ("classify", "extract", "answer", "draft", "summarise", "converse", "orchestrate", "other")
 OUTPUTS = ("json", "text", "tool_calls", "label")
 
@@ -99,16 +161,23 @@ def ask(heads, known, avoid=()):
     body = "\n\n".join("--- request %d%s ---\n%s" % (i + 1, " (model %s)" % h["model"] if h.get("model") else "", h["sys"] or "") for i, h in enumerate(heads))
     prompt = _PROMPT.format(n=len(heads), known=known_txt, tasks=", ".join(TASKS), outputs=", ".join(OUTPUTS), k=PHRASES, avoid=avoid_txt, heads=body)
     for attempt in range(3):                      # an empty or cut reply happens now and then: asked again
-        r = llm_client.complete(model=model(), max_tokens=registry.max_output(model()), response_format={"type": "json_object"},
-                                messages=[{"role": "user", "content": prompt}], timeout=TIMEOUT_S)
-        CALLS.append(1)
+        t0 = time.time()
+        try:
+            r = llm_client.complete(model=model(), max_tokens=min(REPLY_MAX, registry.max_output(model())), response_format={"type": "json_object"},
+                                    messages=[{"role": "user", "content": prompt}], timeout=TIMEOUT_S, retry_timeout=False)
+        except Exception as e:
+            _call(t0, None, "%s: %s" % (type(e).__name__, str(e)[:160]))
+            raise
         txt = llm_client.text(r).strip()
         if not txt:                               # json mode as a forced tool call: the object is in the call's arguments
             tc = getattr(r.choices[0].message, "tool_calls", None) if r.choices else None
             txt = (tc[0].function.arguments or "").strip() if tc else ""
         try:
-            return json.loads(txt[txt.find("{"):txt.rfind("}") + 1], strict=False)
+            out = json.loads(txt[txt.find("{"):txt.rfind("}") + 1], strict=False)
+            _call(t0, r)
+            return out
         except ValueError as e:
+            _call(t0, r, "no json object in the reply (finish %s): %r" % (r.choices[0].finish_reason if r.choices else None, txt[:80]))
             if attempt == 2:
                 raise ValueError("no json object in the reply (%s; finish %s): %r"
                                  % (e, r.choices[0].finish_reason if r.choices else None, txt[:120])) from None
@@ -210,7 +279,7 @@ def describe(b, pre, known_of, day):
     failed call leaves the site nameless."""
     if not pre:
         return {}
-    heads_of = {site: b.site_heads(rec["usecase"], site, -1, []) for site, rec in pre.items()}   # one session query at a time
+    heads_of = b.site_heads({site: rec["usecase"] for site, rec in pre.items()}, -1)
 
     def one(site):
         try:
@@ -219,8 +288,7 @@ def describe(b, pre, known_of, day):
             tasks.note("%s: describing %s failed: %s: %s" % (day, site, type(e).__name__, str(e)[:120]))
             return None
     jobs = [site for site in pre if len(heads_of[site]) == build.HEADS]
-    with ThreadPoolExecutor(WORKERS) as ex:
-        answers = dict(zip(jobs, ex.map(one, jobs)))
+    answers = dict(zip(jobs, _map(one, jobs)))
     # the model's same_as: this site is another one's template (a repeated head differing by a per-call value, say):
     # its calls move there and it becomes a version of it; chains resolve to the site that stays
     into = {}
@@ -268,7 +336,11 @@ def run(b, day, known_of, candidate=_candidate, homogeneity=mixed, prepass=bq_mi
     live = {uc for uc, n in chat.items() if n >= MIN_CALLS}
     stale, out, known, asked, ended = {}, {}, {}, set(), {}
     calls0, n_seeds, n_failed, n_accepted = len(CALLS), 0, 0, 0
-    out.update(describe(b, prepass(b, live, day), known_of, day))      # statistics first, then named by the model
+    DAY["day"] = day
+    with step(b, day, "pre-pass"):
+        pre = prepass(b, live, day)
+    with step(b, day, "describing the pre-pass call-sites"):
+        out.update(describe(b, pre, known_of, day))                     # statistics first, then named by the model
     rounds, was = 0, {}                                          # was: a usecase's unplaced calls at its last round
     for rnd in range(1, MAX_ROUNDS + 1):
         if not live:
@@ -295,6 +367,7 @@ def run(b, day, known_of, candidate=_candidate, homogeneity=mixed, prepass=bq_mi
         if not live:
             break
         rounds = rnd
+        t_round, bq_round, c_round = time.time(), dict(b.s.totals), len(CALLS)
         tasks.note("%s: round %d, %d usecases live" % (day, rnd, len(live)))
         jobs = []
         for uc in sorted(live):
@@ -316,44 +389,44 @@ def run(b, day, known_of, candidate=_candidate, homogeneity=mixed, prepass=bq_mi
         def one(j):
             c = candidate(j[0], j[1], j[2], known[j[0]])
             done.append(1)
-            tasks.note("%s: round %d, %d of %d seeds read" % (day, rnd, len(done), len(jobs)))
+            if len(done) % 10 == 0 or len(done) == len(jobs):
+                tasks.note("%s: round %d, %d of %d seeds read" % (day, rnd, len(done), len(jobs)))
             return c
-        with ThreadPoolExecutor(WORKERS) as ex:
-            cands = [c for c in ex.map(one, jobs) if c]
+        cands = [c for c in _map(one, jobs) if c]
         n_seeds += len(jobs)
         errors = [c for c in cands if c.get("error")]
         cands = [c for c in cands if not c.get("error")]
         n_failed += len(errors)
         if errors:
-            tasks.note("%s: round %d, %d model calls failed: %s" % (day, rnd, len(errors), errors[0]["error"]))
+            tasks.note("%s: round %d, %d seeds failed: %s" % (day, rnd, len(errors), errors_line([c["error"] for c in errors])))
         accepted, retry = _decide(b, cands, known, rnd) if cands else ({}, [])
         if retry:                                               # once more, told which phrases collide
-            with ThreadPoolExecutor(WORKERS) as ex:
-                again = [c for c in ex.map(lambda c: candidate(c["usecase"], c["key"], c["heads"], known[c["usecase"]], c["avoid"]), retry)
-                         if c and not c.get("error")]
+            again = [c for c in _map(lambda c: candidate(c["usecase"], c["key"], c["heads"], known[c["usecase"]], c["avoid"]), retry)
+                     if c and not c.get("error")]
             if again:
                 more, _ = _decide(b, again, known, rnd, final=True)
                 accepted.update(more)
         n_accepted += len(accepted)
         placed = b.place({c: s for c, (s, _) in accepted.items()}, rnd)
-        heads_of = {cand: b.site_heads(c["usecase"], site, rnd, [h.get("id") for h in c["heads"] if h.get("id")])
-                    for cand, (site, c) in accepted.items()}    # one session query at a time (BigQuery allows no more)
-        with ThreadPoolExecutor(WORKERS) as ex:                  # three placed calls, not the seeds: one template?
-            checks = dict(zip(accepted, ex.map(lambda cand: homogeneity(heads_of[cand]) if len(heads_of[cand]) == build.HEADS else (False, ""),
-                                               accepted)))
+        by_site = b.site_heads({site: c["usecase"] for site, c in accepted.values()}, rnd,
+                               [h["id"] for _, c in accepted.values() for h in c["heads"] if h.get("id")])   # the seeds left out
+        heads_of = {cand: by_site.get(site, []) for cand, (site, _) in accepted.items()}
+        checks = dict(zip(accepted, _map(lambda cand: homogeneity(heads_of[cand]) if len(heads_of[cand]) == build.HEADS else (False, ""),
+                                         list(accepted))))                  # three placed calls, not the seeds: one template?
         for cand, (site, c) in accepted.items():
             uc = c["usecase"]
             rec = _record(c, site, day, placed.get(site, 0), version_of=c.get("version_of"), mixed_=checks.get(cand) or (False, ""))
             out[site] = rec
             known[uc] = [s for s in known[uc] if s["site"] != site] + [{"site": site, "name": rec["profile"]["name"], "phrases": c["phrases"], "calls": placed.get(site, 0)}]
             store.save_site(rec)
-        tasks.note("%s: round %d, %d seeds read, %d call-sites accepted, %d failed" % (day, rnd, len(jobs), len(accepted), len(errors)))
+        tasks.note("%s: round %d took %.1f min: %d seeds read, %d call-sites accepted, %d failed (%s; %s)" % (
+            day, rnd, (time.time() - t_round) / 60, len(jobs), len(accepted), len(errors), bq_line(b.s.totals, bq_round), calls_line(CALLS[c_round:])))
     for uc in live:
         ended[uc] = "stopped at the round cap (%d)" % MAX_ROUNDS
     for uc, why in sorted(ended.items()):
         tasks.note("%s: %s: %s" % (day, uc, why))
-    tasks.note("%s: loop done: %d rounds, %d seeds read, %d failed, %d call-sites accepted, %d model calls"
-               % (day, rounds, n_seeds, n_failed, n_accepted, len(CALLS) - calls0))
+    tasks.note("%s: loop done: %d rounds, %d seeds read, %d failed, %d call-sites accepted; %s"
+               % (day, rounds, n_seeds, n_failed, n_accepted, calls_line(CALLS[calls0:])))
     return out
 
 

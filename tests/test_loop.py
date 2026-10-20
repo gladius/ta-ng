@@ -3,6 +3,7 @@ session) and a fake model that copies common windows of the three heads. The loo
 template, place the calls by proved phrases, leave the rare rest unplaced, see a changed template as a version of a
 known call-site, and drop a phrase the model did not copy verbatim."""
 import random
+import types
 
 from sqlalchemy import delete
 
@@ -35,6 +36,7 @@ class Day:
     def __init__(self, calls, known=()):
         self.calls = {c["id"]: c for c in calls}
         self.placed = {}                                     # id -> site
+        self.s = types.SimpleNamespace(totals={"jobs": 0, "s": 0.0, "bytes": 0, "slot_ms": 0})   # the session's job totals
         for k in known:
             for c in calls:
                 if c["usecase"] == k["usecase"] and sum(" %s " % p in c["norm"] for p in k["markers"].split("|")) >= k["need"]:
@@ -79,8 +81,9 @@ class Day:
         overlaps = [(a, b, len(sets[a] & sets[b])) for a in sets for b in sets if a < b and sets[a] & sets[b]]
         return counts, overlaps
 
-    def site_heads(self, usecase, site, rnd, not_ids):
-        return [{"sys": c["sys"], "model": c["model"]} for i, c in self.calls.items() if self.placed.get(i) == site and i not in not_ids][:loop.build.HEADS]
+    def site_heads(self, sites, rnd, not_ids=()):
+        return {site: [{"sys": c["sys"], "model": c["model"]} for i, c in self.calls.items() if self.placed.get(i) == site and i not in not_ids][:loop.build.HEADS]
+                for site in sites}
 
     def place(self, accepted, rnd):
         for cand, site in accepted.items():
@@ -201,3 +204,24 @@ def test_circuit_breaker_counts_calls_left_not_what_the_loop_accepted(monkeypatc
     assert sum("usecases live" in n for n in notes) == loop.GIVE_UP
     assert any("gave up: %d rounds took no calls" % loop.GIVE_UP in n for n in notes)
     assert len(asked) <= loop.GIVE_UP * loop.build.SEEDS * 3
+
+
+def test_the_log_lines_pool_notes_errors_calls_and_bigquery_labels():
+    """A pool thread writes to the task that started it; errors group by type; calls and jobs sum as the log says."""
+    from core import tasks
+    from core.ledger import bq
+    tasks._current.task_id = "tsk_x"
+    try:
+        seen = loop._map(lambda _: tasks._current.task_id, range(4))
+    finally:
+        tasks._current.task_id = None
+    assert seen == ["tsk_x"] * 4
+    line = loop.errors_line(["APITimeoutError: Request timed out.", "ValueError: no json object (finish length)", "APITimeoutError: Request timed out."])
+    assert line.startswith("2 APITimeoutError (Request timed out.); 1 ValueError")
+    calls = [{"s": 20, "in": 9000, "out": 900, "finish": "stop", "error": None, "cost": 0.04},
+             {"s": 180, "in": 0, "out": 0, "finish": None, "error": "APITimeoutError: x", "cost": 0}]
+    assert loop.calls_line(calls) == "2 model calls (1 failed), median 180 s, slowest 180 s, 9,000 tokens in, 900 out, $0.04"
+    assert loop.bq_line({"jobs": 5, "s": 120, "bytes": 3e9, "slot_ms": 0}, {"jobs": 2, "s": 60, "bytes": 1e9, "slot_ms": 0}) == \
+        "BigQuery 3 jobs, 1.0 min, 2.0 GB read"
+    assert bq.label("-- 7b. the prompt map\nCREATE TEMP TABLE x AS SELECT 1") == "7b. the prompt map"
+    assert bq.label("CREATE OR REPLACE TEMP TABLE cand AS SELECT * FROM UNNEST(@cands)") == "cand AS"

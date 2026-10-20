@@ -182,9 +182,10 @@ WHERE rn = 1
 _SITE_COUNTS = "SELECT site, COUNT(DISTINCT id) AS n FROM placed WHERE site IN UNNEST(@sites) GROUP BY 1"
 _MOVE = "UPDATE placed SET site = @to WHERE site = @frm"
 _SITE_HEADS = """
-SELECT s.sys, s.model FROM src s JOIN placed p ON p.id = s.id
-WHERE s.usecase = @usecase AND p.site = @site AND p.round = @round AND s.chat AND s.id NOT IN UNNEST(@not)
-ORDER BY FARM_FINGERPRINT(CONCAT(s.id, 'h')) LIMIT {heads}"""
+SELECT p.site, s.sys, s.model FROM src s JOIN placed p ON p.id = s.id
+JOIN UNNEST(@sites) k ON k.usecase = s.usecase AND k.site = p.site AND k.rnd = p.round
+WHERE s.chat AND s.id NOT IN UNNEST(@not)
+QUALIFY ROW_NUMBER() OVER (PARTITION BY p.site ORDER BY FARM_FINGERPRINT(CONCAT(s.id, 'h'))) <= {heads}"""
 
 FINISH = """
 CREATE OR REPLACE TEMP TABLE call_rows AS SELECT c.*, p.site FROM calls c JOIN placed p USING (id);
@@ -354,6 +355,7 @@ class Build:
         """With `session_id`, the day's earlier session: finished (coverage there) -> resumed, nothing runs; else, or
         with `redo`, its read is kept (src there) and only the placement is redone; gone -> read afresh."""
         self.s = bq.Session(session_id) if session_id else bq.Session()
+        self.s.day = str(day_from)
         self.resumed = bool(session_id) and not redo and self.s.has("coverage")
         self.timing = None
         if self.resumed:
@@ -365,6 +367,7 @@ class Build:
             return
         if session_id:                                      # the session is gone: start afresh
             self.s = bq.Session()
+            self.s.day = str(day_from)
         self._script(READ, {"day_from": day_from, "day_to": day_to, "prices": _prices(), "known": known, **bq.filters()}, day_from)
 
     def _script(self, sql, params, day):
@@ -405,9 +408,16 @@ class Build:
         self.s.query(_MOVE, {"frm": frm, "to": to})
         return {r["site"]: r["n"] for r in self._read(_SITE_COUNTS, {"sites": [to]})}.get(to, 0)
 
-    def site_heads(self, usecase, site, rnd, not_ids):
-        """HEADS calls placed in `site` this round, the seeds left out (text), for the homogeneity check."""
-        return self._read(_SITE_HEADS.format(heads=HEADS), {"usecase": usecase, "site": site, "round": rnd, "not": list(not_ids) or [""]})
+    def site_heads(self, sites, rnd, not_ids=()):
+        """HEADS calls placed this round in each of `sites` ({site: usecase}), the seeds left out, in one query (one
+        per site took minutes a round: a session runs one query at a time) -> {site: [{sys, model}]}."""
+        if not sites:
+            return {}
+        out = {site: [] for site in sites}
+        for r in self._read(_SITE_HEADS.format(heads=HEADS), {"sites": [{"usecase": uc or "", "site": site, "rnd": rnd} for site, uc in sites.items()],
+                                                              "not": list(not_ids) or [""]}):
+            out[r["site"]].append({"sys": r["sys"], "model": r["model"]})
+        return out
 
     # ---- the readers
     def day_sites(self):

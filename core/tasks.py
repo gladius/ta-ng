@@ -160,6 +160,20 @@ def note(text):
         pass
 
 
+def bind(fn):
+    """fn, run in another thread (a pool's), writing its notes to the task of the thread that bound it: the note's
+    task is per thread, so without this a pool thread's notes are dropped."""
+    task_id = getattr(_current, "task_id", None)
+
+    def run(*a, **k):
+        _current.task_id = task_id
+        try:
+            return fn(*a, **k)
+        finally:
+            _current.task_id = None
+    return run
+
+
 def _finish(task_id, token, error=None):
     with db.ready().begin() as c:
         c.execute(update(tasks).where(tasks.c.id == task_id, tasks.c.claim == token).values(

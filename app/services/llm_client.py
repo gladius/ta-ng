@@ -42,13 +42,17 @@ def client():
                 base, key = registry._gateway()
                 if not base:
                     raise Refused("no model gateway: set LLM_GATEWAY_URL and LLM_GATEWAY_KEY")
-                _client = openai.OpenAI(api_key=key, base_url=registry._roots(base)[-1] + "/v1")
+                # max_retries=0: the SDK's own retries (2, timeouts included) stacked on _complete_raw's 4 made one
+                # hung call cost 12 timeouts; _complete_raw is the only retry
+                _client = openai.OpenAI(api_key=key, base_url=registry._roots(base)[-1] + "/v1", max_retries=0)
     return _client
 
 
-def _complete_raw(**kw):
+def _complete_raw(retry_timeout=True, **kw):
     """Transport only: chat.completions.create, retrying 429 / 5xx / connection; another 4xx raises at once (a retried
-    bad request only costs money). Only here does the canonical model id become the gateway's routing name."""
+    bad request only costs money). A timeout is retried too unless `retry_timeout` is False (a caller with its own
+    fallback: the grouping loop logs the seed failed instead of waiting out four timeouts). Only here does the
+    canonical model id become the gateway's routing name."""
     from app.registry import serving_name
     if kw.get("model"):
         kw = {**kw, "model": serving_name(kw["model"])}
@@ -66,6 +70,8 @@ def _complete_raw(**kw):
                 raise
         except (openai.APIConnectionError, openai.APITimeoutError) as e:
             last = e
+            if isinstance(e, openai.APITimeoutError) and not retry_timeout:
+                raise
         time.sleep(min(8.0, 1.5 * (2 ** attempt)))
     if isinstance(last, openai.APIConnectionError) and not isinstance(last, openai.APITimeoutError):
         raise Unreachable(str(last)) from last              # can't connect: the endpoint itself is down. A timeout is

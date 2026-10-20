@@ -375,3 +375,27 @@ def test_the_judge_reads_the_whole_request():
     old = engine.request_text({"input_messages": [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}],
                                "tools_defined": [["t", '{"name": "t"}']]})                # no logged request
     assert old == 'SYSTEM:\nS\n\nTOOLS the model could call:\n{"name": "t"}\n\nUSER:\nU'
+
+
+def test_a_timeout_is_not_retried_when_the_caller_says_so(monkeypatch):
+    """The grouping loop's calls: one timeout raises at once (no four 3-minute waits); others keep the retries."""
+    import httpx
+    import openai
+    from app.services import llm_client
+    tries = []
+
+    class Stub:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    tries.append(1)
+                    raise openai.APITimeoutError(request=httpx.Request("POST", "http://x"))
+    monkeypatch.setattr(llm_client, "client", lambda: Stub)
+    monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
+    with pytest.raises(openai.APITimeoutError):
+        llm_client._complete_raw(model="m", messages=[], max_tokens=5, retry_timeout=False)
+    assert len(tries) == 1
+    with pytest.raises(openai.APITimeoutError):
+        llm_client._complete_raw(model="m", messages=[], max_tokens=5)
+    assert len(tries) == 5
