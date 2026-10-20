@@ -9,6 +9,7 @@ from sqlalchemy import delete
 
 from app.services import db
 from core.identity import loop, store
+from core.ledger import bq_minhash
 
 A = ("You are the billing assistant for Acme. Today is {date}. Customer {name} (account {acct}) asks about a charge. "
      "Explain every line of the bill in plain words, quote the amounts exactly, and offer the payment plan when the "
@@ -47,6 +48,9 @@ class Day:
         for c in self.calls.values():
             out[c["usecase"]] = out.get(c["usecase"], 0) + 1
         return out
+
+    def known_placed(self):
+        return len(self.placed)
 
     def seeds(self, live, rnd, asked=()):
         rows = []
@@ -225,3 +229,23 @@ def test_the_log_lines_pool_notes_errors_calls_and_bigquery_labels():
         "BigQuery 3 jobs, 1.0 min, 2.0 GB read"
     assert bq.label("-- 7b. the prompt map\nCREATE TEMP TABLE x AS SELECT 1") == "7b. the prompt map"
     assert bq.label("CREATE OR REPLACE TEMP TABLE cand AS SELECT * FROM UNNEST(@cands)") == "cand AS"
+
+
+def test_describe_survives_a_failed_naming_call(monkeypatch):
+    """One naming call failing leaves that site nameless; the others are named and the day goes on."""
+    from core.ledger import bq_minhash
+    _clean()
+    heads = [{"sys": "You are the bill explainer. Explain each line.", "model": "m"}] * loop.build.HEADS
+    b = types.SimpleNamespace(site_heads=lambda sites, rnd, not_ids=(): {s: heads for s in sites})
+    pre = {s: bq_minhash.record({"cand": s, "usecase": "billing", "phrases": ["explain each line"], "need": 1}, "2026-10-10", 9) for s in ("a", "b")}
+
+    def ask(h, known, avoid=()):
+        if ask.n == 0:
+            ask.n += 1
+            raise ValueError("no json object in the reply")
+        return {"name": "Bill explainer", "same_template": True, "same_as": None}
+    ask.n = 0
+    monkeypatch.setattr(loop, "ask", ask)
+    monkeypatch.setattr(loop, "WORKERS", 1)                     # one at a time: the first site's call is the one that fails
+    out = loop.describe(b, pre, lambda uc: [], "2026-10-10")
+    assert sorted(out) == ["a", "b"] and sorted(r["profile"]["name"] for r in out.values()) == ["", "Bill explainer"]

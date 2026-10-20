@@ -296,6 +296,7 @@ _SAMPLE = "SELECT sys, first_user, tool_names FROM site_calls WHERE site = @site
 _SAMPLE_ID = "SELECT sys, first_user, tool_names FROM src WHERE id = @id AND chat LIMIT 1"
 _SITE_CALLS = "SELECT site, usecase, id, model, sys, rn FROM site_calls WHERE site IN UNNEST(@sites)"
 _CHAT_COUNTS = "SELECT usecase, COUNT(*) AS n FROM calls GROUP BY 1"
+_KNOWN_PLACED = "SELECT COUNT(DISTINCT id) AS n FROM placed WHERE round = 0"
 
 
 _USECASES = """
@@ -385,6 +386,10 @@ class Build:
     # ---- the loop's statements
     def chat_counts(self):
         return {r["usecase"]: r["n"] for r in self._read(_CHAT_COUNTS)}
+
+    def known_placed(self):
+        """Calls the call-sites known from earlier days placed in the day's read (round 0)."""
+        return self._read(_KNOWN_PLACED)[0]["n"]
 
     def seeds(self, live, rnd, asked=()):
         return self._read(_SEEDS.format(seeds=SEEDS, heads=HEADS), {"live": list(live), "round": rnd, "asked": list(asked) or [""]})

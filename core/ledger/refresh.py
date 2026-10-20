@@ -109,6 +109,9 @@ def process_day(day, redo=False):
     tasks.note("%s: cache findings" % day)
     _cache(recs)
     tasks.note("%s: writing took %.1f min" % (day, (time.time() - t_write) / 60))
+    placed_n, left_n = sum(r.get("placed") or 0 for r in coverage), sum(r.get("unplaced") or 0 for r in coverage)
+    tasks.note("%s: %s chat calls placed in call-sites, %s left unplaced (%.1f%%)" % (
+        day, f"{placed_n:,}", f"{left_n:,}", 100 * left_n / (placed_n + left_n) if placed_n + left_n else 0))
     tasks.note("%s: done in %.1f min: %s; %s%s" % (day, (time.time() - t_day) / 60, loop.bq_line(bq_day), loop.calls_line(loop.CALLS[c_day:]),
                                                   "; slowest statements: " + b.timing if getattr(b, "timing", None) else ""))
     tasks.add("quality_day", {"day": day}, key="quality:" + day)

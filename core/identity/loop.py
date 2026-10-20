@@ -44,6 +44,8 @@ VERSION_OF = 0.5         # a candidate hitting this share of a known call-site's
 WORKERS = 8
 TIMEOUT_S = 180          # one model call, tried once on a timeout (the seed is logged failed): a hung call holds its round 3 min at most
 REPLY_MAX = 16000        # the reply's cap: the json needs about 1,000 tokens; past this it is a runaway that would hit the timeout
+# Thinking stays on (the gateway's default): off, the reply is 2.5x faster but on the sandbox's claims orchestrator the
+# model then called the response writer a version of the eligibility checker 3 times in 3 (0 in 3 with thinking).
 CALLS = []               # one entry per model call made: {s, in, out, finish, error, cost} (the log sums them)
 SLOW_CALL_S = 60         # a model call slower than this, or failed, gets its own log line
 DAY = {"day": ""}        # the day being processed, the prefix of the lines model calls write
@@ -293,7 +295,7 @@ def describe(b, pre, known_of, day):
     # its calls move there and it becomes a version of it; chains resolve to the site that stays
     into = {}
     for site, a in answers.items():
-        same = str(a.get("same_as") or "")
+        same = str((a or {}).get("same_as") or "")             # a failed call (None) leaves its site as the pre-pass made it
         if a and same and same != site and (same in pre or same in {s["site"] for s in known_of(pre[site]["usecase"])}):
             into[site] = same
     for site in list(into):
@@ -334,6 +336,9 @@ def run(b, day, known_of, candidate=_candidate, homogeneity=mixed, prepass=bq_mi
     step (both swapped in tests)."""
     chat = b.chat_counts()
     live = {uc for uc, n in chat.items() if n >= MIN_CALLS}
+    total, known_n = sum(chat.values()), b.known_placed()
+    tasks.note("%s: %d usecases, %s chat calls; %s placed by the call-sites known from earlier days (%d%%), the rest goes to "
+               "the pre-pass and the loop" % (day, len(chat), f"{total:,}", f"{known_n:,}", 100 * known_n / total if total else 0))
     stale, out, known, asked, ended = {}, {}, {}, set(), {}
     calls0, n_seeds, n_failed, n_accepted = len(CALLS), 0, 0, 0
     DAY["day"] = day
