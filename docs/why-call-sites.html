@@ -1,0 +1,176 @@
+<title>Why Call-Sites</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* the app's own palette: white, warm greys, black type, red for the problem, gold for the highlight */
+:root { --bg: #F7F6F4; --panel: #FFFFFF; --line: #E7E5E2; --line-strong: #D9D6D2; --ink: #000000; --ink-2: #5F5C59; --ink-3: #9A9693;
+  --red: #EE0000; --red-soft: #FFE9E9; --gold: #F7B500; --gold-soft: #FFF3CC; --radius: 12px; color-scheme: light;
+  --sans: "Geist", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, monospace; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans);
+  padding-block: 40px 80px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+main { max-width: 1040px; margin: 0 auto; display: grid; gap: 28px; }
+h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -.03em; }
+h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.muted { color: var(--ink-2); } .mono { font-family: var(--mono); font-size: 12px; } .small { font-size: 12px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg, 16px); padding: 20px; display: grid; gap: 16px; }
+.panel > header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+
+/* a flow: stages left to right, an arrow between, stacks inside a stage */
+.flow { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding-bottom: 4px; }
+.stage { display: grid; gap: 8px; align-content: center; min-width: 170px; flex: 1; }
+.stage > .lbl { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.arrow { flex: 0 0 36px; display: flex; align-items: center; justify-content: center; color: var(--ink-3); }
+.arrow svg { width: 24px; height: 24px; }
+.box { background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; display: grid; gap: 2px; min-width: 0; }
+.box b { font-weight: 600; }
+.box.ink { background: var(--ink); color: #FFF; border-color: var(--ink); } .box.ink .muted { color: #BDB9B5; }
+.box.red { border-color: var(--red); background: var(--red-soft); }
+.box.gold { border-color: var(--gold); background: var(--gold-soft); }
+.box.dash { border-style: dashed; color: var(--ink-2); }
+.box.out { border-color: var(--ink); border-width: 2px; }
+
+/* the log strip */
+.log { display: grid; gap: 3px; font: 12px/1.3 var(--mono); }
+.log div { display: grid; grid-template-columns: 56px 1fr 60px 58px; gap: 8px; padding: 4px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; white-space: nowrap; overflow: hidden; }
+.log div span:nth-child(2) { color: var(--red); }
+.log div span:last-child { text-align: right; }
+
+/* a tree: usecase, its call-sites, the sample under one */
+.tree { display: grid; grid-template-columns: 200px 24px 1fr; gap: 0 12px; align-items: start; }
+.tree .kids { display: grid; gap: 8px; }
+.tree .tick { border-left: 2px solid var(--line-strong); border-bottom: 2px solid var(--line-strong); height: 50%; width: 100%; border-radius: 0 0 0 8px; margin-top: 0; }
+.site { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; }
+.site .n { color: var(--ink-2); font-family: var(--mono); font-size: 12px; }
+.sample { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.sample div { border: 1px dashed var(--line-strong); border-radius: 6px; padding: 6px 8px; font-size: 12px; background: var(--bg); }
+.sample div b { display: block; font-weight: 600; }
+.sample div.hot { border-color: var(--gold); background: var(--gold-soft); border-style: solid; }
+
+/* three columns of uses */
+.uses { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.use { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; align-content: start; background: var(--bg); }
+.use h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.use .q { color: var(--ink-2); }
+.chain { display: grid; gap: 4px; }
+.chain div { padding: 6px 8px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 6px; font-size: 13px; }
+.chain div.v { border-color: var(--ink); border-width: 2px; }
+.chain div.v.bad { border-color: var(--red); }
+
+/* the two cache bars */
+.bars { display: grid; gap: 10px; }
+.bar { display: flex; height: 36px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line-strong); font: 12px var(--mono); }
+.bar div { display: flex; align-items: center; padding: 0 8px; white-space: nowrap; overflow: hidden; min-width: 0; }
+.bar .s { background: var(--gold); } .bar .d { background: var(--panel); color: var(--ink-2); } .bar .x { background: var(--red-soft); color: var(--red); }
+@media (max-width: 640px) { .tree { grid-template-columns: 1fr; } .tree .tick { display: none; } }
+</style>
+
+<main>
+  <h1>Why the auditor groups calls into call-sites</h1>
+
+  <section class="panel">
+    <header><h2>1. The log says which team. It never says which program.</h2></header>
+    <div class="flow">
+      <div class="stage" style="flex:1.6">
+        <div class="lbl">The gateway log, one row per call</div>
+        <div class="log">
+          <div><span>09:14:02</span><span>claims-orchestrator</span><span>sonnet</span><span>18,204</span></div>
+          <div><span>09:14:02</span><span>claims-orchestrator</span><span>sonnet</span><span>2,118</span></div>
+          <div><span>09:14:03</span><span>claims-orchestrator</span><span>gemini</span><span>18,310</span></div>
+          <div><span>09:14:03</span><span>assistant-platform</span><span>sonnet</span><span>41,002</span></div>
+          <div><span>09:14:04</span><span>claims-orchestrator</span><span>sonnet</span><span>2,090</span></div>
+          <div><span>09:14:04</span><span>claims-orchestrator</span><span>sonnet</span><span>18,198</span></div>
+          <div><span>…</span><span>15,000,000 rows a day</span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="stage">
+        <div class="lbl">What any finding needs</div>
+        <div class="box red"><b>Which program sent it?</b><span class="muted">same instructions, same tools, different data each time</span></div>
+        <div class="box dash">no id in the request<br>no id in the headers<br>no session id</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header><h2>2. Group the calls: usecase → call-sites → a sample of each</h2><span class="muted small">the sample is by size: smallest, largest, the quartiles, the two heaviest answers, the rest random</span></header>
+    <div class="tree">
+      <div class="box ink"><b>claims-orchestrator</b><span class="muted mono">2.4M calls · 3 models</span></div>
+      <div class="tick"></div>
+      <div class="kids">
+        <div class="site"><div><b>Eligibility checker</b><div class="n">1.2M calls · sonnet 92% · gemini 8%</div></div><div class="n">v3 since Oct 14</div></div>
+        <div class="sample">
+          <div class="hot"><b>smallest</b>2.1k tokens</div><div><b>q1</b>9k</div><div><b>median</b>18k</div><div><b>q3</b>31k</div><div class="hot"><b>largest</b>188k</div><div class="hot"><b>heaviest answer</b>6.2k out</div><div class="hot"><b>slowest</b>41 s</div><div><b>random ×8</b></div>
+        </div>
+        <div class="site"><div><b>Claim response writer</b><div class="n">840k calls · sonnet</div></div><div class="n">v1</div></div>
+        <div class="site"><div><b>Document classifier</b><div class="n">310k calls · gemini</div></div><div class="n">v2</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header><h2>3. The sample is re-sent exactly as logged; a judge compares the answers</h2><span class="muted small">per call-site, per candidate model</span></header>
+    <div class="uses">
+      <div class="use">
+        <h3>Cheaper</h3>
+        <div class="q">Would a cheaper model hold on this call-site?</div>
+        <div class="chain"><div>sample → haiku, gpt-5.4-mini</div><div>judge: match / acceptable / drift</div><div class="v">Document classifier: haiku passes 97%, −$410/day</div></div>
+      </div>
+      <div class="use">
+        <h3>Better value</h3>
+        <div class="q">Which model is best for this call-site?</div>
+        <div class="chain"><div>sample → every model the gateway serves</div><div>pass rate · cost · latency per model</div><div class="v">Eligibility checker: gemini passes, 2.1× faster</div></div>
+      </div>
+      <div class="use">
+        <h3>A release</h3>
+        <div class="q">Does the new version still answer the same?</div>
+        <div class="chain"><div>sample → the new version</div><div>judge against the original's own range</div><div class="v bad">Claim response writer: 2 of 20 drift. Hold.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header><h2>4. The cache can only be measured per call-site</h2><span class="muted small">all calls of the site, not a sample</span></header>
+    <div class="bars">
+      <div class="muted small">Eligibility checker: every call shares the same 14k-token opening</div>
+      <div class="bar"><div class="s" style="flex:14">14k identical · instructions, tools, examples</div><div class="d" style="flex:4">claim data</div></div>
+      <div class="muted small">Claim response writer: 6k shared</div>
+      <div class="bar"><div class="s" style="flex:6">6k identical</div><div class="d" style="flex:3">claim + decision</div></div>
+      <div class="muted small">The usecase as one pile: the shared part is whatever two programs happen to have in common</div>
+      <div class="bar"><div class="s" style="flex:1">1k</div><div class="x" style="flex:19">the saving is invisible</div></div>
+    </div>
+    <div class="flow">
+      <div class="stage"><div class="box"><b>shared opening</b><span class="muted">measured on the site's calls</span></div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="stage"><div class="box"><b>what the provider cached</b><span class="muted">from the log's cache counts</span></div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="stage"><div class="box out"><b>Eligibility checker</b><span>14k shared, 31% read from cache: tools sent in a changing order. Fix: $900/day</span></div></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header><h2>5. Pin and route: the gateway recognises the call-site the same way</h2></header>
+    <div class="flow">
+      <div class="stage">
+        <div class="lbl">A program's call arrives</div>
+        <div class="box"><b>asks for sonnet</b><span class="muted mono">claims-orchestrator</span></div>
+      </div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="stage">
+        <div class="lbl">Router, in the gateway</div>
+        <div class="box ink"><b>which call-site?</b><span class="muted">same signature as the audit</span></div>
+      </div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="stage">
+        <div class="lbl">Decision</div>
+        <div class="box gold"><b>Document classifier → haiku</b><span class="muted">pinned after "Cheaper" passed · 310k calls/day</span></div>
+        <div class="box"><b>Claim response writer → sonnet</b><span class="muted">release held</span></div>
+        <div class="box dash"><b>unknown site → as requested</b></div>
+      </div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="stage">
+        <div class="lbl">Kept honest</div>
+        <div class="box"><b>every new release</b><span class="muted">the pin is re-audited; unpinned if it drifts</span></div>
+      </div>
+    </div>
+  </section>
+</main>
