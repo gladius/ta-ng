@@ -1,0 +1,580 @@
+<title>Model Validation</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one column of three sections; each section = a heading, one diagram, a few facts. Light only (the app's look). */
+:root {
+  --bg: #F7F6F4; --panel: #FFFFFF; --line: #E7E5E2; --line-strong: #D9D6D2;
+  --ink: #000000; --ink-2: #5F5C59; --ink-3: #9A9693;
+  --red: #EE0000; --red-soft: #FDECEC; --gold: #F7B500; --gold-soft: #FFF3CC;
+  --green: #1E8E4E; --green-soft: #E6F4EC;
+  --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 40px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 56px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; }
+h2 { font-size: 21px; font-weight: 650; letter-spacing: -0.01em; }
+h3 { font-size: 14px; font-weight: 600; }
+p { margin: 0; }
+.muted { color: var(--ink-2); }
+.small { font-size: 12.5px; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.label { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+.num { font-variant-numeric: tabular-nums; }
+
+header { display: grid; gap: 10px; }
+header p { font-size: 16px; max-width: 62ch; color: var(--ink-2); }
+nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+nav a { color: var(--ink); text-decoration: none; border: 1px solid var(--line-strong); background: var(--panel);
+  border-radius: 999px; padding: 4px 12px; font-size: 13px; }
+nav a:hover, nav a:focus-visible { border-color: var(--ink); outline: none; }
+
+section { display: grid; gap: 20px; }
+.sec-head { display: grid; gap: 6px; }
+.sec-head p { max-width: 70ch; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; min-width: 0; }
+
+/* the pipeline */
+.pipe { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; }
+.stage { position: relative; padding: 14px 14px 14px 0; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.stage + .stage { padding-left: 18px; border-left: 1px dashed var(--line-strong); }
+.stage .n { font: 600 11px var(--mono); color: var(--ink-3); }
+.stage .big { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+.stage p { font-size: 12.5px; color: var(--ink-2); }
+.stage.key .big { color: var(--red); }
+@media (max-width: 860px) {
+  .pipe { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stage, .stage + .stage { padding: 14px; border-left: 0; border-top: 1px dashed var(--line-strong); }
+}
+@media (max-width: 460px) { .pipe { grid-template-columns: 1fr; } }
+
+.strats { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip { display: inline-flex; gap: 6px; align-items: baseline; border: 1px solid var(--line-strong); border-radius: 6px;
+  padding: 5px 10px; background: var(--panel); font-size: 13px; }
+.chip b { font-weight: 600; }
+.chip span { color: var(--ink-2); font-size: 12px; }
+
+/* the pass rule */
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+.req { display: grid; gap: 14px; }
+.req-top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+.row { display: grid; grid-template-columns: 84px 1fr; gap: 10px; align-items: center; }
+.row .who { font-size: 12px; color: var(--ink-2); }
+.dots { display: flex; gap: 6px; flex-wrap: wrap; }
+.dot { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font: 600 10px var(--mono);
+  border: 1.5px solid var(--ink); background: var(--panel); color: var(--ink); }
+.dot.logged { background: var(--ink); color: var(--panel); }
+.dot.match { background: var(--green-soft); border-color: var(--green); color: var(--green); }
+.dot.ok { background: var(--gold-soft); border-color: var(--gold); color: #8A6400; }
+.dot.drift { background: var(--red-soft); border-color: var(--red); color: var(--red); }
+.dot.off { border-style: dashed; border-color: var(--ink-3); color: var(--ink-3); }
+.meter { display: grid; gap: 6px; }
+.bar { position: relative; height: 10px; background: var(--line); border-radius: 5px; }
+.bar i { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--ink); }
+.bar i.cand { background: var(--green); }
+.bar i.cand.bad { background: var(--red); }
+.bar .tick { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--red); }
+.bar .tick.floor { background: var(--ink-3); }
+.mrow { display: grid; grid-template-columns: 84px 1fr 44px; gap: 10px; align-items: center; font-size: 12px; }
+.mrow .v { text-align: right; font-family: var(--mono); }
+.verdict { font-weight: 600; font-size: 13px; padding: 3px 10px; border-radius: 999px; }
+.verdict.pass { background: var(--green-soft); color: var(--green); }
+.verdict.fail { background: var(--red-soft); color: var(--red); }
+.verdict.none { background: var(--line); color: var(--ink-2); }
+
+/* the judge */
+.judge { display: grid; grid-template-columns: auto auto 1fr; gap: 10px 14px; align-items: center; font-size: 13px; }
+.judge .q { border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 10px; background: var(--bg); }
+.judge .arrow { color: var(--ink-3); font-family: var(--mono); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--ink-2); }
+.legend span { display: inline-flex; gap: 6px; align-items: center; }
+.legend .dot { width: 14px; height: 14px; }
+
+/* sampling */
+.strip { display: grid; gap: 4px; }
+.strip svg { width: 100%; height: auto; display: block; overflow: visible; }
+.picks { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.pick { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--panel); display: grid; gap: 4px; align-content: start; }
+.pick .k { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.pick .k b { font-size: 13px; }
+.pick .k .mono { color: var(--ink-3); }
+.pick p { font-size: 12.5px; color: var(--ink-2); }
+.mix { display: grid; gap: 10px; }
+.stack { display: flex; height: 28px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line-strong); }
+.stack div { display: grid; place-items: center; font: 500 11px var(--mono); color: var(--panel); white-space: nowrap; overflow: hidden; }
+.tally { display: flex; gap: 4px; flex-wrap: wrap; }
+.tally i { width: 14px; height: 14px; border-radius: 3px; display: block; }
+
+/* challenges */
+.chal { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.c { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 8px; align-content: start; }
+.c .top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.c .fix { font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 8px; }
+.c .fix b { font-weight: 600; }
+.st { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.st.done { background: var(--green-soft); color: var(--green); }
+.st.open { background: var(--red-soft); color: var(--red); }
+.st.limit { background: var(--gold-soft); color: #8A6400; }
+.c.open { border-color: var(--red); }
+h2 .st { vertical-align: middle; margin-left: 8px; }
+footer { font-size: 12px; color: var(--ink-3); }
+
+/* finding the call-sites */
+.what .sec-head p { max-width: 75ch; }
+.tree { display: grid; grid-template-columns: auto auto auto auto minmax(0, 1fr); gap: 12px; align-items: center; }
+.t-lvl { display: grid; gap: 6px; justify-items: start; min-width: 0; }
+.t-sites { gap: 8px; justify-items: stretch; }
+.t-site { display: grid; gap: 2px; border: 1px solid var(--ink); border-radius: 8px; padding: 8px 12px; background: var(--panel); min-width: 0; }
+.t-site b { font-size: 13px; }
+.t-site .mono { color: var(--ink-2); overflow-wrap: anywhere; }
+@media (max-width: 760px) { .tree { grid-template-columns: 1fr; } .tree > .arrow { transform: rotate(90deg); justify-self: start; } }
+.aka { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.logrow { display: flex; flex-wrap: wrap; gap: 8px; }
+.logrow .f { display: grid; gap: 2px; border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 10px;
+  font: 12.5px var(--mono); background: var(--bg); min-width: 0; }
+.logrow .f.wide { flex: 1 1 220px; }
+.logrow .k { font: 600 10.5px var(--sans); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
+.logrow .f.miss { border: 1.5px dashed var(--red); background: var(--red-soft); color: var(--red); }
+.logrow .f.miss .k { color: var(--red); }
+.steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 0; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 26px 1fr; column-gap: 10px; padding: 8px 0;
+  border-top: 1px solid var(--line); font-size: 13px; }
+.steps li:first-child { border-top: 0; }
+.steps li::before { content: counter(s); grid-row: span 2; width: 22px; height: 22px; border-radius: 50%; display: grid;
+  place-items: center; font: 600 11px var(--mono); border: 1.5px solid var(--ink); }
+.steps li span { color: var(--ink-2); font-size: 12.5px; }
+.steps li.key::before { background: var(--red); border-color: var(--red); color: var(--panel); }
+.site-id { border: 1px solid var(--line-strong); border-radius: 8px; padding: 12px; display: grid; gap: 8px; background: var(--bg); }
+.sid-name { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+.phr { font: 12.5px var(--mono); background: var(--gold-soft); border: 1px solid var(--gold); border-radius: 5px; padding: 5px 8px; }
+.flowline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.node { display: inline-block; border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 10px; background: var(--panel); font-size: 13px; }
+.node.dark { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.arrow { color: var(--ink-3); font-family: var(--mono); }
+
+/* pin and route */
+.chain { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr; gap: 10px; align-items: stretch; }
+.chain .arrow { align-self: center; }
+.link { border: 1px solid var(--line-strong); border-radius: 8px; padding: 12px; display: grid; gap: 4px; align-content: start; min-width: 0; }
+.link .n { font: 600 10.5px var(--mono); color: var(--ink-3); }
+.link p { font-size: 12.5px; color: var(--ink-2); }
+.link.dark { background: var(--ink); border-color: var(--ink); color: var(--panel); }
+.link.dark .n, .link.dark p { color: var(--line-strong); }
+@media (max-width: 760px) { .chain { grid-template-columns: 1fr; } .chain .arrow { transform: rotate(90deg); justify-self: center; } }
+.route { display: grid; grid-template-columns: auto auto auto auto minmax(0, 1fr); gap: 12px; align-items: center; }
+.r-in, .r-q { display: grid; gap: 4px; justify-items: start; }
+.r-out { display: grid; gap: 8px; min-width: 0; }
+.r-case { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 2px 12px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.r-case .r-what { font-size: 13px; font-weight: 600; }
+.r-case .r-to { font: 12.5px var(--mono); }
+.r-case .r-why { grid-column: 1 / -1; font-size: 12px; color: var(--ink-2); }
+.r-case.pin { background: var(--gold-soft); border-color: var(--gold); }
+@media (max-width: 860px) { .route { grid-template-columns: 1fr; } .route > .arrow { transform: rotate(90deg); justify-self: start; } .r-case { grid-template-columns: 1fr; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="label">Token Auditor</span>
+    <h1>Model validation</h1>
+    <p>Can a call-site move from its model to another one and still do the same job? We answer that per call-site, from its own logged requests.</p>
+    <nav aria-label="Sections">
+      <a href="#identify">Finding the call-sites</a>
+      <a href="#validation">How a model is validated</a>
+      <a href="#sampling">Why we sample this way</a>
+      <a href="#challenges">Challenges</a>
+      <a href="#route">Pin and route (experimental)</a>
+    </nav>
+  </header>
+
+  <!-- ============================================================ 1. IDENTIFY -->
+  <section id="identify">
+    <div class="sec-head">
+      <span class="label">1</span>
+      <h2>Finding the call-sites</h2>
+      <p class="muted">Everything after this works per call-site. The log has no call-site id, so we can't pull a call-site's calls by id. We have to find them first.</p>
+    </div>
+
+    <div class="panel what" style="display:grid; gap:16px">
+      <div class="sec-head">
+        <h3>What is a call-site?</h3>
+        <p><b>One place in a program's code that calls the model.</b> Every call from there uses the same prompt template and does the same job; only the data changes. It is the smallest unit where "can a cheaper model do this?" has one answer.</p>
+      </div>
+      <div class="tree">
+        <div class="t-lvl"><span class="label">usecase · the team</span><span class="node">uc-claims-orchestrator</span></div>
+        <span class="arrow">→</span>
+        <div class="t-lvl"><span class="label">program</span><span class="node">claims agent</span></div>
+        <span class="arrow">→</span>
+        <div class="t-lvl t-sites"><span class="label">call-sites · one template each</span>
+          <div class="t-site"><b>Eligibility checker</b><span class="mono">"Is this claim covered? Answer ELIGIBLE or NOT_ELIGIBLE."</span></div>
+          <div class="t-site"><b>Document classifier</b><span class="mono">"Is this a receipt, an invoice or a medical report?"</span></div>
+          <div class="t-site"><b>Claim response writer</b><span class="mono">"Write the letter to the customer."</span></div>
+        </div>
+      </div>
+      <p class="small muted">The classifier may run fine on a much cheaper model; the letter writer may not. Judged as one usecase, the answer is a blend that is wrong for both.</p>
+      <div class="aka">
+        <span class="label">Also called</span>
+        <span class="chip"><b>prompt template</b><span>the text it fills in</span></span>
+        <span class="chip"><b>LLM call site</b><span>the programming term</span></span>
+        <span class="chip"><b>prompt name / id</b><span>prompt-management tools</span></span>
+        <span class="chip"><b>span name</b><span>tracing tools</span></span>
+        <span class="chip"><b>agent step / node</b><span>agent frameworks</span></span>
+        <span class="chip"><b>feature</b><span>cost dashboards</span></span>
+      </div>
+      <p class="small muted">In those tools the program sends that name with each call. Our log has none of them, so we work it out from the text.</p>
+    </div>
+
+    <div class="panel" style="display:grid; gap:14px">
+      <span class="label">What one log row carries</span>
+      <div class="logrow">
+        <span class="f"><span class="k">usecase</span>uc-claims-orchestrator</span>
+        <span class="f"><span class="k">model</span>claude-sonnet-5</span>
+        <span class="f wide"><span class="k">request</span>system prompt, messages, tools…</span>
+        <span class="f"><span class="k">answer</span>…</span>
+        <span class="f"><span class="k">tokens · latency</span>6,210 · 3.4 s</span>
+        <span class="f miss"><span class="k">call-site id</span>not in the log</span>
+        <span class="f miss"><span class="k">program · session</span>not in the log</span>
+      </div>
+      <p class="small muted">The usecase is the team. One team runs many programs, and each program makes several kinds of calls. Only the request text says which one it is.</p>
+    </div>
+
+    <div class="grid2">
+      <div class="panel" style="display:grid; gap:14px">
+        <div class="req-top"><h3>The first time: the long way</h3><span class="mono muted">once per new call-site</span></div>
+        <ol class="steps">
+          <li><b>Read the day</b><span>every call of every usecase</span></li>
+          <li><b>Look for text that repeats</b><span>instruction lines shared by many calls</span></li>
+          <li><b>Group the calls that share it</b><span>one group ≈ one template</span></li>
+          <li><b>One model call per group</b><span>names it, says what it does, proposes its phrases</span></li>
+          <li class="key"><b>Prove each phrase by count</b><span>it must hit this group's calls and no one else's</span></li>
+          <li><b>Place the calls</b><span>a call no phrase proves stays unplaced; never guessed</span></li>
+        </ol>
+      </div>
+      <div class="panel" style="display:grid; gap:14px">
+        <div class="req-top"><h3>After that: the phrases are the id</h3><span class="mono muted">every next day</span></div>
+        <div class="site-id">
+          <div class="sid-name"><b>Eligibility checker</b><span class="mono muted">uc-claims-orchestrator</span></div>
+          <div class="phr">"Decide whether the claim is covered under the policy below"</div>
+          <div class="phr">"Answer ELIGIBLE or NOT_ELIGIBLE and cite the clause"</div>
+        </div>
+        <div class="flowline">
+          <span class="node">new call</span><span class="arrow">→</span>
+          <span class="node">phrases match?</span><span class="arrow">→</span>
+          <span class="node dark">Eligibility checker</span>
+        </div>
+        <p class="small muted">Known phrases place most calls at once, with one query and no model call. Only calls nothing places take the long way. The same phrases let the router recognise a live call (section 5).</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2. VALIDATION -->
+  <section id="validation">
+    <div class="sec-head">
+      <span class="label">2</span>
+      <h2>How a model is validated</h2>
+      <p class="muted">The same steps for every model and every reason: a cheaper model, a better-value one, a new release.</p>
+    </div>
+
+    <div class="panel">
+      <div class="pipe">
+        <div class="stage">
+          <span class="n">CALL-SITE</span>
+          <span class="big">1 template</span>
+          <p>One prompt template, found by its phrases (section 1). Everything below is measured on it alone.</p>
+        </div>
+        <div class="stage">
+          <span class="n">SAMPLE</span>
+          <span class="big num">12</span>
+          <p>Logged requests, picked by size and speed (section 3).</p>
+        </div>
+        <div class="stage">
+          <span class="n">ORIGINAL</span>
+          <span class="big num">1 + 4</span>
+          <p>The logged answer plus 4 fresh re-runs of the same request, sent exactly as logged. That is the original's own range.</p>
+        </div>
+        <div class="stage">
+          <span class="n">CANDIDATE</span>
+          <span class="big num">3 → 5</span>
+          <p>3 answers per request. 2 more only when one of the 3 isn't a pass.</p>
+        </div>
+        <div class="stage">
+          <span class="n">JUDGE</span>
+          <span class="big">reads all</span>
+          <p>The whole request and every answer. Never cut. Each candidate answer gets a verdict.</p>
+        </div>
+        <div class="stage key">
+          <span class="n">FINDING</span>
+          <span class="big">pass / fail</span>
+          <p>Per call-site and model, with cost and latency from the same calls. Valid 30 days, or until the prompt changes.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="strats">
+      <span class="label">Candidates come from</span>
+      <span class="chip"><b>Cheaper</b><span>lower tiers, same provider first, open-weight · up to 3</span></span>
+      <span class="chip"><b>Better value</b><span>one tier up, other providers' same tier · up to 3</span></span>
+      <span class="chip"><b>A release</b><span>the new model, on every call-site</span></span>
+      <span class="chip"><b>Manual</b><span>the models you name</span></span>
+    </div>
+
+    <div class="grid2">
+      <div class="panel req">
+        <div class="req-top">
+          <h3>One request: the candidate passes</h3>
+          <span class="verdict pass">pass</span>
+        </div>
+        <div class="row"><span class="who">original</span>
+          <div class="dots"><span class="dot logged" title="logged answer">L</span><span class="dot">1</span><span class="dot">2</span><span class="dot">3</span><span class="dot drift">4</span></div></div>
+        <div class="row"><span class="who">candidate</span>
+          <div class="dots"><span class="dot match">1</span><span class="dot ok">2</span><span class="dot match">3</span></div></div>
+        <div class="meter">
+          <div class="mrow"><span class="muted">original agrees with itself</span><div class="bar"><i style="width:80%"></i><span class="tick floor" style="left:60%" title="floor 60%"></span></div><span class="v">80%</span></div>
+          <div class="mrow"><span class="muted">candidate fits its range</span><div class="bar"><i class="cand" style="width:100%"></i><span class="tick" style="left:60%" title="bar 80% − 20 = 60%"></span></div><span class="v">3/3</span></div>
+        </div>
+        <p class="small muted">The bar is the original's own agreement minus 20 points: 80 − 20 = <b>60%</b>. Three clear answers, so no extra runs.</p>
+      </div>
+
+      <div class="panel req">
+        <div class="req-top">
+          <h3>One request: nothing can be certified</h3>
+          <span class="verdict none">unstable original</span>
+        </div>
+        <div class="row"><span class="who">original</span>
+          <div class="dots"><span class="dot logged">L</span><span class="dot drift">1</span><span class="dot">2</span><span class="dot drift">3</span><span class="dot drift">4</span></div></div>
+        <div class="row"><span class="who">candidate</span>
+          <div class="dots"><span class="dot off">–</span><span class="dot off">–</span><span class="dot off">–</span></div></div>
+        <div class="meter">
+          <div class="mrow"><span class="muted">original agrees with itself</span><div class="bar"><i style="width:40%"></i><span class="tick floor" style="left:60%"></span></div><span class="v">40%</span></div>
+        </div>
+        <p class="small muted">Below the <b>60%</b> floor the original has no stable behaviour on this request. A candidate can't be held to it, so the request isn't counted.</p>
+      </div>
+    </div>
+
+    <div class="panel" style="display:grid; gap:14px">
+      <h3>The judge, per candidate answer</h3>
+      <div class="judge">
+        <span class="q">identical to one of the original's?</span><span class="arrow">yes →</span><span><span class="verdict pass">match</span> <span class="small muted">no judge call</span></span>
+        <span class="q">1 vote: a pass?</span><span class="arrow">yes →</span><span class="small muted">done</span>
+        <span class="q">not a pass</span><span class="arrow">→</span><span class="small muted">2 more votes, the majority decides</span>
+      </div>
+      <div class="legend">
+        <span><i class="dot match"></i>match: same as one of the original's answers</span>
+        <span><i class="dot ok"></i>acceptable: differs only where the original also varies</span>
+        <span><i class="dot drift"></i>drift: a changed decision, value or action, or an omission</span>
+        <span><i class="dot off"></i>unclear</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2. SAMPLING -->
+  <section id="sampling">
+    <div class="sec-head">
+      <span class="label">3</span>
+      <h2>Why we sample this way</h2>
+      <p class="muted">A model rarely fails on the typical request. It fails at the edges: the tiny input, the huge one, the long answer, the slow tool loop. 12 picks cover the edges first, then the middle.</p>
+    </div>
+
+    <div class="panel" style="display:grid; gap:22px">
+      <div class="strip"><span class="label">Prompt size, one call-site's day (log scale)</span><svg id="s-prompt" viewBox="0 0 960 92" role="img" aria-label="Prompt sizes with the five size picks marked"></svg></div>
+      <div class="strip"><span class="label">Answer size</span><svg id="s-answer" viewBox="0 0 960 80" role="img" aria-label="Answer sizes with the two heaviest marked"></svg></div>
+      <div class="strip"><span class="label">Latency</span><svg id="s-lat" viewBox="0 0 960 80" role="img" aria-label="Latencies with the two slowest marked"></svg></div>
+      <p class="small muted">Example distribution. Grey: the day's calls. Marked: what the 12 picks take. 3 more come at random from the rest.</p>
+    </div>
+
+    <div class="picks">
+      <div class="pick"><div class="k"><b>Smallest prompt</b><span class="mono">1</span></div><p>Empty fields, a missing document, one-line input. Cheap models tend to invent what isn't there.</p></div>
+      <div class="pick"><div class="k"><b>Largest prompt</b><span class="mono">1</span></div><p>Long context: the model must still find the rule buried in the middle. Also catches a context window that is too small.</p></div>
+      <div class="pick"><div class="k"><b>Median and quartiles</b><span class="mono">3</span></div><p>The bulk of the traffic, so the finding speaks for normal days too.</p></div>
+      <div class="pick"><div class="k"><b>2 heaviest answers</b><span class="mono">2</span></div><p>Long outputs: where a weaker model stops early, skips a section or breaks the format.</p></div>
+      <div class="pick"><div class="k"><b>2 slowest</b><span class="mono">2</span></div><p>Usually the hardest reasoning or the longest tool loop. Also where a faster model pays off most.</p></div>
+      <div class="pick"><div class="k"><b>Random</b><span class="mono">3</span></div><p>Variety we didn't think to measure.</p></div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel mix">
+        <h3>Per call-site, not per usecase</h3>
+        <p class="small muted">A usecase with three call-sites. 12 random requests from the usecase:</p>
+        <div class="stack"><div style="flex:86;background:var(--ink)">Eligibility checker 86%</div><div style="flex:11;background:var(--ink-2)">11%</div><div style="flex:3;background:var(--red)"></div></div>
+        <div class="tally" aria-label="10 from the big site, 2 from the middle one, none from the small one"><i style="background:var(--ink)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink-2)"></i><i style="background:var(--ink-2)"></i></div>
+        <p class="small">The 3% call-site gets <b style="color:var(--red)">none</b>, yet it may be the one that breaks. Per call-site, each gets its own 12 and its own verdict.</p>
+      </div>
+      <div class="panel mix">
+        <h3>Breadth over depth</h3>
+        <p class="small muted">The same budget, spent two ways:</p>
+        <div class="row"><span class="who">1 request × 36</span><div class="tally"><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i><i style="background:var(--ink-3)"></i></div></div>
+        <div class="row"><span class="who">12 requests × 3</span><div class="tally"><i style="background:var(--ink)"></i><i style="background:var(--ink-2)"></i><i style="background:var(--red)"></i><i style="background:var(--gold)"></i><i style="background:var(--green)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink-2)"></i><i style="background:var(--red)"></i><i style="background:var(--gold)"></i><i style="background:var(--green)"></i><i style="background:var(--ink)"></i><i style="background:var(--ink-2)"></i></div></div>
+        <p class="small">Drift shows on <b>different</b> requests far more than on repeats of one. So 3 answers first, and 5 only where a doubt appears.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4. CHALLENGES -->
+  <section id="challenges">
+    <div class="sec-head">
+      <span class="label">4</span>
+      <h2>Challenges</h2>
+      <p class="muted">What makes this hard, and where each one stands.</p>
+    </div>
+
+    <div class="chal">
+      <div class="c">
+        <div class="top"><h3>The log never says which program sent a call</h3><span class="st done">handled</span></div>
+        <p class="small muted">The gateway log has the team (usecase), the model and the text. No program id, no session id, nothing in the headers.</p>
+        <p class="fix"><b>What we do:</b> find each call-site once by the text it repeats; its proven phrases then place its calls every day (section 1).</p>
+      </div>
+      <div class="c open">
+        <div class="top"><h3>One wrapper, many agents</h3><span class="st open">open</span></div>
+        <p class="small muted">A shared agent framework opens every call with the same long text. Its agents differ only after it. One usecase: 451 different tool lists, about 27 calls each, read as one call-site.</p>
+        <p class="fix"><b>Next:</b> a second level under the call-site, split by tool list or the text after the shared opening, each split proven by count.</p>
+      </div>
+      <div class="c">
+        <div class="top"><h3>Values inside the template</h3><span class="st done">handled</span></div>
+        <p class="small muted">Names, dates, ids written into the instructions make one template look like thousands.</p>
+        <p class="fix"><b>What we do:</b> only text that repeats across many calls defines a call-site; one-off values never do.</p>
+      </div>
+      <div class="c">
+        <div class="top"><h3>The original disagrees with itself</h3><span class="st done">handled</span></div>
+        <p class="small muted">Asked twice, the same model gives different answers. An exact-match test would fail every model, the original too.</p>
+        <p class="fix"><b>What we do:</b> 4 re-runs give the original's own range; the candidate is held to that. Below 60% self-agreement: not certified.</p>
+      </div>
+      <div class="c">
+        <div class="top"><h3>Requests too large for the judge</h3><span class="st done">handled</span></div>
+        <p class="small muted">A cut request would hide exactly the part that broke.</p>
+        <p class="fix"><b>What we do:</b> never cut. Too large means "not verified", shown as such.</p>
+      </div>
+      <div class="c">
+        <div class="top"><h3>Agents run in many steps</h3><span class="st limit">known limit</span></div>
+        <p class="small muted">A run is a chain of calls with tool results in between. We can't run the tools again.</p>
+        <p class="fix"><b>What we do:</b> each call is replayed alone with its logged history. A different tool call or argument counts as a changed action: drift.</p>
+      </div>
+      <div class="c">
+        <div class="top"><h3>Prompts change</h3><span class="st done">handled</span></div>
+        <p class="small muted">A team edits its template; last month's verdict says nothing about the new one.</p>
+        <p class="fix"><b>What we do:</b> a finding holds for the prompt version it was measured on, and for 30 days at most.</p>
+      </div>
+      <div class="c">
+        <div class="top"><h3>The gateway is shared production</h3><span class="st done">handled</span></div>
+        <p class="small muted">Our re-runs must not hit a cache, land in the log, or be counted as a team's traffic.</p>
+        <p class="fix"><b>What we do:</b> every re-run and judge call goes out with no-cache and no-log.</p>
+      </div>
+      <div class="c">
+        <div class="top"><h3>It costs money</h3><span class="st done">handled</span></div>
+        <p class="small muted">Per request: 4 original re-runs, up to 5 per candidate, plus judge votes. Reading a day of the log bills the whole day.</p>
+        <p class="fix"><b>What we do:</b> a cost estimate before each audit and a hard budget on its job; a read over 2 TB is refused before it runs.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5. PIN AND ROUTE -->
+  <section id="route">
+    <div class="sec-head">
+      <span class="label">5</span>
+      <h2>Pin and route <span class="st limit">experimental</span></h2>
+      <p class="muted">A passing finding becomes a pin: this call-site may use this model. The router then sends that call-site's live calls to it. Each step stands on the one before.</p>
+    </div>
+
+    <div class="panel">
+      <div class="chain">
+        <div class="link"><span class="n">1 · FIND</span><b>Call-site</b><p>phrases proven by count</p></div>
+        <span class="arrow">→</span>
+        <div class="link"><span class="n">2 · VALIDATE</span><b>Finding</b><p>passes on its own 12 requests</p></div>
+        <span class="arrow">→</span>
+        <div class="link"><span class="n">3 · PIN</span><b>Choice</b><p>set by the router or a person, never by an audit</p></div>
+        <span class="arrow">→</span>
+        <div class="link dark"><span class="n">4 · ROUTE</span><b>Live call</b><p>recognised by the same phrases</p></div>
+      </div>
+      <p class="small muted" style="margin-top:14px">If two call-sites were merged in step 1, the verdict of one would be applied to the other. That is why a call is placed only when a count proves it, and why splitting too much is the safe mistake.</p>
+    </div>
+
+    <div class="panel" style="display:grid; gap:16px">
+      <h3>A live call at the router</h3>
+      <div class="route">
+        <div class="r-in"><span class="node dark">call arrives</span><span class="small muted">asks for claude-sonnet-5</span></div>
+        <span class="arrow">→</span>
+        <div class="r-q"><span class="node">which call-site?</span><span class="small muted">match its phrases</span></div>
+        <span class="arrow">→</span>
+        <div class="r-out">
+          <div class="r-case pin"><span class="r-what">Document classifier · pinned</span><span class="r-to">→ claude-haiku-4-5</span><span class="r-why">a finding passed; the call is inside the guard</span></div>
+          <div class="r-case"><span class="r-what">Claim response writer · no pin</span><span class="r-to">→ claude-sonnet-5</span><span class="r-why">the finding failed or doesn't exist yet</span></div>
+          <div class="r-case"><span class="r-what">Pinned, but outside the guard</span><span class="r-to">→ claude-sonnet-5</span><span class="r-why">e.g. a prompt larger than anything validated</span></div>
+          <div class="r-case"><span class="r-what">Unknown call, or the lookup fails</span><span class="r-to">→ claude-sonnet-5</span><span class="r-why">fail open: never toward the cheaper model</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="picks">
+      <div class="pick"><div class="k"><b>The guard</b></div><p>A pin holds for the part of the traffic the validation covered: e.g. prompts under the largest one sampled. Outside it, the requested model.</p></div>
+      <div class="pick"><div class="k"><b>Pins expire</b></div><p>When the call-site's prompt changes, when the model behind a name changes, and after 30 days. The next audit earns it again.</p></div>
+      <div class="pick"><div class="k"><b>A new release</b></div><p>Re-audited on every pinned call-site before it takes traffic. If it drifts, the pin stays on the old model.</p></div>
+      <div class="pick"><div class="k"><b>Never downgraded</b></div><p>A deny-list outranks any finding: regulated decisions, safety checks, legal text a customer sees.</p></div>
+    </div>
+  </section>
+
+  <footer>The engine's settings: 12 samples, 4 re-runs, 3 then 5 candidate answers, 3 judge votes, 60% floor, 20-point margin, judge claude-sonnet-5, findings valid 30 days. Distributions and call-site names are examples.</footer>
+</div>
+
+<script>
+(function () {
+  // Seeded example data: one call-site's day, about 600 calls.
+  let s = 7;
+  const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const normal = () => Math.sqrt(-2 * Math.log(rnd())) * Math.cos(2 * Math.PI * rnd());
+  const N = 600;
+  const prompt = [], answer = [], lat = [];
+  for (let i = 0; i < N; i++) {
+    prompt.push(Math.exp(Math.log(6000) + 0.75 * normal()));
+    answer.push(Math.exp(Math.log(420) + 0.65 * normal()));
+    lat.push(Math.exp(Math.log(3.2) + 0.55 * normal()));
+  }
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (tag, a, parent) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); parent.appendChild(e); return e; };
+  const fmt = (v, unit) => unit === 's' ? v.toFixed(1) + ' s' : v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'k' : Math.round(v) + '';
+
+  function strip(id, data, unit, marks, ticks) {
+    const svg = document.getElementById(id), W = 960, L = 10, R = 950;
+    const H = +svg.getAttribute('viewBox').split(' ')[3], base = H - 22;
+    const lo = Math.log(ticks[0]), hi = Math.log(ticks[ticks.length - 1]);
+    const x = v => L + (Math.log(Math.min(Math.max(v, ticks[0]), ticks[ticks.length - 1])) - lo) / (hi - lo) * (R - L);
+    el('line', { x1: L, x2: R, y1: base, y2: base, stroke: '#D9D6D2', 'stroke-width': 1 }, svg);
+    for (const t of ticks) {
+      el('line', { x1: x(t), x2: x(t), y1: base, y2: base + 4, stroke: '#D9D6D2' }, svg);
+      const tx = el('text', { x: x(t), y: base + 16, 'text-anchor': 'middle', 'font-size': 11, fill: '#9A9693', 'font-family': 'Geist Mono, monospace' }, svg);
+      tx.textContent = fmt(t, unit) + (unit === 's' ? '' : ' tok');
+    }
+    let j = 3;
+    for (const v of data) { j = (j * 69069 + 1) % 4294967296; el('circle', { cx: x(v), cy: base - 8 - (j / 4294967296) * 18, r: 2.2, fill: '#9A9693', 'fill-opacity': 0.35 }, svg); }
+    marks.forEach((m, k) => {
+      const cx = x(m.v), lift = m.row ? 20 : 0;
+      el('line', { x1: cx, x2: cx, y1: base - 2, y2: base - 40 - lift, stroke: m.color, 'stroke-width': 1.5 }, svg);
+      el('circle', { cx, cy: base - 17, r: 6, fill: m.color, stroke: '#FFFFFF', 'stroke-width': 1.5 }, svg);
+      const t = el('text', { x: cx, y: base - 44 - lift, 'text-anchor': m.anchor || 'middle', 'font-size': 12, 'font-weight': 600, fill: '#000000', 'font-family': 'Geist, sans-serif' }, svg);
+      t.textContent = m.label;
+    });
+  }
+  const sorted = a => a.slice().sort((p, q) => p - q);
+  const P = sorted(prompt), A = sorted(answer), T = sorted(lat), q = (a, f) => a[Math.floor(f * (a.length - 1))];
+  strip('s-prompt', prompt, 'tok', [
+    { v: P[0], label: 'smallest', color: '#EE0000', anchor: 'start' },
+    { v: q(P, 0.25), label: 'q1', color: '#000000' },
+    { v: q(P, 0.5), label: 'median', color: '#000000', row: 1 },
+    { v: q(P, 0.75), label: 'q3', color: '#000000' },
+    { v: P[N - 1], label: 'largest', color: '#EE0000', anchor: 'end' },
+  ], [500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]);
+  strip('s-answer', answer, 'tok', [
+    { v: A[N - 2], label: '', color: '#F7B500' },
+    { v: A[N - 1], label: '2 heaviest', color: '#F7B500', anchor: 'end' },
+  ], [50, 100, 200, 500, 1000, 2000, 5000]);
+  strip('s-lat', lat, 's', [
+    { v: T[N - 2], label: '', color: '#F7B500' },
+    { v: T[N - 1], label: '2 slowest', color: '#F7B500', anchor: 'end' },
+  ], [0.5, 1, 2, 5, 10, 20]);
+})();
+</script>
