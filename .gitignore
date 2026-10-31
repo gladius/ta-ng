@@ -29,4 +29,4 @@ venv/
 .playwright-mcp/
 
 # machine-specific BigQuery auth / network overrides (see connectors/bigquery/source.py)
-connectors/bigquery/_local.py
+backend/connectors/bigquery/_local.py

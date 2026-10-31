@@ -50,7 +50,7 @@ def _openapi():
 
 app.openapi = _openapi
 
-_DIST = os.path.join(os.path.dirname(os.path.dirname(_HERE)), "web", "dist")
+_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(_HERE))), "web", "dist")   # local only: the images keep them apart
 
 
 @app.get("/app", include_in_schema=False)
