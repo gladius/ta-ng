@@ -14,8 +14,4 @@ venv/
 .claude/
 .deepeval/
 .pytest_cache/
-CLAUDE.md
-REVIEW-FINDINGS.md
-# the web UI is built inside the image
-web/node_modules/
-web/dist/
+tests/

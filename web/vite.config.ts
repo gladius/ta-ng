@@ -1,7 +1,7 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// Built into dist/ and served by the FastAPI app under /app (app/web/server.py). `npm run dev` serves it with
+// Built into dist/ and served under /app: by nginx in the image, by the local FastAPI app otherwise. `npm run dev` serves it with
 // instant reload and passes /api on to the app running on 8100.
 export default defineConfig({
   base: '/app/',
