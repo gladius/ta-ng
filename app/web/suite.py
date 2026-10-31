@@ -1,11 +1,9 @@
-"""JSON the web UI needs beyond the validation API: the model catalog. Same sign-in as the API
-(app/web/validations.require_key), but not part of /openapi.json."""
-from fastapi import APIRouter, Depends
+"""JSON the web UI needs beyond the validation API: the model catalog. Not part of /openapi.json."""
+from fastapi import APIRouter
 
 from app import registry
-from app.web.public import require_key
 
-api = APIRouter(prefix="/api/suite", dependencies=[Depends(require_key)], include_in_schema=False)
+api = APIRouter(prefix="/api/suite", include_in_schema=False)
 
 
 @api.get("/models")

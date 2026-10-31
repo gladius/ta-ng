@@ -1,5 +1,5 @@
-"""The app's one database engine: Postgres when DATABASE_URL is set (production, shared by every instance), else a
-local SQLite file in WAL mode (dev). Same code either way; the engine is built lazily on first use."""
+"""The app's one database engine: Postgres from DATABASE_URL (production, shared by every instance); with APP_ENV=dev
+and no DATABASE_URL, a local SQLite file in WAL mode. Same code either way; the engine is built lazily on first use."""
 import os
 import threading
 
@@ -22,8 +22,8 @@ _tables_lock = threading.Lock()
 def url():
     """The active DATABASE_URL (or the dev SQLite default). It holds credentials: don't log it."""
     u = credentials.get_config("DATABASE_URL")
-    if not u and os.environ.get("K_SERVICE"):                    # on Cloud Run a local SQLite file is lost per instance
-        raise RuntimeError("DATABASE_URL is not set: Cloud Run needs a shared Postgres")
+    if not u and credentials.get_config("APP_ENV") != "dev":     # a local SQLite file is lost with its container
+        raise RuntimeError("DATABASE_URL is not set (only APP_ENV=dev may use SQLite)")
     return u or _DEFAULT_SQLITE
 
 

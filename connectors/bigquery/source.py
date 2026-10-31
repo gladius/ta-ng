@@ -40,7 +40,7 @@ def _callsite(messages):
 
 
 def _client(project):
-    """Application Default Credentials when set (always on Cloud Run), else the dev machine's `gcloud` login."""
+    """Application Default Credentials when set, else the dev machine's `gcloud` login."""
     from google.cloud import bigquery                      # lazy: the source lists before the library is installed
     from google.auth.exceptions import DefaultCredentialsError
     try:

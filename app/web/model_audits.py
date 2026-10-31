@@ -1,6 +1,6 @@
 """Model audits: the public API (/api/audit/models). Which models hold where, and which is cheapest and fastest.
 
-  POST /api/audit/models                     -> 202 {audits: [{id, status, items, url}]}  every route needs X-API-Key
+  POST /api/audit/models                     -> 202 {audits: [{id, status, items, url}]}
        scope: usecases (one audit each, sampled from the log), site (one call-site), or requests (yours: logged
        ids or OpenAI-format bodies); strategy and models choose the candidates
   GET  /api/audit/models/{id}                -> status, progress, spend, the per-candidate summary, routing, verdicts
@@ -16,19 +16,18 @@ With "callback_url", the audit's status is POSTed there once it ends. The UI, th
 use these routes; the measurement underneath (validation/) is internal."""
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from app.web import public
-from app.web.public import MAX_ITEMS, RequestIn, ResumeIn, require_key
+from app.web.public import MAX_ITEMS, RequestIn, ResumeIn
 from core.identity import store
 from modules.models import audits
 from validation import jobs
 
-api = APIRouter(prefix="/api/audit/models", dependencies=[Depends(require_key)], tags=["model audits"],
-                responses={401: {"description": "Missing or wrong X-API-Key"},
-                           503: {"description": "The server has no VALIDATION_API_KEY, or a BigQuery lookup failed"}})
+api = APIRouter(prefix="/api/audit/models", tags=["model audits"],
+                responses={503: {"description": "A BigQuery lookup failed"}})
 
 
 class AuditIn(BaseModel):

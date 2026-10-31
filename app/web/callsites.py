@@ -1,13 +1,12 @@
 """Usecases and call-sites: the cheap list (reloaded when stale), one usecase analysed on demand, one call-site's
 identity, profile and decisions."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
-from app.web.public import require_key
 from core import tasks
 from core.identity import store
 from core.ledger import bq, refresh
 
-api = APIRouter(prefix="/api/suite/callsites", dependencies=[Depends(require_key)], include_in_schema=False)
+api = APIRouter(prefix="/api/suite/callsites", include_in_schema=False)
 
 
 def _cache_decision(site):

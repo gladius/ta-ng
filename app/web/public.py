@@ -1,4 +1,4 @@
-"""The public API's shared parts: sign-in (X-API-Key or IAP), the API description, the request models a caller
+"""The public API's shared parts: the API description, the request models a caller
 sends and the result models it reads, and turning sent requests into the engine's items. The routes live in
 app/web/model_audits.py (/api/audit/models).
 
@@ -6,17 +6,12 @@ Requests and responses are OpenAI-format bodies, as LiteLLM logs them. Instead o
 LiteLLM call by "request_id": the ids are looked up in BigQuery (BQ_* settings) in one query, and the logged request
 and response are used, the original being the model that answered."""
 import dataclasses
-import hmac
 import json
 import os
-import threading
-import time
-import urllib.request
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
-from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 import credentials
@@ -65,52 +60,7 @@ the model changes. They are not served from a cache and are not logged as produc
 
 **Spend.** Per request: 4 re-runs of the original, 3 to 5 answers per candidate, 1 to 3 judge calls per answer, and
 one more judge call. `max_budget_usd` caps an audit (no cap unless given); `spend_usd` is what it used.
-
-**Auth.** Every call needs the `X-API-Key` header.
 """
-
-_key = APIKeyHeader(name="X-API-Key", auto_error=False, description="The server's VALIDATION_API_KEY")
-_IAP_KEYS = "https://www.gstatic.com/iap/verify/public_key"
-_iap = {"at": 0.0, "certs": None}
-_iap_lock = threading.Lock()
-
-
-def _iap_user(assertion):
-    """The signed-in user's email when the request came through Google IAP, else None. IAP signs every request it
-    lets through (x-goog-iap-jwt-assertion); IAP_AUDIENCE is this service's audience in IAP, and without it the
-    header is never trusted. IAP's public keys are fetched at most once an hour."""
-    audience = credentials.get_config("IAP_AUDIENCE")
-    if not (assertion and audience):
-        return None
-    from google.auth import jwt
-    try:
-        with _iap_lock:
-            if time.time() - _iap["at"] > 3600:
-                with urllib.request.urlopen(_IAP_KEYS, timeout=10) as r:
-                    _iap.update(certs=json.loads(r.read()), at=time.time())
-        claims = jwt.decode(assertion, certs=_iap["certs"], audience=audience)
-    except Exception:
-        return None
-    return claims.get("email") if claims.get("iss") == "https://cloud.google.com/iap" else None
-
-
-def _ui_open():
-    """VALIDATION_UI_OPEN=1: the web UI may call the API without a key, on a developer's machine only (there is no
-    IAP there). Ignored on Cloud Run."""
-    return credentials.get_config("VALIDATION_UI_OPEN") == "1" and not os.environ.get("K_SERVICE")
-
-
-def require_key(x_api_key: Optional[str] = Depends(_key),
-                iap: Optional[str] = Header(None, alias="x-goog-iap-jwt-assertion", include_in_schema=False)):
-    """Code calls the API with X-API-Key; the web UI calls it as the person signed in through IAP."""
-    if _iap_user(iap) or _ui_open():
-        return
-    expected = credentials.get_secret("VALIDATION_API_KEY")
-    if not expected:
-        raise HTTPException(503, "VALIDATION_API_KEY is not set on the server")
-    if not x_api_key or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
-        raise HTTPException(401, "missing or wrong X-API-Key")
-
 
 class CandidateIn(BaseModel):
     label: str = Field(min_length=1, max_length=120, description="Your name for it, e.g. a router or a release. "

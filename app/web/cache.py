@@ -1,12 +1,11 @@
 """The cache module's JSON: the org, usecase and call-site levels from the call-site records, and the fleet
 analysis (every usecase of the window) for the org view."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
-from app.web.public import require_key
 from core.ledger import refresh
 from modules.cache import query
 
-api = APIRouter(prefix="/api/audit/cache", dependencies=[Depends(require_key)], include_in_schema=False)
+api = APIRouter(prefix="/api/audit/cache", include_in_schema=False)
 
 
 def _status():

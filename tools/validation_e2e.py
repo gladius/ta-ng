@@ -2,7 +2,7 @@
 
     E2E_DATABASE_URL=postgresql+psycopg://... .venv/bin/python tools/validation_e2e.py [--reset]
 
-Runs TWO app instances (the web app plus 1 in-process worker each, as one worker per Cloud Run deployment) on the
+Runs TWO app instances (the web app plus 1 in-process worker each, as one worker per deployment) on the
 given database, through the gateway in .env. Job A: 25 full-body requests x 2 candidates. Job B: 3 requests sent by
 request_id only, looked up in BigQuery (E2E_REQUEST_IDS=id1,id2,id3, else 3 picked from BQ_TABLE; skipped without
 BigQuery). Mid-run instance 1 crashes (SIGKILL: its requests must go stale, then be taken over) and is restarted;
@@ -16,7 +16,6 @@ import csv
 import io
 import json
 import os
-import secrets
 import signal
 import subprocess
 import sys
@@ -32,10 +31,9 @@ import sqlalchemy as sa
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 DB_URL = os.environ.get("E2E_DATABASE_URL") or sys.exit("set E2E_DATABASE_URL (a Postgres URL) first")
-KEY = secrets.token_hex(16)
 CB_PORT = 8199
 PY = sys.executable
-ENV = dict(os.environ, DATABASE_URL=DB_URL, VALIDATION_API_KEY=KEY, VALIDATION_INPROCESS_WORKERS="1",
+ENV = dict(os.environ, DATABASE_URL=DB_URL, VALIDATION_INPROCESS_WORKERS="1",
            AUDIT_DEBUG="", PYTHONUNBUFFERED="1")
 LOGS = os.path.join(REPO, ".data", "e2e_logs")
 os.makedirs(LOGS, exist_ok=True)
@@ -133,10 +131,8 @@ def items():
 
 
 # ---- plumbing ----------------------------------------------------------------------------------------------------
-def http(path, body=None, headers=None, key=True, port=None):
+def http(path, body=None, headers=None, port=None):
     h = dict(headers or {})
-    if key:
-        h["X-API-Key"] = KEY
     data = None
     if body is not None:
         data = json.dumps(body).encode()

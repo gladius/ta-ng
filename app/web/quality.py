@@ -1,10 +1,9 @@
 """The audit of the audit: the day's checks (modules/quality)."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
-from app.web.public import require_key
 from modules import quality
 
-api = APIRouter(prefix="/api/suite/quality", dependencies=[Depends(require_key)], include_in_schema=False)
+api = APIRouter(prefix="/api/suite/quality", include_in_schema=False)
 
 
 @api.post("/run")

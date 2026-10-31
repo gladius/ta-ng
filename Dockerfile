@@ -1,6 +1,5 @@
 # One image, one service. Node only builds the web UI (web/ -> web/dist); the running service is Python, and the
-# FastAPI app serves that build under /app next to the API. On Cloud Run: VALIDATION_INPROCESS_WORKERS=1 (set below),
-# DATABASE_URL set, CPU always allocated with min instances 1.
+# FastAPI app serves that build under /app next to the API. DATABASE_URL must be set when it runs.
 FROM node:24-slim AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./

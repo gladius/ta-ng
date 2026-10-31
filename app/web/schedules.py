@@ -1,11 +1,10 @@
 """The scheduled jobs: when each last ran and how it went, when it runs next; turn one on or off, or run it now."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.web.public import require_key
 from core import schedule
 
-api = APIRouter(prefix="/api/suite/schedules", dependencies=[Depends(require_key)], include_in_schema=False)
+api = APIRouter(prefix="/api/suite/schedules", include_in_schema=False)
 
 
 class EnabledIn(BaseModel):
