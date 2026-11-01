@@ -45,7 +45,7 @@ Or run `npm run build` once: the local backend then serves the UI at http://127.
 
 ```bash
 cd backend
-env ANTHROPIC_API_KEY= LANGSMITH_KEY= LANGSMITH_API_KEY= LANGCHAIN_API_KEY= AUDIT_DEBUG= .venv/bin/python -m pytest -q tests
+env ANTHROPIC_API_KEY= AUDIT_DEBUG= .venv/bin/python -m pytest -q tests
 ```
 
 ## Images

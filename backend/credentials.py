@@ -11,12 +11,6 @@ _SECRET_RX = re.compile(r"\b(sk-ant-[A-Za-z0-9_\-]{6,}|lsv2_[A-Za-z0-9_]{6,}|ls_
                         r"gl_[A-Za-z0-9_]{6,}|sk-[A-Za-z0-9]{16,})\b")
 
 _ENV_FILES = (".env",)
-# Aliases are mirrored so the langsmith SDK, LangChain tracer and connectors all see one value.
-_ALIAS_GROUPS = (
-    ("LANGSMITH_API_KEY", "LANGCHAIN_API_KEY", "LANGSMITH_KEY"),
-    ("LANGSMITH_ENDPOINT", "LANGCHAIN_ENDPOINT"),
-    ("LANGSMITH_WORKSPACE_ID", "LANGCHAIN_WORKSPACE_ID"),
-)
 _loaded = False
 
 
@@ -36,8 +30,8 @@ def _parse_env_file(path):
 
 
 def load(*, override=False):
-    """Load the repo-root .env into the process env once (the real env wins unless `override`), then mirror
-    aliases. Auto-invoked by get_secret/get_config."""
+    """Load the repo-root .env into the process env once (the real env wins unless `override`).
+    Auto-invoked by get_secret/get_config."""
     global _loaded
     if _loaded and not override:
         return
@@ -46,11 +40,6 @@ def load(*, override=False):
             for k, v in _parse_env_file(os.path.join(d, fn)).items():
                 if override or k not in os.environ:
                     os.environ[k] = v
-    for group in _ALIAS_GROUPS:
-        val = next((os.environ[k] for k in group if os.environ.get(k)), None)
-        if val:
-            for k in group:
-                os.environ[k] = val
     _loaded = True
 
 

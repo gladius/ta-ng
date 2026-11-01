@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react'
 
 // The /api calls the pages use. Shapes follow /openapi.json (app/web/public.py, app/web/model_audits.py), which a test keeps true to
 // what the API returns.
@@ -94,25 +93,3 @@ export type Result = {
 export type ResultsPage = { page: number; per_page: number; total: number; results: Result[] }
 
 export const post = <T,>(path: string) => get<T>(path, { method: 'POST' })
-
-/** Listen to a server-sent event stream while `path` is set, one handler per event name; `error` when it drops. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Handlers = Record<string, (data: any) => void>
-const FINAL = ['done', 'failed', 'complete']
-export function useStream(path: string | null, handlers: Handlers) {
-  const ref = useRef(handlers)
-  useEffect(() => { ref.current = handlers })
-  useEffect(() => {
-    if (!path) return
-    const es = new EventSource('/api' + path)
-    let ended = false
-    for (const name of Object.keys(ref.current).filter((n) => n !== 'error')) {
-      es.addEventListener(name, (e) => {
-        if (FINAL.includes(name)) { ended = true; es.close() }
-        ref.current[name]?.(JSON.parse((e as MessageEvent).data))
-      })
-    }
-    es.onerror = () => { if (!ended) { ended = true; es.close(); ref.current.error?.({ msg: 'The connection dropped.' }) } }
-    return () => { ended = true; es.close() }
-  }, [path])
-}

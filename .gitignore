@@ -1,6 +1,6 @@
 # secrets — never commit
 .env
-.galileo_key
+.env.*
 *.key
 
 # python
@@ -11,15 +11,18 @@ venv/
 *.egg-info/
 .pytest_cache/
 
+# web build
+node_modules/
+dist/
+
 # local editor/tooling
 .claude/settings.local.json
 .DS_Store
 
-# dev-only traceability dumps (AUDIT_DEBUG)
+# dev-only dumps and tool output: never commit
 .audit_debug/
-
-# generated diag reports + captures (tools/diag/*) — never commit
 .diag_out/
+.deepeval/
 
 # local dev store + generated local state (SQLite .db + WAL/SHM sidecars live here) — prod uses Postgres via DATABASE_URL
 .data/
