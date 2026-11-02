@@ -2,7 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import Select from 'react-select'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { get, type JobStatus, type ResultsPage } from '../api'
+import { get, PREFIX, type JobStatus, type ResultsPage } from '../api'
 import { usecaseName } from '../cache'
 import { AnswersBar, count, Failed, Legend, Loading, money, ms, Page, pct, Squares, verdictWord, VsBar, when } from '../ui'
 import { STRATEGY_NAME } from './How'
@@ -145,7 +145,7 @@ export function ModelAudits() {
                     <td className="mono"><Link to={`/audit/models/${c.id}`}>{c.id}</Link><div className="muted">{c.trigger}</div></td>
                     <td>{c.scope === 'requests' ? <span>{count(c.items_total, 'request')} sent</span> : <><Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}`}>{usecaseName(c.usecase)}</Link>{c.site && <div className="muted">one call-site</div>}</>}</td>
                     <td>{STRATEGY_NAME[c.strategy] ?? OLD_STRATEGY[c.strategy] ?? c.strategy}{c.models.length > 0 && <div className="mono muted">{c.models.join(', ')}</div>}</td>
-                    <td><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.error && <div className="muted">{c.error.slice(0, 80)}</div>}</td>
+                    <td><span className={'pill pill-' + (c.status === 'sampling' ? 'running' : c.status)}>{STATUS[c.status] ?? c.status}</span>{c.error && <div className="muted">{c.error.slice(0, 80)}</div>}</td>
                     <td>{vs.length ? `${vs.filter((v) => v.verdict === 'passes').length} of ${vs.length} pass` : <span className="muted">—</span>}</td>
                     <td className="muted nowrap">{when(c.created_at)}</td>
                   </tr>
@@ -179,7 +179,7 @@ export function ModelAuditDetail() {
     <Page crumbs={crumbs}>
       <div className="head">
         <div><h1>Model audit {c.id}</h1><span className="muted">{c.scope === 'requests' ? count(c.items_total, 'sent request') : usecaseName(c.usecase)} · {STRATEGY_NAME[c.strategy] ?? OLD_STRATEGY[c.strategy] ?? c.strategy}{c.models.length > 0 && ` (${c.models.join(', ')})`} · started {when(c.created_at)} by {c.trigger}</span></div>
-        <div className="row"><span className={'pill pill-' + (c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'running')}>{STATUS[c.status] ?? c.status}</span>{c.status !== 'sampling' && <Link className="btn" to={`/audit/models/${c.id}/requests`}>All requests</Link>}<a className="btn" href={`/api/audit/models/${c.id}/results.csv`}>CSV</a></div>
+        <div className="row"><span className={'pill pill-' + (c.status === 'sampling' ? 'running' : c.status)}>{STATUS[c.status] ?? c.status}</span>{c.status !== 'sampling' && <Link className="btn" to={`/audit/models/${c.id}/requests`}>All requests</Link>}<a className="btn" href={`${PREFIX}/api/audit/models/${c.id}/results.csv`}>CSV</a></div>
       </div>
       {c.error && <p className="error" role="alert">{c.error}</p>}
       {spec && (
@@ -244,7 +244,7 @@ export function ModelAuditDetail() {
                 </div>
               </>
             )}
-            {!mine.length && <p className="muted pad">{c.status === 'done' ? 'No candidate was run for this call-site (no cheaper or open-weight model for its original in the catalog).' : c.status === 'sampling' ? 'Sampling requests from the log…' : 'Running…'}</p>}
+            {!mine.length && <p className="muted pad">{c.status === 'done' ? 'No candidate was run for this call-site (no cheaper or open-weight model for its original in the catalog).' : c.status === 'sampling' ? 'Sampling requests from the log…' : c.status === 'stopped' || c.status === 'failed' ? `${STATUS[c.status]} before any result came in.` : 'Running…'}</p>}
           </section>
         )
       })}

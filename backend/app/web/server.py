@@ -8,6 +8,7 @@ import os
 import contextlib
 import threading
 
+import credentials
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
 
@@ -16,7 +17,6 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 @contextlib.asynccontextmanager
 async def _lifespan(app):
     """Run VALIDATION_INPROCESS_WORKERS validation workers in the web process: 2 by default. No database, no start."""
-    import credentials
     from app.services import db
     from validation import worker
     db.url()
@@ -27,7 +27,8 @@ async def _lifespan(app):
     worker.release_all()
 
 
-app = FastAPI(title="Token Auditor", lifespan=_lifespan)
+# PATH_PREFIX: what the deployment puts in front of every path; nginx strips it, /docs and its spec need to know it.
+app = FastAPI(title="Token Auditor", lifespan=_lifespan, root_path=credentials.get_config("PATH_PREFIX", ""))
 
 from app.web import cache, callsites, model_audits, public, quality, schedules, suite  # noqa: E402  the APIs and the downloads
 app.include_router(suite.api)

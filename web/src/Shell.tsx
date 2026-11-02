@@ -4,6 +4,7 @@ import {
   ArrowUpRight, BookOpen, Braces, Clock, Database, ShieldCheck, Fingerprint, LayoutDashboard, Menu, Route as RouteIcon, TrendingDown, X,
   type LucideIcon,
 } from 'lucide-react'
+import { PREFIX } from './api'
 
 type EntryProps = { icon: LucideIcon; label: string; to?: string; href?: string; end?: boolean; active?: boolean; later?: boolean }
 
@@ -55,7 +56,7 @@ export default function Shell() {
           <Entry icon={BookOpen} label="Model catalog" to="/models" />
           <Entry icon={Clock} label="Schedules" to="/schedules" />
           <Entry icon={ShieldCheck} label="Audit quality" to="/quality" />
-          <Entry icon={Braces} label="API reference" href="/docs" />
+          <Entry icon={Braces} label="API reference" href={PREFIX + '/docs'} />
         </div>
       </nav>
       <Outlet />

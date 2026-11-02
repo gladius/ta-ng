@@ -1,7 +1,7 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { candidates, get, type JobStatus, type LabelSummary, type ResultsPage } from '../api'
+import { candidates, get, PREFIX, type JobStatus, type LabelSummary, type ResultsPage } from '../api'
 import { AnswersBar, change, count, Failed, Kpi, Legend, Loading, money, ms, Page, pct, Squares, Status, verdictWord, VsBar, when } from '../ui'
 
 const PER_PAGE = 50
@@ -80,8 +80,8 @@ export default function Batch() {
           </p>
         </div>
         <div className="row">
-          <a className="btn" href={`/api/audit/models/${j.id}/results.csv`}>Download CSV</a>
-          <a className="btn primary" href={`/api/audit/models/${j.id}/results.json`}>JSON</a>
+          <a className="btn" href={`${PREFIX}/api/audit/models/${j.id}/results.csv`}>Download CSV</a>
+          <a className="btn primary" href={`${PREFIX}/api/audit/models/${j.id}/results.json`}>JSON</a>
         </div>
       </div>
 
@@ -90,7 +90,7 @@ export default function Batch() {
           {j.stop_reason && <p>{j.stop_reason}</p>}
           {j.error && <p>{j.status === 'failed' ? 'Failed: ' : ''}{j.error}</p>}
           {(j.status === 'failed' || j.status === 'stopped') && j.items_done < j.items_total && (
-            <p>The {j.items_total - j.items_done} unfinished requests run again with <span className="mono">POST /api/audit/models/{j.id}/resume</span>, optionally with a higher <span className="mono">max_budget_usd</span>.</p>
+            <p>The {j.items_total - j.items_done} unfinished requests run again with <span className="mono">POST {PREFIX}/api/audit/models/{j.id}/resume</span>, optionally with a higher <span className="mono">max_budget_usd</span>.</p>
           )}
           {j.callback?.error && <p>The callback could not be delivered: {j.callback.error}</p>}
           {j.unpriced_calls > 0 && <p>{j.unpriced_calls} model calls have no catalog price, so spend and costs are understated.</p>}

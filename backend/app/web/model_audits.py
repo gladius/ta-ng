@@ -20,6 +20,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
+import credentials
 from app.web import public
 from app.web.public import MAX_ITEMS, RequestIn, ResumeIn
 from core.identity import store
@@ -87,11 +88,14 @@ def _view(a):
             "site_names": {st: names.get(st, st) for st in a["samples"] if st}}
 
 
+_PREFIX = credentials.get_config("PATH_PREFIX", "")   # links in answers must work from outside
+
+
 def _status_body(a):
     v = _view(a)
     jid = a["job_id"]
     return {**v, "summary": jobs.summary(jid) if jid else [], "routing": jobs.routing(jid) if jid else [],
-            "callback": jobs.callback(jid) if jid else None, "results_url": "/api/audit/models/%s/results" % a["id"]}
+            "callback": jobs.callback(jid) if jid else None, "results_url": "%s/api/audit/models/%s/results" % (_PREFIX, a["id"])}
 
 
 def _callback_body(job_id):
@@ -179,7 +183,7 @@ def start(body: AuditIn):
             started += [audits.start(usecase=_uc(u), site=None, **kw) for u in body.usecases]
     return {"audits": [{"id": a["id"], "status": a["status"],
                         "items": sum(len(v) for v in a["samples"].values()) if a["scope"] == "requests" else 0,
-                        "url": "/api/audit/models/" + a["id"]} for a in started]}
+                        "url": _PREFIX + "/api/audit/models/" + a["id"]} for a in started]}
 
 
 @api.get("", summary="Audits, newest first", responses={200: {"model": list[public.Listed]}})

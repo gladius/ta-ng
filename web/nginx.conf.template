@@ -1,20 +1,21 @@
-# Serves the built UI under /app and passes everything else the UI calls to the backend.
+# Serves the built UI under PATH_PREFIX/app and passes what the UI calls to the backend, without the prefix.
 server {
     listen 8080;
     root /usr/share/nginx/html;
     absolute_redirect off;
 
     location = /healthz { access_log off; default_type text/plain; return 200 "ok\n"; }
-    location = / { return 302 /app/; }
-    location = /app { return 302 /app/; }
+    location ~ ^${PATH_PREFIX}/?$ { return 302 ${PATH_PREFIX}/app/; }
+    location = ${PATH_PREFIX}/app { return 302 ${PATH_PREFIX}/app/; }
 
-    location /app/assets/ { add_header Cache-Control "public, max-age=31536000, immutable"; }
-    location /app/ {
+    location ${PATH_PREFIX}/app/assets/ { add_header Cache-Control "public, max-age=31536000, immutable"; }
+    location ${PATH_PREFIX}/app/ {
         add_header Cache-Control "no-cache";
-        try_files $uri /app/index.html;
+        try_files $uri ${PATH_PREFIX}/app/index.html;
     }
 
-    location ~ ^/(api/|docs$|openapi\.json$) {
+    location ~ ^${PATH_PREFIX}/(api/|docs$|openapi\.json$) {
+        rewrite ^${PATH_PREFIX}(/.*)$ $1 break;
         proxy_pass ${BACKEND_URL};
         proxy_http_version 1.1;
         proxy_set_header Connection "";

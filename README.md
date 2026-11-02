@@ -65,6 +65,11 @@ podman build -t token-auditor-web web
 Send outside traffic to the web image. It serves `/app` and forwards `/api`, `/docs` and `/openapi.json` to the backend.
 Health checks: `/healthz` on the web image, `/healthz/db` on the backend.
 
+To serve everything under a path on a shared host, build the web image with
+`--build-arg PATH_PREFIX=/token-auditor` and run the backend with `PATH_PREFIX=/token-auditor`. The UI is then at
+`/token-auditor/app/`, the API at `/token-auditor/api`, and `/healthz` stays where it is. The load balancer passes the
+prefix through unchanged; nginx removes it before the backend.
+
 **The API has no sign-in.** Anyone who can reach either image can read the audits and start paid ones, so the deployment
 has to control who can reach them.
 
@@ -79,6 +84,7 @@ The backend reads process environment first, then `backend/.env` (gitignored, ne
 | Setting | Required | What it does |
 |---|---|---|
 | `DATABASE_URL` | Yes, unless `APP_ENV=dev` | Postgres, e.g. `postgresql+psycopg://...`. Tables are created on first use; a changed column needs a manual `ALTER TABLE` |
+| `PATH_PREFIX` | No | The path everything is served under, e.g. `/token-auditor`. Empty by default. Same value as the web image's build argument |
 | `APP_ENV` | No | `dev` allows SQLite at `backend/.data/audit_store.db`. Leave it unset in production |
 | `LLM_GATEWAY_URL`, `LLM_GATEWAY_KEY` | Yes | Every model call goes through the gateway |
 | `BQ_TABLE`, `BQ_REQUEST_COLUMN`, `BQ_RESPONSE_COLUMN`, `BQ_ID_COLUMN`, `BQ_USECASE_COLUMN`, `BQ_TIME_COLUMN`, `BQ_LATENCY_COLUMN` | Yes | Where the log is. A missing one stops with its name |

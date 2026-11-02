@@ -5,6 +5,7 @@ import '@fontsource-variable/geist'
 import '@fontsource-variable/geist-mono'
 import './styles.css'
 import App from './App'
+import { PREFIX } from './api'
 
 const queries = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: 1 } } })
 
@@ -14,7 +15,7 @@ addEventListener('beforeprint', () => document.querySelectorAll('details:not([op
 // No StrictMode: in development it runs effects twice, which would open a paid audit stream twice.
 createRoot(document.getElementById('root')!).render(
   <QueryClientProvider client={queries}>
-    <BrowserRouter basename="/app">
+    <BrowserRouter basename={PREFIX + '/app'}>
       <App />
     </BrowserRouter>
   </QueryClientProvider>,

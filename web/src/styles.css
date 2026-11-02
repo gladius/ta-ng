@@ -91,6 +91,7 @@ h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .content { max-width: 1180px; padding: 28px 32px 56px; display: flex; flex-direction: column; gap: 20px; }
 .head { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between; }
 .head > div:first-child { display: flex; flex-direction: column; gap: 6px; }
+.head > .row { align-items: center; }
 .meta { margin: 0; color: var(--ink-2); font-size: 13px; max-width: 80ch; }
 .empty { color: var(--ink-2); }
 .error { color: var(--ink); background: #FDE3E3; border-radius: var(--radius); padding: 12px 14px; }

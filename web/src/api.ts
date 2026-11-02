@@ -2,6 +2,9 @@
 // The /api calls the pages use. Shapes follow /openapi.json (app/web/public.py, app/web/model_audits.py), which a test keeps true to
 // what the API returns.
 
+// What the deployment puts in front of every path (empty by default), taken from the build's base path.
+export const PREFIX = import.meta.env.BASE_URL.replace(/\/app\/$/, '')
+
 export type Verdict = 'within' | 'outside' | 'unverified'
 export type Answers = { match: number; acceptable: number; drift: number; unclear: number }
 
@@ -51,7 +54,7 @@ export class ApiError extends Error {
 }
 
 export async function get<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch('/api' + path, { headers: { Accept: 'application/json' }, ...init })
+  const r = await fetch(PREFIX + '/api' + path, { headers: { Accept: 'application/json' }, ...init })
   if (!r.ok) {
     let why = r.statusText
     try {

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { get } from '../api'
+import { get, PREFIX } from '../api'
 import { Failed, Loading, Page } from '../ui'
 
 type Strategies = {
@@ -49,7 +49,7 @@ export default function How({ strategy: initial = 'cheaper', spec: given, sample
         <Step n={7} title="Verdict per request">A candidate passes when its answers fit the original's range at least as often as the original agrees with itself, minus a margin of {Math.round(100 * s.margin)} points. Cost and latency are measured on the same calls.</Step>
         <Step n={8} title="Findings, kept per audit">Pass rate, fit, cost and latency against the original, per call-site and candidate, stored as this audit's findings. A call-site's page shows, per model, the latest valid finding across all audits (valid for {q.data.valid_days} days and for the prompt version it was measured on), and from those the cheapest and fastest that pass. Audits never change what a call-site uses: that choice is the router's or a person's.</Step>
       </div>
-      {!embedded && <p className="muted">Start one from <Link to="/audit/models">Model audits</Link> (a usecase or call-site page links there with it selected), or with <span className="mono">POST /api/audit/models</span>.</p>}
+      {!embedded && <p className="muted">Start one from <Link to="/audit/models">Model audits</Link> (a usecase or call-site page links there with it selected), or with <span className="mono">POST {PREFIX}/api/audit/models</span>.</p>}
     </>
   )
   return embedded ? <div className="flow-wrap">{body}</div> : <Page crumbs={[{ label: 'Agentic workloads' }, { label: 'Model audits', to: '/audit/models' }, { label: 'How it works' }]}>{body}</Page>
