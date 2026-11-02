@@ -4,6 +4,7 @@ openai>=1.40            # OpenAI-format SDK to the LiteLLM gateway: paid re-runs
 google-cloud-bigquery>=3.0  # BigQuery source (connectors/bigquery); auth = Google Application Default Credentials
 sqlalchemy>=2.0         # durable shared store (SQLite dev / Postgres prod) — app/services/db.py, store.py
 psycopg[binary]>=3.1    # Postgres driver — PROD ONLY; dev uses stdlib sqlite (no install), so skip it in a restricted env
+alembic>=1.13           # schema migrations (alembic/versions), applied by the app at startup — app/services/db.py migrate
 
 # Run:  pip install -r requirements.txt
 #       python -m app.web.server        (http://127.0.0.1:8100)

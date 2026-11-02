@@ -84,7 +84,7 @@ The backend reads process environment first, then `backend/.env` (gitignored, ne
 
 | Setting | Required | What it does |
 |---|---|---|
-| `DATABASE_URL` | Yes, unless `APP_ENV=dev` | Postgres, e.g. `postgresql+psycopg://...`. Tables are created on first use; a changed column needs a manual `ALTER TABLE` |
+| `DATABASE_URL` | Yes, unless `APP_ENV=dev` | Postgres, e.g. `postgresql+psycopg://...`. The backend applies the schema migrations itself at startup (see Database) |
 | `PATH_PREFIX` | No | The path everything is served under, e.g. `/token-auditor`. Empty by default. Same value as the web image's build argument |
 | `APP_ENV` | No | `dev` allows SQLite at `backend/.data/audit_store.db`. Leave it unset in production |
 | `LLM_GATEWAY_URL`, `LLM_GATEWAY_KEY` | Yes | Every model call goes through the gateway |
@@ -97,6 +97,25 @@ The backend reads process environment first, then `backend/.env` (gitignored, ne
 | `AUDIT_JUDGE_MODEL` | No, default `claude-sonnet-5` | Judges the answers in a model audit |
 
 Nothing processes by itself until the `process_days` schedule is turned on in the UI.
+
+## Database
+
+The schema lives in migrations (`backend/alembic/versions`), not in table creation at runtime. Each backend process
+applies the ones not yet applied when it first uses the database, in one transaction; on Postgres a lock makes every
+other instance wait and then find nothing left to do. A database that already holds our tables but no migration record
+(made before migrations) is refused: start from an empty one.
+
+To change the schema, edit the table in the code, then from `backend/`:
+
+```bash
+.venv/bin/alembic revision --autogenerate -m "what changed"    # writes alembic/versions/<id>_what_changed.py
+```
+
+Read and fix the generated file, commit it with the code. A test fails while the code and the migrations disagree.
+
+Old and new backends run side by side during a rolling deploy, so a migration must not break the release before it:
+add a column or table in one release; rename or remove one in two (add the new and write both, then drop the old).
+A new column on an existing table either allows empty values or has a server default.
 
 ## Costs
 

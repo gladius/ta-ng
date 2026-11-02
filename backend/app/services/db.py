@@ -3,7 +3,7 @@ and no DATABASE_URL, a local SQLite file in WAL mode. Same code either way; the 
 import os
 import threading
 
-from sqlalchemy import create_engine, event, exc, inspect, MetaData, text
+from sqlalchemy import create_engine, event, inspect, MetaData, text
 
 import credentials
 
@@ -11,12 +11,14 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 _DATA_DIR = os.path.join(_REPO_ROOT, ".data")
 _DEFAULT_SQLITE = "sqlite:///" + os.path.join(_DATA_DIR, "audit_store.db")
 
-# Every table registers here; ready() creates missing ones on first use.
+# Every table registers here. The schema itself comes from the migrations in alembic/versions, which ready() applies.
 metadata = MetaData()
+_MIGRATIONS = os.path.join(_REPO_ROOT, "alembic")
+_LOCK = 74120501            # Postgres advisory lock id: one instance migrates, the others wait for it
 
 _engine = None
-_tables_for = None          # (engine, tables registered) last created: a module imported later adds tables
-_tables_lock = threading.Lock()
+_ready_for = None           # the engine whose database this process has migrated
+_ready_lock = threading.Lock()
 
 
 def url():
@@ -34,34 +36,42 @@ def engine():
     return _engine
 
 
+def load_tables():
+    """Import every module that defines a table, so `metadata` holds the whole schema."""
+    import core.identity.store, core.schedule, core.tasks, modules.models.audits, modules.quality, validation.jobs  # noqa: F401
+    return metadata
+
+
 def ready():
-    """The engine, with every table on `metadata` created if missing, by one thread per process. If another instance
-    creates the same tables at that moment, Postgres rejects the second CREATE and the retry finds them made."""
-    global _tables_for
+    """The engine, its database migrated to the latest version, once per process."""
+    global _ready_for
     eng = engine()
-    key = (eng, len(metadata.tables))
-    if _tables_for != key:
-        with _tables_lock:
-            if _tables_for != key:
-                try:
-                    _create(eng)
-                except exc.DBAPIError:
-                    _create(eng)
-                _tables_for = key
+    if _ready_for is not eng:
+        with _ready_lock:
+            if _ready_for is not eng:
+                migrate(eng)
+                _ready_for = eng
     return eng
 
 
-def _create(eng):
-    """Missing tables, then missing nullable columns. Never alters or drops a column (that is a manual ALTER TABLE)."""
-    metadata.create_all(eng)
-    insp = inspect(eng)
+def migrate(eng):
+    """Apply the migrations not yet applied, in one transaction. On Postgres an advisory lock makes every other instance
+    wait, then find nothing left to do. A database with our tables but no migration record is refused: it predates
+    migrations, and its schema is not known."""
+    from alembic import command
+    from alembic.config import Config
+    cfg = Config()
+    cfg.set_main_option("script_location", _MIGRATIONS)
     with eng.begin() as c:
-        for t in metadata.sorted_tables:
-            have = {col["name"] for col in insp.get_columns(t.name)}
-            for col in t.columns:
-                if col.name not in have and col.nullable and not col.primary_key:
-                    c.execute(text("ALTER TABLE %s ADD COLUMN %s %s" % (t.name, col.name,
-                                                                       col.type.compile(eng.dialect))))
+        if c.dialect.name == "postgresql":
+            c.execute(text("SELECT pg_advisory_xact_lock(%d)" % _LOCK))
+        have = set(inspect(c).get_table_names())
+        old = sorted(have & set(load_tables().tables))
+        if "alembic_version" not in have and old:
+            raise RuntimeError("the database has tables from before migrations (%s); start from an empty database"
+                               % ", ".join(old))
+        cfg.attributes["connection"] = c
+        command.upgrade(cfg, "head")
 
 
 def _ensure_sqlite_dir(u):

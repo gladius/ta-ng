@@ -1,7 +1,7 @@
 """Test isolation for the durable store.
 
 By DEFAULT the suite runs against a THROWAWAY temp SQLite file (zero install, fast) — it never touches the dev store
-(.data/audit_store.db) or prod. To exercise the POSTGRES path (the dialect-specific upsert, bytea blob, create_all),
+(.data/audit_store.db) or prod. To exercise the POSTGRES path (the dialect-specific upsert, bytea blob, the migrations),
 point TEST_DATABASE_URL at a DEDICATED throwaway Postgres database and run the same suite:
 
     pip install "psycopg[binary]"
@@ -41,6 +41,8 @@ def _isolate_store():
     yield
     try:
         db.metadata.drop_all(db.engine())                # leave the DB clean on ANY backend (drops our tables only)
+        with db.engine().begin() as c:                   # and the migration record, so the next run migrates again
+            c.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")
     except Exception:
         pass
     db.reset()                                           # release handles before deleting the temp file

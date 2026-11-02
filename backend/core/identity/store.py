@@ -44,9 +44,7 @@ callsites = Table(
     Column("site", String(32), primary_key=True),
     Column("usecase", Text, nullable=False, default=""),
     # identity
-    Column("template", Text, nullable=False),                  # unused ("[]")
     Column("markers", Text),                                   # JSON list of phrases: the current version's fingerprint (placement, router)
-    Column("ambiguous", Boolean),                              # unused (False)
     Column("signature", Text, nullable=False),                 # JSON [{kind: fixed|per_call, what}]: the prompt's regions in order
     Column("calls", Integer, nullable=False),
     Column("first_day", String(10)),
@@ -106,7 +104,6 @@ unplaced = Table(
     Column("completion_tokens", Integer),
     Column("cost", Float),
     Column("cost_nocache", Float),
-    Column("template", Text, nullable=False),                  # unused ("[]")
 )
 COVERAGE = ("calls", "other_format", "no_usage", "unpriced", "repeated", "placed", "unplaced")
 usecase_days = Table(                                      # what each usecase's day was made of, and how much was analysed
@@ -243,8 +240,8 @@ def save_site(rec):
     with eng.begin() as c:
         row = c.execute(select(callsites.c.versions, callsites.c.calls).where(callsites.c.site == rec["site"])).first()
         if row is None:
-            c.execute(callsites.insert().values(site=rec["site"], usecase=rec["usecase"] or "", template="[]", markers=json.dumps(rec["phrases"]),
-                                                ambiguous=False, signature=json.dumps(rec.get("regions") or []), calls=rec.get("placed") or 0,
+            c.execute(callsites.insert().values(site=rec["site"], usecase=rec["usecase"] or "", markers=json.dumps(rec["phrases"]),
+                                                signature=json.dumps(rec.get("regions") or []), calls=rec.get("placed") or 0,
                                                 first_day=rec["day"], last_day=rec["day"], versions=json.dumps([version]),
                                                 unsure=(rec.get("placed") or 0) < UNSURE_BELOW, window_days=7, seen_at=_now(), **lay))
         else:
@@ -271,8 +268,8 @@ def save_identity(rec, window):
             **({"grams": json.dumps(rec["grams"])} if rec.get("grams") else {})}
     with eng.begin() as c:
         if c.execute(update(callsites).where(callsites.c.site == rec["site"]).values(**vals)).rowcount == 0:
-            c.execute(callsites.insert().values(site=rec["site"], template="[]", markers=json.dumps(rec.get("markers") or []),
-                                                ambiguous=False, signature="[]", **vals))
+            c.execute(callsites.insert().values(site=rec["site"], markers=json.dumps(rec.get("markers") or []),
+                                                signature="[]", **vals))
 
 
 def drop_sites(sites):
@@ -311,7 +308,6 @@ def set_choice(site, value):
 
 def _row(r):
     d = dict(zip([c.name for c in callsites.columns], r))
-    d["template"] = json.loads(d["template"] or "[]")
     d["markers"] = json.loads(d["markers"] or "[]")
     d["signature"] = json.loads(d["signature"] or "[]")
     d["versions"] = json.loads(d["versions"] or "[]")
@@ -446,7 +442,7 @@ def replace_unplaced(days, rows):
         for i in range(0, len(rows), 500):
             c.execute(unplaced.insert(), [{**{k: r.get(k) for k in ("id", "usecase", "day", "model", "prompt_tokens", "cached_tokens",
                                                                    "written_tokens", "completion_tokens", "cost", "cost_nocache")},
-                                           "usecase": r["usecase"] or "", "template": "[]"}
+                                           "usecase": r["usecase"] or ""}
                                           for r in rows[i:i + 500]])
 
 

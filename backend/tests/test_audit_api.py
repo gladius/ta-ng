@@ -335,32 +335,25 @@ def test_a_worker_thread_survives_an_unexpected_error(monkeypatch):
     assert len(calls) == 2
 
 
-def test_tables_made_by_another_instance_at_the_same_moment_are_fine(monkeypatch):
-    from sqlalchemy import exc
+def test_the_migrations_build_exactly_the_tables_in_the_code():
+    """A table or column changed in the code without a migration fails here (alembic revision --autogenerate)."""
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
     from app.services import db
-    real, calls = db.metadata.create_all, []
-
-    def racing(eng):
-        calls.append(1)
-        if len(calls) == 1:                                      # Postgres rejects the second of two concurrent CREATEs
-            raise exc.IntegrityError("CREATE TABLE validation_jobs", {}, Exception("pg_type_typname_nsp_index"))
-        real(eng)
-    monkeypatch.setattr(db.metadata, "create_all", racing)
-    monkeypatch.setattr(db, "_tables_for", None)
-    assert db.ready() is db.engine() and len(calls) == 2
+    with db.ready().connect() as c:
+        assert compare_metadata(MigrationContext.configure(c), db.load_tables()) == []
 
 
-def test_a_table_registered_after_the_first_create_is_still_made(monkeypatch):
-    from sqlalchemy import Column, Integer, Table, inspect
+def test_a_database_from_before_migrations_is_refused(tmp_path):
+    import pytest
+    from sqlalchemy import create_engine, text
     from app.services import db
-    db.ready()
-    late = Table("late_import_probe", db.metadata, Column("id", Integer, primary_key=True))
-    try:
-        db.ready()                                               # e.g. store imported after the workers started
-        assert inspect(db.engine()).has_table("late_import_probe")
-    finally:
-        late.drop(db.engine(), checkfirst=True)
-        db.metadata.remove(late)
+    eng = create_engine("sqlite:///%s" % (tmp_path / "old.db"))
+    with eng.begin() as c:
+        c.execute(text("CREATE TABLE callsites (site TEXT PRIMARY KEY)"))
+    with pytest.raises(RuntimeError, match="before migrations"):
+        db.migrate(eng)
+    db.migrate(create_engine("sqlite:///%s" % (tmp_path / "new.db")))           # an empty one is migrated
 
 
 def test_a_failed_job_resumes_where_it_stopped(client, monkeypatch):
@@ -507,21 +500,6 @@ def test_a_batch_counts_each_labels_answers(client, monkeypatch):
     by = {s["label"]: s.get("answers") for s in jobs.summary(job_id)}
     assert by == {"original": None, "router-a": {"match": 9, "acceptable": 3, "drift": 3, "unclear": 0},
                   "router-b": None}                              # router-b's results carry no counts (older results)
-
-
-def test_a_new_optional_column_is_added_to_an_existing_table():
-    from sqlalchemy import Column, Integer, Table, inspect, text
-    from app.services import db
-    eng = db.ready()
-    with eng.begin() as c:
-        c.execute(text("CREATE TABLE late_column_probe (id INTEGER PRIMARY KEY)"))
-    t = Table("late_column_probe", db.metadata, Column("id", Integer, primary_key=True), Column("extra", Integer))
-    try:
-        db.ready()
-        assert "extra" in {c["name"] for c in inspect(db.engine()).get_columns("late_column_probe")}
-    finally:
-        t.drop(db.engine(), checkfirst=True)
-        db.metadata.remove(t)
 
 
 def test_the_api_reference_matches_what_the_api_returns(client, monkeypatch):
