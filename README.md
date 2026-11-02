@@ -63,7 +63,8 @@ podman build -t token-auditor-web web
 | `token-auditor-web` | 8080 | `BACKEND_URL`, e.g. `http://token-auditor-backend:8080` |
 
 Send outside traffic to the web image. It serves `/app` and forwards `/api`, `/docs` and `/openapi.json` to the backend.
-Health checks: `/healthz` on the web image, `/healthz/db` on the backend.
+Health checks: `/healthz` on the web image; on the backend, `/healthz` (the process answers, for liveness) and
+`/healthz/db` (the database answers, 503 when it doesn't, for readiness).
 
 To serve everything under a path on a shared host, build the web image with
 `--build-arg PATH_PREFIX=/token-auditor` and run the backend with `PATH_PREFIX=/token-auditor`. The UI is then at

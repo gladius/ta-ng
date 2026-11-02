@@ -71,11 +71,15 @@ def web_ui(path: str):
         return HTMLResponse("The web UI is not built: run <code>npm ci &amp;&amp; npm run build</code> in web/.", 503)
     return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    """Liveness: the process answers. No database call, so a database outage doesn't restart the pod."""
+    return {"ok": True}
 
 
 @app.get("/healthz/db")
 def healthz_db():
-    """Liveness and the store in use ('postgresql' or 'sqlite', host/db without credentials); 503 when unreachable."""
+    """Readiness: the store in use ('postgresql' or 'sqlite', host/db without credentials); 503 when unreachable."""
     from app.services import db
     h = db.health()
     return JSONResponse(h, status_code=200 if h.get("ok") else 503)
