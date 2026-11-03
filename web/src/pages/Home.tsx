@@ -13,7 +13,7 @@ export default function Home() {
         <section className="panel tile">
           <div className="tile-head"><h2>Recent model audits</h2><Link to="/audit/models">All audits</Link></div>
           {jobs.isPending ? <Loading /> : jobs.isError ? <Failed error={jobs.error} /> : !jobs.data.length ? (
-            <p className="muted">No batches yet. Teams send them through the API.</p>
+            <p className="muted">No audits yet.</p>
           ) : jobs.data.map((j) => (
             <div key={j.id} className="tile-row">
               <div className="spread"><Link className="mono" to={`/audit/models/${j.id}`}>{j.id}</Link><span className="muted">{count(j.items_total, 'request')}</span></div>
@@ -23,12 +23,7 @@ export default function Home() {
         </section>
         <section className="panel tile">
           <div className="tile-head"><h2>Model audit</h2><Link to="/audit/models">All audits</Link></div>
-          <p className="muted">Would a cheaper, open-weight or newly released model hold on a usecase's call-sites? Sampled from the log, re-run and judged with evidence.</p>
           <div className="row"><Link className="btn primary" to="/usecases">Pick a usecase</Link><Link className="btn" to="/models">Model catalog</Link></div>
-        </section>
-        <section className="panel tile">
-          <div className="tile-head"><h2>Cache audit</h2><Link to="/audit/cache">Cache audit</Link></div>
-          <p className="muted">What caching saves today per usecase and call-site, why it isn't more, and what each fix is worth.</p>
         </section>
       </div>
     </Page>

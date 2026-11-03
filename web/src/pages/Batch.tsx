@@ -1,7 +1,7 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { candidates, get, PREFIX, type JobStatus, type LabelSummary, type ResultsPage } from '../api'
+import { candidates, get, PREFIX, type JobStatus, type ResultsPage } from '../api'
 import { AnswersBar, change, count, Failed, Kpi, Legend, Loading, money, ms, Page, pct, Squares, Status, verdictWord, VsBar, when } from '../ui'
 
 const PER_PAGE = 50
@@ -9,29 +9,6 @@ const SHOW = [['all', 'All'], ['problems', 'Needs a look'], ['split', 'Candidate
 type Show = (typeof SHOW)[number][0]
 
 /** The batch's conclusion in plain words, written from its numbers (no model call). */
-function summarise(rows: LabelSummary[]): string[] {
-  const cands = candidates(rows)
-  if (!cands.length) return []
-  const n = Math.max(...cands.map((s) => s.requests))
-  const names = (xs: LabelSummary[]) => xs.map((s) => s.label).join(xs.length > 2 ? ', ' : ' and ')
-  const clean = cands.filter((s) => s.requests && s.within === s.requests)
-  const out = [clean.length === cands.length
-    ? `${names(clean)} ${clean.length > 1 ? 'behave' : 'behaves'} like the original on ${n === 1 ? 'the one request' : `all ${n} requests`}.`
-    : cands.map((s) => `${s.label} passes ${s.within} of ${count(s.requests, 'request')}`).join('; ') + '.']
-  const best = [...cands].sort((a, b) => (b.within_rate ?? 0) - (a.within_rate ?? 0)
-    || (a.cost_vs_original_pct ?? 0) - (b.cost_vs_original_pct ?? 0))[0]
-  if (best.cost_vs_original_pct != null) {
-    const c = best.cost_vs_original_pct, l = best.latency_vs_original_pct
-    out.push(`${clean.length > 1 ? 'The cheapest of those, ' + best.label + ',' : best.label} costs ${Math.abs(c)}% ${c <= 0 ? 'less' : 'more'} per call`
-      + (l == null ? '.' : ` and is ${Math.abs(l)}% ${l <= 0 ? 'faster' : 'slower'}.`))
-  }
-  const drifts = cands.filter((s) => s.answers?.drift).map((s) => `${s.answers!.drift} of ${s.label}'s answers drifted`)
-  if (drifts.length) out.push(drifts.join(', ') + '.')
-  const unverified = cands.reduce((t, s) => t + s.unverified, 0)
-  if (unverified) out.push(`${unverified} request checks could not be verified; each request's page says why.`)
-  return out
-}
-
 export default function Batch() {
   const { auditId: jobId = '' } = useParams()
   const [params, setParams] = useSearchParams()
@@ -67,7 +44,6 @@ export default function Batch() {
   const base = j.summary.find((s) => s.label === 'original')
   const cands = candidates(j.summary)
   const saving = [...cands].filter((s) => s.cost_vs_original_pct != null).sort((a, b) => a.cost_vs_original_pct! - b.cost_vs_original_pct!)[0]
-  const sentences = summarise(j.summary)
   const pages = Math.max(1, Math.ceil((results.data?.total ?? 0) / PER_PAGE))
 
   return (
@@ -90,19 +66,13 @@ export default function Batch() {
           {j.stop_reason && <p>{j.stop_reason}</p>}
           {j.error && <p>{j.status === 'failed' ? 'Failed: ' : ''}{j.error}</p>}
           {(j.status === 'failed' || j.status === 'stopped') && j.items_done < j.items_total && (
-            <p>The {j.items_total - j.items_done} unfinished requests run again with <span className="mono">POST {PREFIX}/api/audit/models/{j.id}/resume</span>, optionally with a higher <span className="mono">max_budget_usd</span>.</p>
+            <p>{j.items_total - j.items_done} unfinished · resume: <span className="mono">POST {PREFIX}/api/audit/models/{j.id}/resume</span></p>
           )}
-          {j.callback?.error && <p>The callback could not be delivered: {j.callback.error}</p>}
-          {j.unpriced_calls > 0 && <p>{j.unpriced_calls} model calls have no catalog price, so spend and costs are understated.</p>}
+          {j.callback?.error && <p>Callback failed: {j.callback.error}</p>}
+          {j.unpriced_calls > 0 && <p>{j.unpriced_calls} calls without a catalog price: spend is understated.</p>}
         </div>
       )}
 
-      {sentences.length > 0 && (
-        <section className="summary" aria-label="Summary">
-          <div className="summary-head"><span className="dot" aria-hidden="true" />Summary</div>
-          <p>{sentences.join(' ')}</p>
-        </section>
-      )}
 
       <div className="kpis">
         <Kpi label="Requests" value={j.items_done} note={j.items_done === j.items_total ? 'all finished' : `of ${j.items_total}`} />

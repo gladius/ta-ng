@@ -37,7 +37,6 @@ function ReuseTrend({ days, n }: { days: Record<string, Totals>; n: number }) {
           <Line type="monotone" dataKey="reuse" stroke={INK} strokeWidth={2} dot={false} isAnimationActive={false} />
         </LineChart>
       </ResponsiveContainer>
-      <p className="muted pad">Share of prompt tokens reused from cache, per day. A step down means something broke the prefix (a prompt change, a deploy).</p>
     </div>
   )
 }
@@ -201,7 +200,7 @@ export function CacheUsecase() {
         <Kpi label="Still possible" value={usd(u.saving)} note={`over ${u.window} days`} best={u.saving > 0 ? 'opportunity' : undefined} />
       </div>
       <section className="panel"><div className="panel-head"><b>Reused from cache, per day</b></div><ReuseTrend days={u.days} n={n} /></section>
-      <h2>{count(u.sites.length, 'call-site')} <span className="muted">the ones with something to fix first</span></h2>
+      <h2>{count(u.sites.length, 'call-site')}</h2>
       {u.sites.map((s) => <SiteCard key={s.site} s={s} usecase={u.usecase} />)}
     </Page>
   )
@@ -232,13 +231,13 @@ function PrefixBar({ s }: { s: Site }) {
 function ttlVerdict(t: Ttl, days: number): string {
   const late = t.beyond_default - (t.histogram.first ?? 0)
   const choices = Object.keys(t.options).map(Number).filter((x) => x > 0)
-  if (t.loss > 0) return `Caching costs more than it saves: the prompt is written far more often than it is read back. Not marking it saves ${usd(t.loss)} over ${days} days.`
+  if (t.loss > 0) return `Caching costs more than it saves: not marking it saves ${usd(t.loss)} over ${days} days.`
   if (choices.length < 2) return `${t.provider === 'google' ? 'Gemini' : 'This provider'}'s cache lifetime is fixed at ${ttlName(t.default_ttl)}; ${late.toLocaleString('en-US')} calls came too late to reuse the prompt.`
   if (t.best_ttl !== t.default_ttl && t.saving > 0) {
     const more = (t.options[t.best_ttl]?.reads ?? 0) - (t.options[t.default_ttl]?.reads ?? 0)
     return `A ${ttlName(t.best_ttl)} lifetime would save ${usd(t.saving)} over ${days} days: ${more.toLocaleString('en-US')} more calls would reuse the prompt.`
   }
-  return late > 0 ? `A longer lifetime wouldn't pay: the ${late.toLocaleString('en-US')} late calls don't cover the extra cost of longer-lived writes.` : `Every repeat call comes within ${ttlName(t.default_ttl)}: the lifetime is not the limit.`
+  return late > 0 ? `A longer lifetime wouldn't pay for the ${late.toLocaleString('en-US')} late calls.` : `Every repeat call comes within ${ttlName(t.default_ttl)}.`
 }
 
 /** Time since the previous call with the same prompt: black reused it (within the lifetime), red came too late, grey
@@ -326,7 +325,7 @@ export function CacheSite() {
           {s.grams ? <PromptMap grams={s.grams} models={Object.fromEntries(Object.entries(s.models).sort((a, b) => b[1].calls - a[1].calls).map(([m, v]) => [m, {
             provider: v.diagnosis?.evidence.provider ?? 'unknown', cache_min: v.diagnosis?.evidence.cache_min ?? 1024, calls: v.calls, calls_cached: v.calls_cached,
             prompt_tokens: v.prompt_tokens, cached_tokens: v.cached_tokens, written_tokens: v.written_tokens }]))} toolSets={s.layout.tool_sets} /> : <PrefixBar s={s} />}</div>
-        <div className="pad"><h2>What to do</h2><div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} /></div><p><b>{s.story.action}</b>{s.story.worth > 0 && <> Worth about <b>{usd(s.story.worth)}</b> over {s.window} days at today's traffic.</>}</p>
+        <div className="pad"><h2>What to do</h2><div className="row"><CauseChip cause={s.story.cause} proof={s.story.proof} /></div><p><b>{s.story.action}</b></p>
         </div>
       </section>
       <h2>Evidence</h2>

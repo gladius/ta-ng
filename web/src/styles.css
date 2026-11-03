@@ -141,9 +141,6 @@ table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
 .pad { padding: 12px 20px; }
 .note { background: var(--note); border-radius: var(--radius); padding: 12px 16px; }
 .note p { margin: 2px 0; }
-.summary { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 20px 24px; display: flex; flex-direction: column; gap: 8px; }
-.summary-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
-.summary-head .muted { font-weight: 400; letter-spacing: 0; text-transform: none; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gold); }
 .summary p { margin: 0; font-size: 18px; line-height: 1.45; letter-spacing: -0.01em; max-width: 70ch; }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }

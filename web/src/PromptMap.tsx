@@ -75,11 +75,11 @@ export function PromptMap({ grams, models, toolSets }: { grams: Grams; models: R
         <span>fixed opening <b>≈ {Math.max(0, fixedLead).toLocaleString('en-US')} tokens</b></span>
         {m && <span>minimum on <span className="mono">{pick}</span> <b>{min.toLocaleString('en-US')}</b></span>}
         {m && (m.calls_cached > 0
-          ? <span>reused today <b>≈ {reused.toLocaleString('en-US')} tokens</b> on {Math.round(100 * callsCached)}% of calls{reused > fixedLead + 50 && <> — follow-up turns of one conversation, not a shared prefix</>}</span>
+          ? <span>reused today <b>≈ {reused.toLocaleString('en-US')} tokens</b> on {Math.round(100 * callsCached)}% of calls{reused > fixedLead + 50 && <> (follow-up turns)</>}</span>
           : <span>reused today <b>nothing</b></span>)}
         {(toolSets ?? 0) > 1 && <span className="warn">tool list in <b>{toolSets!.toLocaleString('en-US')}</b> different sets</span>}
         {fixedLead < min && reused > 0
-          ? <span className="warn">The catalog says <b>{min.toLocaleString('en-US')}</b> is the minimum on this model, yet the cache reused {reused.toLocaleString('en-US')}: the catalog minimum may be out of date</span>
+          ? <span className="warn">Reused {reused.toLocaleString('en-US')}, under the catalog minimum: the catalog may be out of date</span>
           : fixedLead < min
             ? <span className="warn"><b>Below the minimum</b>{firstVaried >= 0 && <>: the first change is at token {cells[firstVaried].token.toLocaleString('en-US')}</>}</span>
             : <span><b>Clears the minimum</b>: about {Math.min(fixedLead, tokens).toLocaleString('en-US')} tokens reusable a call</span>}

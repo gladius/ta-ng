@@ -5,7 +5,6 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { get, PREFIX, type JobStatus, type ResultsPage } from '../api'
 import { usecaseName } from '../cache'
 import { AnswersBar, count, Failed, Legend, Loading, money, ms, Page, pct, Squares, verdictWord, VsBar, when } from '../ui'
-import { STRATEGY_NAME } from './How'
 
 export type Verdict = { requests: number; within: number; outside: number; unverified: number; pass_rate: number; cost_vs_original_pct: number | null; latency_vs_original_pct: number | null; fit_rate: number | null; verdict: 'passes' | 'drifts' | 'not verified' }
 export type Audit = Omit<JobStatus, 'status' | 'spec'> & {
@@ -16,6 +15,7 @@ export type Audit = Omit<JobStatus, 'status' | 'spec'> & {
   spec: JobStatus['spec'] | null
 }
 
+const STRATEGY_NAME: Record<string, string> = { cheaper: 'Cheaper', better_value: 'Better value', release: 'A release', manual: 'Manual', revalidate: 'Re-validate (retired)', drift_watch: 'Drift watch (retired)' }
 const OLD_STRATEGY: Record<string, string> = { cheaper: 'cheaper tier of each call-site\'s model', open_weight: 'open-weight swap in the same tier', release: 'a release', custom: 'chosen models', auto: 'Auto' }
 const STATUS: Record<string, string> = { sampling: 'Sampling', queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', stopped: 'Stopped' }
 
@@ -77,10 +77,9 @@ export function AuditDialog({ usecase, site, lockScope = false, onStarted }: { u
           value={{ value: strategy, label: STRATEGY_NAME[strategy] ?? strategy }}
           onChange={(v) => v && setStrategy(v.value)}
           formatOptionLabel={(o: { label: string; hint?: string }, m) => m.context === 'menu' ? <span>{o.label} <span className="muted">· {o.hint}</span></span> : o.label} />
-        <span className="muted">{strategies.data?.strategies.find((x) => x.id === strategy)?.does} · <Link to="/audit/models/how">how an audit works</Link></span>
       </label>
       <label>{strategy === 'manual' || strategy === 'release' ? 'Models' : 'Models to add'}
-        <Select isMulti classNamePrefix="rs" placeholder={strategy === 'manual' || strategy === 'release' ? 'Choose models… (type to search)' : 'Optional: more models to try alongside the strategy\'s picks'} closeMenuOnSelect={false}
+        <Select isMulti classNamePrefix="rs" placeholder={strategy === 'manual' || strategy === 'release' ? 'Choose models… (type to search)' : 'Optional'} closeMenuOnSelect={false}
           options={Object.entries(available.reduce<Record<string, { value: string; label: string }[]>>((g, m) => { (g[m.provider] ??= []).push({ value: m.model, label: `${m.model}${m.tier ? ` · ${m.tier}` : ''}${m.open_weight ? ' · open-weight' : ''}` }); return g }, {})).map(([provider, options]) => ({ label: provider, options }))}
           value={models.map((m) => ({ value: m, label: m }))}
           onChange={(v) => setModels(v.map((o) => o.value))} />
@@ -132,7 +131,7 @@ export function ModelAudits() {
   const crumbs = [{ label: 'Agentic workloads' }, { label: 'Model audits' }]
   return (
     <Page crumbs={crumbs}>
-      <div className="head"><div><h1>Model audits</h1><span className="muted"><Link to="/audit/models/how">How an audit works</Link></span></div><Link className="btn primary" to="/audit/models/new">New model audit…</Link></div>
+      <div className="head"><h1>Model audits</h1><Link className="btn primary" to="/audit/models/new">New model audit…</Link></div>
       {q.isPending ? <Loading /> : q.isError ? <Failed error={q.error} /> : !q.data.length ? <p className="empty">No model audits yet.</p> : (
         <section className="panel">
           <table className="grid">
@@ -183,7 +182,7 @@ export function ModelAuditDetail() {
       </div>
       {c.error && <p className="error" role="alert">{c.error}</p>}
       {spec && (
-        <p className="muted">Each request: the original re-run {spec.reference_runs}× beside its logged answer, each candidate {spec.first_runs ?? spec.candidate_runs}×{spec.first_runs != null && spec.first_runs < spec.candidate_runs && ` (up to ${spec.candidate_runs}× when one isn't a pass)`}; judge {spec.judge_model}, {spec.votes} votes when an answer isn't a pass. {j.items_done} of {j.items_total} done · spent {money(j.spend_usd, 2)}{c.max_budget_usd != null && ` of ${money(c.max_budget_usd, 2)}`}{c.stop_reason && ` · ${c.stop_reason}`}</p>
+        <p className="muted">Judge {spec.judge_model} · {j.items_done} of {j.items_total} done · spent {money(j.spend_usd, 2)}{c.max_budget_usd != null && ` of ${money(c.max_budget_usd, 2)}`}{c.stop_reason && ` · ${c.stop_reason}`}</p>
       )}
       {Object.keys(c.samples).map((st) => {
         const ids = new Set(c.samples[st].map((s) => s.id))
@@ -244,7 +243,7 @@ export function ModelAuditDetail() {
                 </div>
               </>
             )}
-            {!mine.length && <p className="muted pad">{c.status === 'done' ? 'No candidate was run for this call-site (no cheaper or open-weight model for its original in the catalog).' : c.status === 'sampling' ? 'Sampling requests from the log…' : c.status === 'stopped' || c.status === 'failed' ? `${STATUS[c.status]} before any result came in.` : 'Running…'}</p>}
+            {!mine.length && <p className="muted pad">{c.status === 'done' ? 'No candidate to try.' : c.status === 'sampling' ? 'Sampling requests from the log…' : c.status === 'stopped' || c.status === 'failed' ? `${STATUS[c.status]} before any result came in.` : 'Running…'}</p>}
           </section>
         )
       })}

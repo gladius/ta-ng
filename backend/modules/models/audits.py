@@ -29,12 +29,10 @@ from core.identity import store
 from validation import jobs
 
 STRATEGIES = {
-    "cheaper": "per call-site, the served models in lower tiers than its current model (same provider first) and the "
-               "served open-weight ones; up to 3",
-    "better_value": "per call-site, the served model one tier up and the same-tier served models of other providers: "
-                    "a stronger model can be cheaper per call when it answers tightly; up to 3",
-    "release": "the named models, against every call-site in scope",
-    "manual": "exactly the models you name",
+    "cheaper": "lower tiers, same provider first, and open-weight models; up to 3 per call-site",
+    "better_value": "one tier up, and the same tier from other providers; up to 3 per call-site",
+    "release": "the named models on every call-site in scope",
+    "manual": "the models you name",
 }
 STRATEGY_IDS = tuple(STRATEGIES) + ("open_weight", "custom", "auto", "drift_watch", "revalidate")      # older rows
 MAX_PICKS = 3

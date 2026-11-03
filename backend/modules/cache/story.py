@@ -23,30 +23,30 @@ def tell(site, window):
     models = sorted(site["models"], key=lambda m: -site["models"][m]["calls"])
     sent = "sent to %s" % models[0] if len(models) == 1 else "sent to %s (mostly %s)" % (", ".join(models), models[0])
     now = "%s calls in %d days, %s. %d%% of each prompt is reused from cache" % (
-        "{:,}".format(calls), window, sent, round(100 * share))
-    now += " (nothing is)." if share < 0.01 else "."
+        "{:,}".format(round(calls)), window, sent, round(100 * share))
+    now += "."
     worth = site.get("saving") if site.get("saving") is not None else (d.get("saving") or 0)   # all models of the site
     why, action = "", ""
     if cause == "ok":
-        why = "The part that stays the same every call is being reused."
+        why = "The fixed part is reused."
         action = "Nothing to do."
     elif cause == "no_mark":
         why = "The request doesn't mark its fixed part, and Claude only caches a marked prefix."
         action = "Add the cache mark on the fixed part. No text changes."
     elif cause == "below_min":
-        why = "The part that stays the same is %s tokens, under the %s-token minimum %s caches." % (
+        why = "The fixed part is %s tokens, under the %s-token minimum %s caches." % (
             "{:,}".format(ev.get("fixed_tokens", 0)), "{:,}".format(ev.get("cache_min", 0)), ev.get("provider", "the provider"))
-        action = "Nothing can be reused as it is. A larger shared prefix (merging call-sites, or moving shared instructions into one) would be needed."
+        action = "Nothing to do on this call-site alone: it needs a longer fixed part."
     elif cause == "dynamic_first":
         why = "%s comes before the fixed instructions, so the start of every call is different and nothing is shared%s." % (
             per_call[0].upper() + per_call[1:], " except on follow-up turns of the same conversation" if share > 0.05 else "")
-        action = "Move the fixed instructions first and the per-call content after them: ~%s tokens would then be reused on every call. Changing the prompt can change answers, so this is proven on the same model before anyone applies it." % "{:,}".format(ev.get("fixed_tokens", 0))
+        action = "Move the fixed instructions first: ~%s tokens reused on every call. Needs proof: a prompt change can change answers." % "{:,}".format(ev.get("fixed_tokens", 0))
     elif cause == "tools_vary":
         why = "The tool list changes from call to call (%d different sets) and tools come first in what the cache sees." % ev.get("tool_sets", 0)
         action = "Send one stable tool set for this call-site; put the varying part in the message instead."
     elif cause == "loss":
         t = main.get("ttl") or {}
-        why = "The prompt is written to cache much more often than it is read back, and every write costs extra."
+        why = "The prompt is written to cache far more often than it is read back."
         action = "Stop marking this prompt for cache: it saves about $%.2f over the window. No text changes." % t.get("loss", 0)
     elif cause == "gaps":
         t = main.get("ttl") or {}
@@ -56,7 +56,7 @@ def tell(site, window):
                                                            - t.get("options", {}).get(t.get("default_ttl"), {}).get("reads", 0))))
     elif cause == "sparse":
         why = "Calls are too far apart for %s's cache lifetime, and that lifetime can't be extended there." % ev.get("provider", "the provider")
-        action = "Nothing to set. Only more traffic, or a prefix shared with other call-sites, would help."
+        action = "Nothing to set."
     elif cause == "versions_churn":
         why = "The prompt changed %d times in the window; every change restarts the cache." % ev.get("versions", 0)
         action = "Change the fixed part less often, or keep the changing text after the fixed part."

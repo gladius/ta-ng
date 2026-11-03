@@ -11,10 +11,9 @@ from core import tasks
 
 JOBS = {
     "usecases_list": {"every_h": 12, "kind": "reload_usecases", "args": {}, "key": "reload_usecases",
-                      "on": True, "does": "Reload the usecases list from the log (calls per usecase in the window; cheap)"},
+                      "on": True, "does": ""},
     "process_days": {"every_h": 24, "kind": "process_days", "args": {}, "key": "process_days",
-                     "on": False, "does": "Process the log's new days: call-sites, versions, cache findings, audit samples "
-                                          "(one read of each new day, all usecases; off until its cost on production is known)"},
+                     "on": False, "does": "Call-sites, cache findings, audit samples"},
 }
 TICK_S = 30
 _next_tick = [0.0]
