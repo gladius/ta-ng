@@ -45,3 +45,34 @@ def test_unknown_without_gateway(monkeypatch):
         assert rep["has_gateway"] is False and all(r["available"] is None for r in rep["models"])
     finally:
         registry.refresh()
+
+
+def test_served_models_are_priced_by_the_gateway(monkeypatch):
+    """The gateway's /model/info prices ($ per token) win for what it serves; the rest keep config/models.json's;
+    refresh() puts the JSON back."""
+    from app.catalog import PRICE
+    from validation.pricing import cost_of
+    json_sonnet, json_gem = dict(PRICE["claude-sonnet-5"]), dict(PRICE["gemini-3.7-flash"])
+    sample = [
+        {"model_name": "bedrock-claude-sonnet-5", "underlying": "bedrock/us.anthropic.claude-sonnet-5",
+         "model_info": {"mode": "chat", "input_cost_per_token": 1.1e-06, "output_cost_per_token": 7e-06,
+                        "cache_read_input_token_cost": 1.1e-07}},
+        {"model_name": "gem37", "underlying": "vertex_ai/gemini-3.7-flash", "model_info": {"mode": "chat"}},  # no price
+        {"model_name": "house-model", "underlying": "hosted_vllm/house-model",
+         "model_info": {"mode": "chat", "input_cost_per_token": 5e-07, "output_cost_per_token": 1e-06}},
+        {"model_name": "jev-router", "underlying": "auto_router/complexity_router", "model_info": {}},
+    ]
+    monkeypatch.setattr(registry, "_gateway", lambda: ("https://gw.example", "k"))
+    monkeypatch.setattr(registry, "_fetch_model_info", lambda b, k: sample)
+    registry.refresh()
+    try:
+        registry.load()
+        assert PRICE["claude-sonnet-5"] == dict(json_sonnet, input=1.1, output=7.0, cache_read=0.11)   # cache write: JSON's
+        assert PRICE["gemini-3.7-flash"] == json_gem                       # the gateway gives no price: JSON's
+        assert cost_of("house-model", {"input": 1_000_000, "output": 1_000_000}) == 1.5   # not in the catalog, still priced
+        assert "jev-router" not in PRICE
+        by = {r["model"]: r for r in registry.report()["models"]}
+        assert by["claude-sonnet-5"]["price_from"] == "gateway" and by["gemini-3.7-flash"]["price_from"] == "catalog"
+    finally:
+        registry.refresh()
+    assert PRICE["claude-sonnet-5"] == json_sonnet and "house-model" not in PRICE

@@ -1,8 +1,10 @@
 """Model registry: config/models.json for reference, the gateway's deployed set (GET /model/info, cached once) for what
-can be called. Without a reachable gateway availability is unknown and nothing is gated. Never the public LiteLLM
-catalog: it lists every model, not this gateway's.
+can be called, and the gateway's prices for what it serves. Without a reachable gateway availability is unknown and
+nothing is gated. Never the public LiteLLM catalog: it lists every model, not this gateway's.
 """
+import copy
 import json
+import threading
 import urllib.request
 import urllib.error
 
@@ -11,6 +13,10 @@ from app.catalog import (PRICE, resolve_deployed, canonical_model, canonical_exa
                          is_callable, provider_of, tier, meta, max_output as _cat_max_output)
 
 _cache = {}
+_lock = threading.Lock()
+_JSON_PRICE = copy.deepcopy(PRICE)               # config/models.json's prices, before the gateway's
+_COST = {"input": "input_cost_per_token", "output": "output_cost_per_token",            # $ per token in /model/info
+         "cache_read": "cache_read_input_token_cost", "cache_write": "cache_creation_input_token_cost"}
 
 
 class ModelNotServable(Exception):
@@ -62,8 +68,12 @@ def _fetch_model_info(base, key):
 
 
 def _load(force=False):
-    if _cache.get("loaded") and not force:
-        return
+    with _lock:
+        if not _cache.get("loaded") or force:
+            _fetch_and_price()
+
+
+def _fetch_and_price():
     base, key = _gateway()
     deployment, source = None, "unknown — no gateway configured (dev / Anthropic-direct)"
     if base:
@@ -73,7 +83,7 @@ def _load(force=False):
     if deployment is not None:
         for m in deployment:
             mi = m.get("model_info") or {}
-            if mi.get("mode", "chat") != "chat":
+            if (mi.get("mode") or "chat") != "chat":          # a router reports no mode
                 continue                                   # embeddings/others aren't downgrade targets
             c = resolve_deployed(m["underlying"])
             if c:
@@ -86,12 +96,42 @@ def _load(force=False):
     serving = {c: _pick_flavour(c, names) for c, names in flavours.items()}
     names = {n for lst in flavours.values() for n in lst}
     _cache.update(loaded=True, deployment=deployment, source=source, available=served,
-                  serving=serving, serving_names=names, flavours=flavours, gwmeta=gwmeta)
+                  serving=serving, serving_names=names, flavours=flavours, gwmeta=gwmeta,
+                  priced=_gateway_prices(deployment, serving))
+
+
+def _gateway_prices(deployment, serving):
+    """PRICE = config/models.json, then the gateway's own price for every chat model it serves (catalog id, or the
+    gateway's name for a model the catalog doesn't know). A price is corrected in the gateway's config (model_info),
+    so LiteLLM's spend and ours agree. Returns the names priced by the gateway."""
+    PRICE.clear()
+    PRICE.update(copy.deepcopy(_JSON_PRICE))
+    priced = set()
+    for m in deployment or []:
+        mi = m.get("model_info") or {}
+        c = resolve_deployed(m["underlying"])
+        name = c or m["model_name"]
+        if (mi.get("mode") or "chat") != "chat" or name in priced or (c and serving.get(c) != m["model_name"]):
+            continue                                       # one price per model: the flavour we call
+        got = {f: round(mi[k] * 1e6, 6) for f, k in _COST.items() if isinstance(mi.get(k), (int, float))}
+        if "input" in got and "output" in got:
+            PRICE.setdefault(name, {"cache_read": round(got["input"] * 0.1, 6), "cache_write": 0, "cache_min": 1024})
+            PRICE[name].update(got)
+            priced.add(name)
+    return priced
+
+
+def load():
+    """Availability and the gateway's prices, fetched once per process (refresh() fetches again)."""
+    _load()
 
 
 def refresh():
-    """Re-fetch on next use."""
-    _cache.clear()
+    """Re-fetch on next use; prices are config/models.json's until then."""
+    with _lock:
+        _cache.clear()
+        PRICE.clear()
+        PRICE.update(copy.deepcopy(_JSON_PRICE))
 
 
 def has_gateway():
@@ -165,6 +205,7 @@ def report():
         info = meta(name)
         models.append({"model": name, "provider": provider_of(name), "tier": info.get("tier"),
                        "mode": _gwmeta(name, "mode") or info.get("mode", "chat"), "input": PRICE[name].get("input"),
+                       "price_from": "gateway" if name in _cache["priced"] else "catalog",
                        "output": PRICE[name].get("output"), "context_window": context_window(name),
                        "retire_date": info.get("retire_date"), "callable": is_callable(name),
                        "open_weight": info.get("open_weight", False), "family": info.get("family"),
@@ -174,7 +215,7 @@ def report():
     uncatalogued = []
     if dep is not None:
         for m in dep:
-            if (m.get("model_info") or {}).get("mode", "chat") == "chat" and not resolve_deployed(m["underlying"]):
+            if ((m.get("model_info") or {}).get("mode") or "chat") == "chat" and not resolve_deployed(m["underlying"]):
                 uncatalogued.append({"model_name": m["model_name"], "underlying": m["underlying"]})
     return {"source": _cache["source"], "has_gateway": dep is not None, "models": models,
             "uncatalogued": uncatalogued, "gateway_map": gateway_map()}

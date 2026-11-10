@@ -17,9 +17,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 @contextlib.asynccontextmanager
 async def _lifespan(app):
     """Run VALIDATION_INPROCESS_WORKERS validation workers in the web process: 2 by default. No database, no start."""
+    from app import registry
     from app.services import db
     from validation import worker
     db.url()
+    threading.Thread(target=registry.load, daemon=True).start()     # the gateway's models and prices, off the start path
     stop = threading.Event()
     worker.start(int(credentials.get_config("VALIDATION_INPROCESS_WORKERS", "2")), stop)
     yield

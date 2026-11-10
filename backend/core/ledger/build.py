@@ -324,7 +324,10 @@ def usecases(days=30):
 
 
 def _prices():
+    from app import registry
     from app.catalog import PRICE
+    registry.refresh()
+    registry.load()                                    # each day run prices with the gateway's current prices
     return [{"model": m, "input": float(p["input"]), "cache_read": float(p["cache_read"]), "output": float(p["output"]),
              "cache_write": float(p.get("cache_write") or 0)} for m, p in PRICE.items()]
 

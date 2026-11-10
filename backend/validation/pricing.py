@@ -3,7 +3,9 @@
 
 def cost_of(model, usage):
     """`usage` is llm_client.usage's shape {input, output, cache_read, cache_write}. None when the model has no price."""
+    from app import registry
     from app.catalog import PRICE, canonical_model
+    registry.load()                                    # the gateway's prices, once per process
     p = PRICE.get(canonical_model(model) or model or "")
     if not p or not usage:
         return None

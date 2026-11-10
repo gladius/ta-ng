@@ -4,7 +4,7 @@ import { get } from '../api'
 import { Failed, Loading, Page } from '../ui'
 
 type Model = {
-  model: string; provider: string | null; tier: string | null; mode: string; input: number | null; output: number | null
+  model: string; provider: string | null; tier: string | null; mode: string; input: number | null; output: number | null; price_from: 'gateway' | 'catalog'
   context_window: number | null; retire_date: string | null; open_weight: boolean; family: string | null; host: string | null
   confidence: string | null; purpose: string | null; note: string | null; available: boolean | null
 }
@@ -31,7 +31,7 @@ export function Models() {
         <section className="panel">
           <div className="scroll">
             <table className="grid">
-              <thead><tr><th>Model</th><th>Provider</th><th>Tier</th><th>Mode</th><th className="num">In $/1M</th><th className="num">Out $/1M</th><th className="num">Context</th><th>Availability</th></tr></thead>
+              <thead><tr><th>Model</th><th>Provider</th><th>Tier</th><th>Mode</th><th className="num">In $/1M</th><th className="num">Out $/1M</th><th>Price from</th><th className="num">Context</th><th>Availability</th></tr></thead>
               <tbody>
                 {q.data.models.map((m) => (
                   <tr key={m.model}>
@@ -43,6 +43,7 @@ export function Models() {
                     </td>
                     <td>{m.provider ?? '—'}</td><td>{m.tier ?? '—'}</td><td>{m.mode}</td>
                     <td className="num mono">{m.input ?? '—'}</td><td className="num mono">{m.output ?? '—'}</td>
+                    <td>{m.price_from === 'gateway' ? <span className="pill">gateway</span> : <span className="muted">catalog</span>}</td>
                     <td className="num mono">{m.context_window ? m.context_window.toLocaleString('en-US') : '—'}</td>
                     <td className="nowrap">{m.available == null ? <span className="muted">unknown</span> : m.available ? <span className="pill">available</span> : <span className="muted">not deployed</span>}</td>
                   </tr>

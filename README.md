@@ -99,6 +99,15 @@ The backend reads process environment first, then `backend/.env` (gitignored, ne
 
 Nothing processes by itself until the `process_days` schedule is turned on in the UI.
 
+## Prices
+
+A model the gateway serves is priced with the gateway's own prices (LiteLLM's `GET /model/info`), the same ones LiteLLM
+uses for its spend. To correct one, set it in the gateway's config under the model's `model_info`
+(`input_cost_per_token`, `output_cost_per_token`, `cache_read_input_token_cost`, `cache_creation_input_token_cost`).
+Every other model, and every model when the gateway can't be reached, uses `backend/config/models.json`, which also
+holds the tiers, cache minimums and retirement dates. The Model catalog page shows where each price comes from. Days
+already processed keep the prices of their time.
+
 ## Database
 
 The schema lives in migrations (`backend/alembic/versions`), not in table creation at runtime. Each backend process
