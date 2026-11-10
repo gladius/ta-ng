@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Model Validation</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -63,6 +64,19 @@ section { display: grid; gap: 20px; }
 
 /* the pass rule */
 .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+/* with tracing and without */
+.tr-side { border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.spans, .spans ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.spans ul { padding-left: 18px; border-left: 1px solid var(--line-strong); margin-top: 6px; }
+.spans li { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.spans li > ul { flex-basis: 100%; }
+.sp { font: 12px var(--mono); border: 1px solid var(--line-strong); border-radius: 5px; padding: 3px 7px; background: var(--panel); overflow-wrap: anywhere; }
+.sp.run { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.sp.hit { background: var(--gold-soft); border-color: var(--gold); font-weight: 600; }
+.sp.llm { color: var(--ink-2); }
+.flat { display: grid; gap: 6px; }
+.flat span { font: 12px var(--mono); border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; color: var(--ink-2); overflow-wrap: anywhere; }
+.flat i { font-style: normal; color: var(--ink); }
 @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
 .req { display: grid; gap: 14px; }
 .req-top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
@@ -243,6 +257,46 @@ footer { font-size: 12px; color: var(--ink-3); }
         <span class="f miss"><span class="k">program · session</span>not in the log</span>
       </div>
       <p class="small muted">The usecase is the team. One team runs many programs, and each program makes several kinds of calls. Only the request text says which one it is.</p>
+    </div>
+
+    <div class="panel" style="display:grid; gap:16px">
+      <h3>With tracing and without</h3>
+      <div class="grid2">
+        <div class="tr-side">
+          <div class="req-top"><b>Traced (OpenTelemetry)</b><span class="st done">name is sent</span></div>
+          <ul class="spans">
+            <li><span class="sp run">trace 4bf9…</span><span class="small muted">one agent run</span>
+              <ul>
+                <li><span class="sp">invoke_agent claims agent</span>
+                  <ul>
+                    <li><span class="sp hit">eligibility_check</span><span class="sp llm">chat claude-sonnet-5</span></li>
+                    <li><span class="sp">execute_tool lookup_policy</span></li>
+                    <li><span class="sp hit">write_letter</span><span class="sp llm">chat claude-sonnet-5</span></li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+          </ul>
+          <p class="small muted">Each model call is a span inside the run, under the step that made it. The step's name is the call-site, read, not worked out.</p>
+        </div>
+        <div class="tr-side">
+          <div class="req-top"><b>Not traced (our log)</b><span class="st open">text only</span></div>
+          <div class="flat">
+            <span>uc-claims-orchestrator · claude-sonnet-5 · <i>"You are a claims assistant… Decide whether…"</i></span>
+            <span>uc-claims-orchestrator · claude-sonnet-5 · <i>"You are a claims assistant… Write the letter…"</i></span>
+            <span>uc-claims-orchestrator · claude-sonnet-5 · <i>"You are a claims assistant… Decide whether…"</i></span>
+          </div>
+          <p class="small muted">Each row stands alone: no run, no parent step, no name. The call-site has to be found in the text.</p>
+        </div>
+      </div>
+      <div class="picks">
+        <div class="pick"><div class="k"><b>No name</b></div><p>The step name stays in the program. The gateway only sees the prompt.</p></div>
+        <div class="pick"><div class="k"><b>No parent</b></div><p>Two steps with nearly the same text look like one call-site.</p></div>
+        <div class="pick"><div class="k"><b>No run</b></div><p>Calls of one run can't be put together, so their order (planner first, writer last) is lost.</p></div>
+        <div class="pick"><div class="k"><b>Shared wrappers</b></div><p>A framework puts the same long text on every agent's calls, so the text is mostly alike across agents.</p></div>
+        <div class="pick"><div class="k"><b>Edited prompts</b></div><p>A changed prompt looks like a new call-site until a count shows it is the same one.</p></div>
+      </div>
+      <p class="small muted">When a caller is traced, the gateway (LiteLLM) keeps the run's trace id from the standard <span class="mono">traceparent</span> header in <span class="mono">litellm_trace_id</span>; otherwise it makes a new id for every call. That gives the run, not the step: span names stay in the caller's tracing tool.</p>
     </div>
 
     <div class="grid2">
