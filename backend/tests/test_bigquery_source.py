@@ -88,16 +88,27 @@ def test_lookup_by_request_id(monkeypatch):
     rows = [{"k": "chatcmpl-1", "request": json.dumps(_msgs("Billing agent.")), "response": json.dumps(routed),
              "params": json.dumps({"max_tokens": 32768, "tools": [{"type": "function", "function": {"name": "refund"}}],
                                    "temperature": 0.2}), "served": "openai/gpt-5.4-mini"}]
-    seen = {}
-    monkeypatch.setattr(core_bq, "query", lambda sql, params, timeout=None: seen.update(sql=sql, params=params) or rows)
+    seen = []
+    import datetime
+    day = datetime.date(2025, 10, 14)
+    def query(sql, params, timeout=None):
+        seen.append((sql, params))
+        return [{"d": day}] if len(seen) == 1 else rows
+    monkeypatch.setattr(core_bq, "query", query)
     got = bq.lookup(["chatcmpl-1", "chatcmpl-2"])
-    assert "WHERE DATE(`created_timestamp_utc`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND `request_id` IN " \
-           "UNNEST(@ids)" in seen["sql"]                         # only the window's partitions, never the whole table
-    assert seen["params"] == {"ids": ["chatcmpl-1", "chatcmpl-2"], "days": 2}
+    # two steps: the days the ids are in (id and time columns only), then the bodies from just those days
+    assert "SELECT DISTINCT DATE(`created_timestamp_utc`) AS d" in seen[0][0] and "`request`" not in seen[0][0]
+    assert "INTERVAL @days DAY) AND `request_id` IN UNNEST(@ids)" in seen[0][0]
+    assert seen[0][1] == {"ids": ["chatcmpl-1", "chatcmpl-2"], "days": 30}
+    assert "WHERE DATE(`created_timestamp_utc`) IN UNNEST(@dates) AND `request_id` IN UNNEST(@ids)" in seen[1][0]
+    assert seen[1][1] == {"ids": ["chatcmpl-1", "chatcmpl-2"], "dates": [day]}
     body, resp = got["chatcmpl-1"]
     assert body["model"] == "openai/gpt-5.4-mini" and body["max_tokens"] == 32768 and body["temperature"] == 0.2
     assert [t["function"]["name"] for t in body["tools"]] == ["refund"] and resp["id"] == "chatcmpl-1"
     assert list(got) == ["chatcmpl-1"]                         # an unknown id is just absent
+    seen.clear()
+    monkeypatch.setattr(core_bq, "query", lambda sql, params, timeout=None: seen.append(sql) or [])
+    assert bq.lookup(["chatcmpl-3"]) == {} and len(seen) == 1    # no day found: the bodies are never read
 
 
 def test_skip_usecases_setting_parses_and_empty_means_none(monkeypatch):

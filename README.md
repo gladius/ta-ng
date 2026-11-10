@@ -92,6 +92,7 @@ The backend reads process environment first, then `backend/.env` (gitignored, ne
 | `BQ_PARAMS_COLUMN`, `BQ_MODEL_COLUMN` | No | Extra log columns |
 | `SKIP_USECASES`, `ONLY_USECASES` | No | Comma-separated LIKE patterns: usecases never read, or the only ones read |
 | `ANALYSIS_WINDOW_DAYS` | No, default 7 | Days of the log kept and processed |
+| `LOOKUP_DAYS` | No, default 30 | How far back a `request_id` sent to the API is searched for. The search reads only the id and time columns; the bodies are then read from the days the ids are in, each a full day's read of the two payload columns |
 | `BQ_MAX_TB` | No, default 2 | A BigQuery statement that would read more is refused before it runs |
 | `AUDIT_PROFILE_MODEL` | No, default `claude-sonnet-5` | Names and describes each call-site |
 | `AUDIT_JUDGE_MODEL` | No, default `claude-sonnet-5` | Judges the answers in a model audit |

@@ -18,7 +18,9 @@ except ModuleNotFoundError as e:
     if e.name != "connectors.bigquery._local":
         raise                              # a real error inside _local.py must show, not vanish
 
-LOOKUP_DAYS = 2         # a lookup by plain request_id reads these last days (BigQuery has no index: every day is a full read)
+LOOKUP_DAYS = int(credentials.get_config("LOOKUP_DAYS") or 30)    # how far back a plain request_id is searched for
+
+
 
 
 def _json(v):
@@ -101,10 +103,15 @@ def lookup(request_ids, days=LOOKUP_DAYS):
     keys = {i.split("#")[0]: i for i in request_ids if "@" in i}          # one row per id@time; #n repeats share it
     rows = []
     if plain:
-        sql = ("SELECT CAST(`{id}` AS STRING) AS k, `{req}` AS request, `{resp}` AS response{x} FROM `{table}` "
-               "WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND `{id}` IN UNNEST(@ids)"
-               ).format(x=extra, **c)
-        rows += bq.query(sql, {"ids": plain, "days": days}, timeout=120)
+        # Two steps: the log has no index on the id, so a filter by id still bills every byte of the days it scans.
+        # First the id and time columns only (gigabytes over LOOKUP_DAYS), then the bodies from the days found.
+        sql = ("SELECT DISTINCT DATE(`{time}`) AS d FROM `{table}` "
+               "WHERE DATE(`{time}`) >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) AND `{id}` IN UNNEST(@ids)").format(**c)
+        dates = sorted(r["d"] for r in bq.query(sql, {"ids": plain, "days": days}, timeout=120))
+        if dates:
+            sql = ("SELECT CAST(`{id}` AS STRING) AS k, `{req}` AS request, `{resp}` AS response{x} FROM `{table}` "
+                   "WHERE DATE(`{time}`) IN UNNEST(@dates) AND `{id}` IN UNNEST(@ids)").format(x=extra, **c)
+            rows += bq.query(sql, {"ids": plain, "dates": dates}, timeout=600)
     if keys:
         dates = sorted({datetime.datetime.fromtimestamp(int(k.split("@")[1]) / 1e6, datetime.timezone.utc).date() for k in keys})
         sql = ("SELECT k, request, response{xs} FROM (SELECT CONCAT(CAST(`{id}` AS STRING), '@', "
