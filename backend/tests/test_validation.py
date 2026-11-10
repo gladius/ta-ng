@@ -1,4 +1,8 @@
 """The validation engine, its judge-reply readers, the downgrade adapter and the measured run record. Offline."""
+try:
+    import httpx2 as httpx          # what openai >= 3.4 ships; older ones used httpx
+except ModuleNotFoundError:
+    import httpx
 import types
 
 import openai
@@ -200,7 +204,6 @@ def test_gateway_is_one_setting_and_skips_its_cache_and_log(monkeypatch):
 
 
 def test_unreachable_endpoint_is_raised_not_recorded(monkeypatch):
-    import httpx
     monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
     def refused(**kw):
         raise openai.APIConnectionError(request=httpx.Request("POST", "http://gw.test"))
@@ -237,7 +240,6 @@ def test_a_logged_request_is_re_sent_as_it_was(monkeypatch):
 
 
 def test_out_of_credit_is_raised_at_once_not_recorded(monkeypatch):
-    import httpx
     calls = []
     monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
     for status, body in ((429, "Budget has been exceeded! Key=token-auditor Current cost: 25.0"),     # LiteLLM budget
@@ -266,7 +268,6 @@ def test_out_of_credit_is_raised_at_once_not_recorded(monkeypatch):
 
 
 def test_a_timeout_is_one_slow_call_not_an_unreachable_endpoint(monkeypatch):
-    import httpx
     monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
     def slow(**kw):
         raise openai.APITimeoutError(request=httpx.Request("POST", "http://gw.test"))
@@ -379,7 +380,6 @@ def test_the_judge_reads_the_whole_request():
 
 def test_a_timeout_is_not_retried_when_the_caller_says_so(monkeypatch):
     """The grouping loop's calls: one timeout raises at once (no four 3-minute waits); others keep the retries."""
-    import httpx
     import openai
     from app.services import llm_client
     tries = []
