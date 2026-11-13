@@ -53,6 +53,8 @@ export default function Batch() {
     s.avg_reasoning_tokens == null ? '—' : `${n(s.avg_reasoning_tokens)}${s.avg_output_tokens ? ` (${Math.round((s.avg_reasoning_tokens / s.avg_output_tokens) * 100)}%)` : ''}`
   const sites = Object.keys(j.samples ?? {}).filter(Boolean)                 // call-sites of a sampled audit; none for sent requests
   const picked = Object.fromEntries(Object.entries(j.samples ?? {}).flatMap(([st, xs]) => xs.map((x) => [x.id, { st, why: x.why }])))
+  const judged = j.spec?.judge !== false
+  const most = [...cands].filter((s) => s.output_tokens_vs_original_pct != null).sort((a, b) => b.output_tokens_vs_original_pct! - a.output_tokens_vs_original_pct!)[0]
   const saving = [...cands].filter((s) => s.cost_vs_original_pct != null).sort((a, b) => a.cost_vs_original_pct! - b.cost_vs_original_pct!)[0]
   const pages = Math.max(1, Math.ceil((results.data?.total ?? 0) / PER_PAGE))
 
@@ -64,7 +66,7 @@ export default function Batch() {
             <span className={'pill pill-' + (j.status === 'sampling' ? 'running' : j.status)}>{STATUS[j.status] ?? j.status}</span></div>
           <p className="meta">
             {j.id} · {j.scope === 'requests' ? count(j.items_total, 'sent request') : usecaseName(j.usecase)} · {STRATEGY_NAME[j.strategy] ?? j.strategy} · {j.items_done} of {j.items_total} requests done
-            {j.spec && ` · judge ${j.spec.judge_model}`} · started {when(j.created_at)} by {j.trigger}{live && ' · live'}
+            {j.spec && (j.spec.judge === false ? ' · not judged' : ` · judge ${j.spec.judge_model}`)}{j.spec?.max_output_tokens ? ` · output cap ${j.spec.max_output_tokens.toLocaleString()}` : ''} · started {when(j.created_at)} by {j.trigger}{live && ' · live'}
           </p>
         </div>
         <div className="row">
@@ -89,8 +91,9 @@ export default function Batch() {
 
       <div className="kpis">
         <Kpi label="Requests" value={j.items_done} note={j.items_done === j.items_total ? 'all finished' : `of ${j.items_total}`} />
-        <Kpi label="Models passing every request" value={`${cands.filter((s) => s.requests && s.within === s.requests).length} of ${cands.length}`}
+        {judged ? <Kpi label="Models passing every request" value={`${cands.filter((s) => s.requests && s.within === s.requests).length} of ${cands.length}`}
           note={cands.map((s) => `${s.label} ${s.within}/${s.requests}`).join(' · ')} />
+          : <Kpi label="Output tokens" value={most ? change(most.output_tokens_vs_original_pct) : '—'} note={most ? `${most.label} vs ${vs}` : 'answers not judged'} />}
         <Kpi label={saving && saving.cost_vs_original_pct! > 0 ? `Cost vs ${vs}` : 'Largest saving'} best={!!saving && saving.cost_vs_original_pct! <= 0} value={saving ? change(saving.cost_vs_original_pct) : '—'} note={saving ? `${saving.label}, cost per call` : 'no prices yet'} />
         <Kpi label="Spent on this audit" value={money(j.spend_usd, 2)} note={j.max_budget_usd == null ? 'no budget limit' : `of ${money(j.max_budget_usd, 2)}`} />
       </div>
@@ -107,7 +110,7 @@ export default function Batch() {
                 {base && (
                   <tr className="base-row">
                     <td className="nowrap"><b>{baseModel ?? 'original'}</b><div className="muted">{baseModel ? 'baseline' : `baseline · ${base.models.join(', ')}`}</div></td>
-                    <td className="muted">its own answers agree {pct(base.avg_consistency)}</td>
+                    <td className="muted">{judged ? `its own answers agree ${pct(base.avg_consistency)}` : 'not judged'}</td>
                     <td className="num mono">{n(base.avg_input_tokens)}</td>
                     <td><VsBar value={base.avg_output_tokens ?? null} base={base.avg_output_tokens ?? null} shown={n(base.avg_output_tokens)} isBase /></td>
                     <td className="num nowrap"><span className="mono">{reasoning(base)}</span><div className="muted">answer {n(base.avg_output_chars)} chars</div></td>
@@ -118,7 +121,7 @@ export default function Batch() {
                 {cands.map((s) => (
                   <tr key={s.label}>
                     <td className="nowrap"><b>{s.label}</b></td>
-                    <td>{s.answers ? <AnswersBar a={s.answers} /> : <span className="muted">average fit {pct(s.avg_fit_rate)}</span>}</td>
+                    <td>{!judged ? <span className="muted">not judged</span> : s.answers ? <AnswersBar a={s.answers} /> : <span className="muted">average fit {pct(s.avg_fit_rate)}</span>}</td>
                     <td className="num mono">{n(s.avg_input_tokens)}</td>
                     <td><VsBar value={s.avg_output_tokens ?? null} base={base?.avg_output_tokens ?? null} shown={n(s.avg_output_tokens)} vs={vs} /></td>
                     <td className="num nowrap"><span className="mono">{reasoning(s)}</span><div className="muted">answer {n(s.avg_output_chars)} chars</div></td>
@@ -129,7 +132,7 @@ export default function Batch() {
               </tbody>
             </table>
           </div>
-          <Legend />
+          {judged && <Legend />}
         </section>
       )}
 
@@ -194,7 +197,7 @@ export default function Batch() {
         ) : (
           <div className="scroll">
             <table className="grid">
-              <thead><tr><th>Request</th>{sites.length > 0 && <><th>Call-site</th><th>Why picked</th></>}<th>{baseModel ?? 'Original'} agrees with itself</th>{cands.map((s) => <th key={s.label}>{s.label}</th>)}</tr></thead>
+              <thead><tr><th>Request</th>{sites.length > 0 && <><th>Call-site</th><th>Why picked</th></>}{judged && <th>{baseModel ?? 'Original'} agrees with itself</th>}{cands.map((s) => <th key={s.label}>{s.label}</th>)}</tr></thead>
               <tbody>
                 {results.data.results.map((r) => {
                   const url = `/audit/models/${j.id}/requests/${encodeURIComponent(r.id)}`   // ids may hold / ? # %
@@ -202,14 +205,14 @@ export default function Batch() {
                     <tr key={r.id}>
                       <td className="mono"><Link to={url}>{r.id}</Link></td>
                       {sites.length > 0 && <><td>{j.site_names[picked[r.id]?.st] ?? '—'}</td><td className="muted">{picked[r.id]?.why ?? ''}</td></>}
-                      <td className="mono">{r.reference.agree ?? '?'}/{r.reference.of}</td>
+                      {judged && <td className="mono">{r.reference.agree ?? '?'}/{r.reference.of}</td>}
                       {cands.map((s) => {
                         const c = r.candidates.find((x) => x.label === s.label)
                         return (
                           <td key={s.label}>
                             {c ? (
                               <Link className={'cell v-' + c.verdict} to={`${url}?cand=${encodeURIComponent(c.label)}`} title={c.judge_reason || c.reason}>
-                                {verdictWord[c.verdict]} <Squares runs={c.runs} />
+                                {verdictWord[c.verdict]} {judged && <Squares runs={c.runs} />}
                               </Link>
                             ) : <span className="muted">—</span>}
                           </td>

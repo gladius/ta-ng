@@ -270,14 +270,18 @@ def start(**kw):
     return get(audit_id)
 
 
+def _spec(judge_model=None, judge=True, max_output_tokens=None):
+    from app.services.downgrade_refset import spec as app_spec
+    return dataclasses.replace(app_spec(), judge=judge, max_output_tokens=max_output_tokens or 0,
+                               **({"judge_model": judge_model} if judge_model else {}))
+
+
 def start_requests(items, strategy="manual", asked=(), max_budget_usd=None, callback_url=None, trigger="api",
-                   judge_model=None):
+                   judge_model=None, judge=True, max_output_tokens=None):
     """An audit of requests the caller sent (already parsed into engine items): queued at once, no sampling."""
     from app.services.downgrade_refset import spec as app_spec
     audit_id = "aud_" + secrets.token_hex(5)
-    spec = app_spec()
-    if judge_model:
-        spec = dataclasses.replace(spec, judge_model=judge_model)
+    spec = _spec(judge_model, judge, max_output_tokens)
     samples = {"": [{"id": it["id"], "why": "sent"} for it in items]}
     eng = db.ready()
     with eng.begin() as c:
@@ -290,7 +294,7 @@ def start_requests(items, strategy="manual", asked=(), max_budget_usd=None, call
 
 
 def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_SAMPLES, max_budget_usd=None,
-          trigger="user", judge_model=None, auto=False, callback_url=None):
+          trigger="user", judge_model=None, auto=False, callback_url=None, judge=True, max_output_tokens=None):
     """Sample, build the items and queue the validation, for an audit row that already exists. Run again (its worker
     died), it finishes what is missing and never queues the job twice."""
     from app.services.downgrade_refset import spec as app_spec
@@ -327,9 +331,7 @@ def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_
                               "candidates": [{"label": (m + " now") if strategy == "drift_watch" else m, "model": m} for m in cands]})
         if not items:
             raise ValueError("no candidate for these call-sites' models (nothing cheaper / no open-weight swap in the catalog)")
-        spec = app_spec()
-        if judge_model:
-            spec = dataclasses.replace(spec, judge_model=judge_model)
+        spec = _spec(judge_model, judge, max_output_tokens)
         _set(audit_id, samples=json.dumps(samples))          # before the job: a retry after a crash needs them
         job = jobs.create(items, spec, max_budget_usd, callback_url, job_id=audit_id)
         _set(audit_id, job_id=job["id"], status="queued")
@@ -347,7 +349,7 @@ def _verdicts(audit):
     latency_vs_original_pct, consistency}}} from the job's results, by the samples' ids."""
     site_of = {s["id"]: st for st, ss in audit["samples"].items() for s in ss}
     agg = defaultdict(lambda: defaultdict(lambda: {"requests": 0, "within": 0, "outside": 0, "unverified": 0,
-                                                   "cost": [], "lat": [], "base_cost": [], "base_lat": [], "fit": []}))
+                                                   "not_judged": 0, "cost": [], "lat": [], "base_cost": [], "base_lat": [], "fit": []}))
     for r in jobs.results(audit["job_id"]):
         st = site_of.get(r["id"])
         if st is None:                                     # "" is the key of your requests
@@ -373,7 +375,8 @@ def _verdicts(audit):
                              "pass_rate": round(a["within"] / n, 3), "cost_vs_original_pct": pct(a["cost"], a["base_cost"]),
                              "latency_vs_original_pct": pct(a["lat"], a["base_lat"]),
                              "fit_rate": round(sum(a["fit"]) / len(a["fit"]), 3) if a["fit"] else None,
-                             "verdict": "passes" if a["within"] == a["requests"] else "drifts" if a["outside"] else "not verified"}
+                             "verdict": "not judged" if a["not_judged"] == a["requests"] else
+                                        "passes" if a["within"] == a["requests"] else "drifts" if a["outside"] else "not verified"}
     return out
 
 

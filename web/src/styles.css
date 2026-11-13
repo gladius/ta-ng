@@ -467,3 +467,7 @@ dialog.tlog::backdrop { background: rgba(0, 0, 0, .4); }
 .term .cursor { color: #E7E5E2; animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .term .cursor { animation: none; } }
+.flags { list-style: none; margin: 0; padding: 12px 20px; border-top: 1px solid var(--line-soft); font-size: 13px; display: grid; gap: 6px; }
+.flags li { padding-left: 14px; position: relative; }
+.flags li::before { content: ""; position: absolute; left: 0; top: 7px; width: 6px; height: 6px; border-radius: 50%; background: #E0A800; }
+label.check { display: flex; align-items: center; gap: 8px; }

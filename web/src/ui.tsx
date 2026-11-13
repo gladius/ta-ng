@@ -40,7 +40,7 @@ export function Status({ status }: { status: Job['status'] }) {
 }
 
 /** The words people read; the API keeps within / outside / unverified. */
-export const verdictWord: Record<Verdict, string> = { within: 'passes', outside: 'drifts', unverified: 'not verified' }
+export const verdictWord: Record<Verdict, string> = { within: 'passes', outside: 'drifts', unverified: 'not verified', not_judged: 'measured' }
 
 export const money = (v: number | null | undefined, digits = 5) =>
   v == null ? '—' : '$' + v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
@@ -170,13 +170,18 @@ export function BatchTotals({ summary }: { summary: LabelSummary[] }) {
                   {cell(tot(s, s.avg_output_tokens), b.out, n(tot(s, s.avg_output_tokens)))}
                   {cell(tot(s, s.avg_reasoning_tokens), b.rea, n(tot(s, s.avg_reasoning_tokens)))}
                   {cell(tot(s, s.avg_cost_usd), b.cost, money(tot(s, s.avg_cost_usd)))}
-                  <td className="num nowrap">{isBase ? <span className="muted">agrees with itself {pct(s.avg_consistency)}</span> : <><b>{s.within}</b> of {s.requests} requests</>}</td>
+                  <td className="num nowrap">{s.judged === false || (isBase && s.avg_consistency == null) ? <span className="muted">not judged</span> : isBase ? <span className="muted">agrees with itself {pct(s.avg_consistency)}</span> : <><b>{s.within}</b> of {s.requests} requests</>}</td>
                 </tr>
               )
             })}
           </tbody>
         </table>
       </div>
+      {[base, ...cands].some((s) => s.flags?.length) && (
+        <ul className="flags">
+          {[base, ...cands].flatMap((s) => (s.flags ?? []).map((f) => <li key={s.label + f}><b>{s === base ? vs : s.label}</b> {f}</li>))}
+        </ul>
+      )}
     </section>
   )
 }

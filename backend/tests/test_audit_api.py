@@ -30,7 +30,7 @@ def _fake_engine(items, spec, run=None):
                           "verdict": "within" if ok else "outside", "reason": "r", "latency_ms": 100 if ok else 50,
                           "cost_usd": 0.002 if ok else 0.001,
                           "runs": [{"output": "o", "model": c.model, "latency_ms": 100, "cost_usd": 0.002, "kept": ok,
-                                    "usage": {"input": 40, "output": 6, "cache_read": 0, "cache_write": 0, "reasoning": 2},
+                                    "usage": {"input": 40, "output": 6, "cache_read": 0, "cache_write": 0, "reasoning": 2}, "stop_reason": "length",
                                     "votes": "3/3", "reason": "r", "judges": [], "error": None, "degraded": False}]})
         out.append({"id": it.id, "model": it.model, "spend_usd": 1.0, "candidates": cands,
                     "reference": {"agree": 5, "of": 5, "runs": [
@@ -38,7 +38,7 @@ def _fake_engine(items, spec, run=None):
                          "cost_usd": 0.01},
                         {"output": "x", "recorded": False, "agrees": True, "reason": "", "latency_ms": 300,
                          "cost_usd": 0.01, "model": it.model,
-                         "usage": {"input": 40, "output": 5, "cache_read": 0, "cache_write": 0}}]}})
+                         "usage": {"input": 40, "output": 5, "cache_read": 0, "cache_write": 0, "reasoning": 0}}]}})
     return out
 
 
@@ -125,7 +125,9 @@ def test_one_request_and_the_downloads(client):
     assert (cols["original_avg_output_tokens"], cols["avg_output_tokens"], cols["avg_reasoning_tokens"],
             cols["avg_output_chars"]) == ("5.0", "6.0", "2.0", "1.0")
     summ = {s["label"]: s for s in client.get("/api/audit/models/" + job_id).json()["summary"]}
-    assert summ["original"]["avg_reasoning_tokens"] is None and summ["router-a"]["output_tokens_vs_original_pct"] == 20
+    assert summ["original"]["avg_reasoning_tokens"] == 0 and summ["router-a"]["output_tokens_vs_original_pct"] == 20
+    assert summ["router-a"]["cut_off"] == 2 and "2 of 10 answers cut off at the output cap" in summ["router-a"]["flags"][0]
+    assert any("reasoning is 33% of its output, 0% on the baseline" in f for f in summ["router-a"]["flags"])
     assert client.get("/api/audit/models/%s/results.json" % job_id).json()["id"] == job_id
     assert client.get("/api/audit/models/aud_missing/results.csv").status_code == 404
 

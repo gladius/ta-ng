@@ -38,6 +38,8 @@ export function AuditDialog({ usecase, site, lockScope = false, onStarted }: { u
   const [advanced, setAdvanced] = useState(false)
   const [samples, setSamples] = useState(12)
   const [budget, setBudget] = useState<number | ''>('')
+  const [judge, setJudge] = useState(true)
+  const [cap, setCap] = useState<number | ''>('')
   const served = useQuery({ queryKey: ['served-models'], queryFn: () => get<Served>('/suite/models'), enabled: open })
   const opts = useQuery({ queryKey: ['usecase-options'], queryFn: () => get<{ usecases: UsecaseOpt[] }>('/suite/callsites/usecases?per_page=200'), enabled: open && !site && !lockScope })
   const auto = strategy !== 'manual' && strategy !== 'release'
@@ -53,7 +55,7 @@ export function AuditDialog({ usecase, site, lockScope = false, onStarted }: { u
       `/audit/models/preview?${new URLSearchParams({ strategy, usecases: site ? '' : usecases.join(','), ...(site && { site }), models: models.join(',') })}`) })
   const start = useMutation({
     mutationFn: () => get<{ audits: { id: string }[] }>('/audit/models', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ usecases: site ? [] : usecases, site, strategy, models, samples, ...(budget !== '' && { max_budget_usd: budget }) }) }),
+      body: JSON.stringify({ usecases: site ? [] : usecases, site, strategy, models, samples, judge, ...(budget !== '' && { max_budget_usd: budget }), ...(cap !== '' && { max_output_tokens: cap }) }) }),
     onSuccess: (r) => { onStarted?.(r.audits.map((a) => a.id)) },
   })
   const available = (served.data?.models ?? []).filter((m) => m.available)
@@ -89,6 +91,8 @@ export function AuditDialog({ usecase, site, lockScope = false, onStarted }: { u
         <div className="row">
           <label>Samples per call-site <input className="input" type="number" min={1} max={50} value={samples} onChange={(e) => setSamples(Number(e.target.value))} /></label>
           <label>Budget per audit, $ (optional) <input className="input" type="number" min={1} step={1} value={budget} onChange={(e) => setBudget(e.target.value === '' ? '' : Number(e.target.value))} /></label>
+          <label>Output cap per answer, tokens (optional) <input className="input" type="number" min={1} step={1000} placeholder="as logged" value={cap} onChange={(e) => setCap(e.target.value === '' ? '' : Number(e.target.value))} /></label>
+          <label className="check"><input type="checkbox" checked={judge} onChange={(e) => setJudge(e.target.checked)} /> Judge the answers</label>
         </div>
       )}
       {prev.data && (prev.data.call_sites.length > 0 || prev.data.not_known_yet.length > 0) && (

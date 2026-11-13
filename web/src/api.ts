@@ -5,7 +5,7 @@
 // What the deployment puts in front of every path (empty by default), taken from the build's base path.
 export const PREFIX = import.meta.env.BASE_URL.replace(/\/app\/$/, '')
 
-export type Verdict = 'within' | 'outside' | 'unverified'
+export type Verdict = 'within' | 'outside' | 'unverified' | 'not_judged'
 export type Answers = { match: number; acceptable: number; drift: number; unclear: number }
 
 export type LabelSummary = {
@@ -23,10 +23,15 @@ export type LabelSummary = {
   within_rate?: number | null
   cost_vs_original_pct?: number | null
   latency_vs_original_pct?: number | null
+  output_tokens_vs_original_pct?: number | null
   avg_input_tokens?: number | null
   avg_output_tokens?: number | null
   avg_reasoning_tokens?: number | null
   avg_output_chars?: number | null
+  cut_off?: number
+  runs?: number
+  judged?: boolean
+  flags?: string[]
 }
 
 export type Job = {
@@ -73,7 +78,7 @@ export async function get<T>(path: string, init?: RequestInit): Promise<T> {
 type Routing = { label: string; served_model: string | null; requests: number; within: number; outside: number; unverified: number }
 
 export type JobStatus = Job & {
-  spec: { reference_runs: number; candidate_runs: number; first_runs?: number; votes: number; judge_model: string }
+  spec: { reference_runs: number; candidate_runs: number; first_runs?: number; votes: number; judge_model: string; judge?: boolean; max_output_tokens?: number }
   summary: LabelSummary[]
   routing: Routing[]
   callback: { sent_at: string | null; error: string | null } | null

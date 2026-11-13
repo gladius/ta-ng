@@ -7,6 +7,7 @@ is judged on whether it belongs to the set: an exact copy of a reference matches
 judge vote, and when it isn't a pass `votes` - 1 more, the majority deciding. The judge reads the whole request and
 every output, never a cut. Verdict, relative to the original's consistency:
 
+    not_judged  the spec's `judge` is off: the answers were only measured
     unverified  a call failed (one too large for the judge included), the coherence reply was unreadable, or the
                 original agrees with itself less than `coherence_floor` of the time (nothing stable to certify against)
     within      fit rate >= original's consistency - margin
@@ -74,9 +75,10 @@ def request_text(trace):
     return "\n\n".join(parts)
 
 
-def _default_run(trace, model):
+def _default_run(trace, model, cap=0):
+    from app import registry
     from app.services.audit import replay
-    return replay(trace, model)
+    return replay(trace, model, max_tokens=min(cap, registry.max_output(model)) if cap else None)
 
 
 def _call(run, trace, model):
@@ -132,7 +134,8 @@ def _ok(votes, copy):
 def validate_many(items, spec, run=None):
     """[Item] -> [result]. Pools across all items, every model call then every judge call, `max_parallel` wide. Each
     candidate answers `first_runs` times; only when one of those isn't a pass does it answer up to `candidate_runs`."""
-    run = run or _default_run
+    if run is None:
+        run = (lambda t, m: _default_run(t, m, spec.max_output_tokens)) if spec.max_output_tokens else _default_run
     first = min(spec.first_runs, spec.candidate_runs)
     calls = []                                                  # (item index, "ref" | candidate index, model)
     for i, it in enumerate(items):
@@ -160,8 +163,9 @@ def validate_many(items, spec, run=None):
     for i, it in enumerate(items):
         for c in range(len(it.candidates)):
             note_copies(i, c, 0)
-    jobs = [("coh", i, None, None) for i in range(len(items)) if ref_ok[i]]
-    jobs += [job for i, it in enumerate(items) if ref_ok[i] for c in range(len(it.candidates)) for job in fit_jobs(i, c, 0)]
+    jobs = [("coh", i, None, None) for i in range(len(items)) if ref_ok[i]] if spec.judge else []
+    jobs += [job for i, it in enumerate(items) if ref_ok[i] and spec.judge
+             for c in range(len(it.candidates)) for job in fit_jobs(i, c, 0)]
 
     def judge(job):
         from app.services.llm_client import Refused, Unreachable
@@ -193,7 +197,7 @@ def validate_many(items, spec, run=None):
 
     # a candidate that didn't pass every first run answers again, up to candidate_runs, and those are judged too
     extra = [(i, c, cand.model) for i, it in enumerate(items) if ref_ok[i] for c, cand in enumerate(it.candidates)
-             if spec.candidate_runs > first and any(r.get("error") or not _ok(verdicts[("fit", i, c, j)], (i, c, j) in copies)
+             if spec.judge and spec.candidate_runs > first and any(r.get("error") or not _ok(verdicts[("fit", i, c, j)], (i, c, j) in copies)
                                                     for j, r in enumerate(runs[(i, c)]))]
     if extra:
         calls = [x for x in extra for _ in range(spec.candidate_runs - first)]
@@ -241,15 +245,17 @@ def validate_many(items, spec, run=None):
             verdict, reason = _verdict(kept, len(cruns), failed, coh, spec)
             if ref_ok[i] and (coh.get("error") or unjudged):           # a judge call failed: nothing to certify
                 verdict, reason = "unverified", coh.get("error") or unjudged
-            if not ref_ok[i]:
+            if not spec.judge:
+                verdict, reason = "not_judged", "the answers were measured, not judged"
+            elif not ref_ok[i]:
                 reason = "a reference re-run of the original failed: " + next(r["error"] for r in ref if r.get("error"))
             decisive = [x["reason"] for x in rows if x["reason"] and x["kept"] == (verdict == "within")]
             timed = [r["latency_ms"] for r in cruns if r.get("latency_ms")]
             priced = [r["cost_usd"] for r in cruns if r.get("cost_usd") is not None]
-            answers = Counter(x["category"] for x in rows)
+            answers = Counter(x["category"] for x in rows) if spec.judge else {}
             cands.append({"label": cand.label, "model": cand.model, "kept": kept, "of": len(cruns),
                           "answers": {k: answers.get(k, 0) for k in ANSWERS},
-                          "fit_rate": round(kept / len(cruns), 3) if cruns else None,
+                          "fit_rate": round(kept / len(cruns), 3) if cruns and spec.judge else None,
                           "verdict": verdict, "reason": reason, "runs": rows,
                           "judge_reason": Counter(decisive).most_common(1)[0][0] if decisive else "",
                           "latency_ms": round(sum(timed) / len(timed)) if timed else None,

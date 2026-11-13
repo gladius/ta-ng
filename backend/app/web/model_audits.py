@@ -59,6 +59,12 @@ class AuditIn(BaseModel):
     callback_url: Optional[HttpUrl] = Field(default=None, description="POSTed the audit's status once, when it ends")
     trigger: str = Field(default="api", description="Who starts it: user, release, router, api, schedule")
     judge_model: Optional[str] = Field(default=None, description="The judge; defaults to the server's")
+    judge: bool = Field(default=True, description="false: answers are only measured (tokens, cost, latency), with no "
+                                                   "verdict and no judge cost; the original is still re-run")
+    max_output_tokens: Optional[int] = Field(default=None, gt=0, description="One output cap for every re-run, on "
+                                             "every model (each model's own maximum at most). Left out: each re-run "
+                                             "keeps its request's logged cap. `cut_off` in the summary counts answers "
+                                             "that stopped at the cap")
 
 
 def _uc(u):
@@ -167,10 +173,11 @@ def start(body: AuditIn):
         items = public.parse_requests(body.requests, lambda m: [{"label": c, "model": c} for c in
                                                                  audits.candidates_for(m, strategy, body.models)])
         started.append(audits.start_requests(items, strategy, body.models, body.max_budget_usd, cb, body.trigger,
-                                             body.judge_model))
+                                             body.judge_model, body.judge, body.max_output_tokens))
     else:
         kw = dict(strategy=strategy, asked=body.models, auto=False, n=body.samples, max_budget_usd=body.max_budget_usd,
-                  trigger=body.trigger, judge_model=body.judge_model, callback_url=cb)
+                  trigger=body.trigger, judge_model=body.judge_model, callback_url=cb, judge=body.judge,
+                  max_output_tokens=body.max_output_tokens)
         if body.site:
             rec = store.get(body.site)
             if not rec:
@@ -282,7 +289,8 @@ def download_csv(audit_id: str):
     w.writerow(["request_id", "original_model", "original_consistency", "original_avg_latency_ms",
                 "original_avg_cost_usd", "candidate", "candidate_model", "served_model", "verdict", "fit", "fit_rate",
                 "avg_latency_ms", "avg_cost_usd", "reason", "judge_reason", "match", "acceptable", "drift", "unclear",
-                *("original_avg_" + k for k in jobs.TOKENS), *("avg_" + k for k in jobs.TOKENS)])
+                *("original_avg_" + k for k in jobs.TOKENS), *("avg_" + k for k in jobs.TOKENS),
+                "original_cut_off", "cut_off"])
     ms = lambda v: None if v is None else round(v)
     orig = {}
     for row in jobs.table(job_id):
@@ -291,10 +299,11 @@ def download_csv(audit_id: str):
             continue
         w.writerow([row["item_id"], orig["model"], "%s/%s" % ("?" if orig["kept"] is None else orig["kept"], orig["runs"]),
                     ms(orig["latency_ms"]), orig["cost_usd"], row["label"], row["model"], row["served_model"],
-                    row["verdict"], "%d/%d" % (row["kept"], row["runs"]),
-                    round(row["kept"] / row["runs"], 3) if row["runs"] else None, ms(row["latency_ms"]),
+                    row["verdict"], "" if row["verdict"] == "not_judged" else "%d/%d" % (row["kept"], row["runs"]),
+                    round(row["kept"] / row["runs"], 3) if row["runs"] and row["verdict"] != "not_judged" else None, ms(row["latency_ms"]),
                     row["cost_usd"], row["reason"], row["judge_reason"] or "",
                     *(row.get(k) for k in ("match", "acceptable", "drift", "unclear")),
-                    *(orig.get(k) for k in jobs.TOKENS), *(row.get(k) for k in jobs.TOKENS)])
+                    *(orig.get(k) for k in jobs.TOKENS), *(row.get(k) for k in jobs.TOKENS),
+                    orig.get("cut_off"), row.get("cut_off")])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="%s.csv"' % audit_id})

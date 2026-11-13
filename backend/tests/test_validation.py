@@ -399,3 +399,26 @@ def test_a_timeout_is_not_retried_when_the_caller_says_so(monkeypatch):
     with pytest.raises(openai.APITimeoutError):
         llm_client._complete_raw(model="m", messages=[], max_tokens=5)
     assert len(tries) == 5
+
+
+def test_judge_off_measures_without_a_verdict_and_the_cap_reaches_every_run(monkeypatch):
+    """judge off: no judge call, first_runs answers per candidate, verdict not_judged. A set output cap is what every
+    re-run is sent with, each model's own maximum at most."""
+    from validation import engine
+    monkeypatch.setattr(judges, "coherence", lambda *a, **k: 1 / 0)
+    monkeypatch.setattr(judges, "fit", lambda *a, **k: 1 / 0)
+    item = Item(id="r", request={"input_messages": []}, model="gpt-5.4", candidates=[Candidate("c", "gpt-5.4-mini")])
+    spec = Spec(reference_runs=2, first_runs=3, candidate_runs=5, judge=False)
+    r = engine.validate_many([item], spec, run=lambda t, m: {"output": "x", "usage": None, "latency_ms": 1})[0]
+    c = r["candidates"][0]
+    assert (c["verdict"], c["of"], c["fit_rate"], r["reference"]["agree"]) == ("not_judged", 3, None, None)
+
+    sent = []
+    import app.services.audit as audit
+    monkeypatch.setattr(audit, "replay", lambda t, m, max_tokens=None: sent.append(max_tokens) or {"output": "x", "usage": None})
+    monkeypatch.setattr("app.registry.max_output", lambda m: 64000)
+    engine.validate_many([item], Spec(reference_runs=1, first_runs=1, judge=False, max_output_tokens=100000))
+    assert sent and set(sent) == {64000}
+    sent.clear()
+    engine.validate_many([item], Spec(reference_runs=1, first_runs=1, judge=False))
+    assert set(sent) == {None}                                           # no cap set: each request's own

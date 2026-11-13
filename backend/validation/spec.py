@@ -14,6 +14,8 @@ class Spec:
     judge_model: str = "claude-sonnet-5"
     judge_max_tokens: int = 0            # 0: the judge model's maximum output
     max_parallel: int = 8
+    judge: bool = True                   # False: answers are measured (tokens, cost, latency), not judged
+    max_output_tokens: int = 0           # 0: each re-run keeps its request's own cap; else this cap for every model
 
 
 @dataclass(frozen=True)

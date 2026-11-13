@@ -92,7 +92,7 @@ class _Out(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-Verdict = Literal["within", "outside", "unverified"]
+Verdict = Literal["within", "outside", "unverified", "not_judged"]
 
 
 class Started(_Out):
@@ -118,6 +118,8 @@ class JobSpec(_Out):
     judge_model: str
     judge_max_tokens: int
     max_parallel: int
+    judge: bool = Field(default=True, description="false: answers were measured, not judged")
+    max_output_tokens: int = Field(default=0, description="The output cap of every re-run; 0: each request's own")
 
 
 class Verdict_(_Out):
@@ -129,7 +131,7 @@ class Verdict_(_Out):
     cost_vs_original_pct: Optional[int]
     latency_vs_original_pct: Optional[int]
     fit_rate: Optional[float]
-    verdict: Literal["passes", "drifts", "not verified"]
+    verdict: Literal["passes", "drifts", "not verified", "not judged"]
 
 
 class Sample(_Out):
@@ -194,6 +196,10 @@ class LabelSummary(_Out):
     avg_reasoning_tokens: Optional[float] = Field(default=None, description="Per call; null when not reported")
     avg_output_chars: Optional[float] = Field(default=None, description="Per call, characters of the visible answer")
     output_tokens_vs_original_pct: Optional[int] = Field(default=None, description="Candidates: 12 means 12% more")
+    cut_off: int = Field(default=0, description="Answers that stopped at the output cap: their tokens are understated")
+    runs: int = Field(default=0, description="Answers behind this row")
+    judged: bool = Field(default=True, description="false: the audit ran with judge off")
+    flags: list[str] = Field(default_factory=list, description="What not to miss about this row, in plain words")
 
 
 class Routing(_Out):

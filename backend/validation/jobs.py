@@ -87,6 +87,7 @@ _cells = Table(
     Column("output_tokens", Float),                  # the reasoning included
     Column("reasoning_tokens", Float),               # None when the provider doesn't report it
     Column("output_chars", Float),                   # the visible answer: tokens up with this flat is the tokenizer
+    Column("cut_off", Integer),                      # clean runs that stopped at the output cap: their tokens are understated
 )
 TOKENS = ("input_tokens", "output_tokens", "reasoning_tokens", "output_chars")
 _callbacks = Table(
@@ -200,7 +201,7 @@ def _where(job_id, show="all", label=None, verdict=None, q=""):
     if label or verdict:
         w.append(candidate(*([ce.label == label] if label else []), *([ce.verdict == verdict] if verdict else [])))
     if show == "problems":
-        w.append(candidate(ce.verdict != "within"))
+        w.append(candidate(ce.verdict.not_in(("within", "not_judged"))))
     elif show == "split":
         w.append(select(func.count(func.distinct(ce.verdict))).where(
             ce.job_id == it.job_id, ce.seq == it.seq, ce.label != "original").scalar_subquery() > 1)
@@ -380,7 +381,8 @@ def _tokens(runs):
                                  + x["usage"].get("cache_write", 0) for x in runs]),
             "output_tokens": avg([x["usage"].get("output", 0) for x in runs]),
             "reasoning_tokens": avg([x["usage"].get("reasoning") for x in runs]),
-            "output_chars": avg([len(x.get("output") or "") for x in runs])}
+            "output_chars": avg([len(x.get("output") or "") for x in runs]),
+            "cut_off": sum(1 for x in runs if x.get("stop_reason") in ("length", "max_tokens"))}
 
 
 def _cell_rows(job_id, seq, r):
@@ -502,7 +504,7 @@ def summaries(job_ids):
         agg = c.execute(select(ce.job_id, ce.label, func.count(), *_verdicts(ce),
                                func.avg(case((ce.runs > 0, ce.kept * 1.0 / ce.runs))),
                                func.avg(ce.latency_ms), func.avg(ce.cost_usd),
-                               *[func.avg(getattr(ce, k)) for k in TOKENS],
+                               *[func.avg(getattr(ce, k)) for k in TOKENS], func.sum(ce.cut_off), func.sum(ce.runs),
                                *[func.sum(getattr(ce, k)) for k in ANSWERS])
                         .where(ce.job_id.in_(job_ids)).group_by(ce.job_id, ce.label)
                         .order_by(ce.job_id, func.min(ce.pos), ce.label)).all()
@@ -512,9 +514,12 @@ def summaries(job_ids):
             models[(job_id, label)].append(model)
     out = defaultdict(list)
     for job_id, label, n, within, outside, unverified, fit, lat, cost, *rest in agg:
-        tokens, answers = rest[:len(TOKENS)], rest[len(TOKENS):]
+        tokens, (cut, runs), answers = rest[:len(TOKENS)], rest[len(TOKENS):len(TOKENS) + 2], rest[len(TOKENS) + 2:]
+        judged = label == "original" or (within or 0) + (outside or 0) + (unverified or 0) > 0
+        fit = fit if judged else None
         out[job_id].append({"label": label, "models": models[(job_id, label)], "requests": n,
                             **{"avg_" + k: _num(v, 1) for k, v in zip(TOKENS, tokens)},
+                            "cut_off": int(cut or 0), "runs": int(runs or 0), "judged": judged,
                             "answers": None if label == "original" or all(a is None for a in answers) else
                             dict(zip(ANSWERS, (int(a or 0) for a in answers))),
                             "within": int(within or 0), "outside": int(outside or 0), "unverified": int(unverified or 0),
@@ -529,7 +534,31 @@ def summaries(job_ids):
             for k, pct in (("avg_cost_usd", "cost_vs_original_pct"), ("avg_latency_ms", "latency_vs_original_pct"),
                            ("avg_output_tokens", "output_tokens_vs_original_pct")):
                 s[pct] = round((s[k] - base[k]) / base[k] * 100) if s.get(k) is not None and base.get(k) else None
+        for s in rows:
+            s["flags"] = _flags(s, base)
     return dict(out)
+
+
+def _flags(s, base):
+    """What a reader should not miss about one summary row, in plain words."""
+    from app.catalog import PRICE, canonical_model
+    out = []
+    if s["cut_off"]:
+        out.append("%d of %d answers cut off at the output cap: its tokens are understated" % (s["cut_off"], s["runs"]))
+    if s["label"] == "original" or not base:
+        return out
+    ot, bot, oc, boc = (x.get(k) for x in (s, base) for k in ("avg_output_tokens", "avg_output_chars"))
+    if ot and bot and oc and boc and ot / bot - oc / boc >= 0.3:
+        out.append("output tokens %+d%% while the answer is %+d%% in length" % (round((ot / bot - 1) * 100), round((oc / boc - 1) * 100)))
+    share = lambda x: x["avg_reasoning_tokens"] / x["avg_output_tokens"] if x.get("avg_reasoning_tokens") is not None and x.get("avg_output_tokens") else None
+    rs, brs = share(s), share(base)
+    if rs is not None and brs is not None and rs - brs >= 0.1:
+        out.append("reasoning is %d%% of its output, %d%% on the baseline" % (round(rs * 100), round(brs * 100)))
+    price = lambda x: PRICE.get(canonical_model(x["models"][0]) or x["models"][0]) if len(x["models"]) == 1 else None
+    p, bp = price(s), price(base)
+    if p and bp and (s.get("cost_vs_original_pct") or 0) > 0 and p["input"] <= bp["input"] and p["output"] < bp["output"]:
+        out.append("costs %+d%% per call although its price is lower" % s["cost_vs_original_pct"])
+    return out
 
 
 def routing(job_id):
