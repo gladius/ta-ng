@@ -68,7 +68,7 @@ export function Squares({ runs }: { runs: Judged[] }) {
 }
 
 /** A value against the original's: the gold tick is the original, the black fill this value on the same scale. */
-export function VsBar({ value, base, shown, isBase = false }: { value: number | null; base: number | null; shown: string; isBase?: boolean }) {
+export function VsBar({ value, base, shown, isBase = false, vs = 'original' }: { value: number | null; base: number | null; shown: string; isBase?: boolean; vs?: string }) {
   const r = value != null && base ? value / base : null
   const p = vsPct(value, base)
   return (
@@ -78,7 +78,7 @@ export function VsBar({ value, base, shown, isBase = false }: { value: number | 
         <i />
       </span>
       <span className="mono">{shown}</span>
-      <span className={'vs-pc' + (isBase || !p ? '' : ' strong')}>{isBase ? 'baseline' : p == null ? '' : p ? change(p) + ' vs original' : 'same as original'}</span>
+      <span className={'vs-pc' + (isBase || !p ? '' : ' strong')}>{isBase ? 'baseline' : p == null ? '' : p ? change(p) + ' vs ' + vs : 'same as ' + vs}</span>
     </div>
   )
 }
@@ -138,4 +138,45 @@ export function PassRows({ summary }: { summary?: LabelSummary[] | null }) {
       {s.cost_vs_original_pct != null && <span className="muted">{change(s.cost_vs_original_pct)} cost</span>}
     </div>
   ))
+}
+
+/** The whole batch on each model, every request answered once: tokens, reasoning, cost and how many answers hold,
+    each against the baseline (named when every request was logged on the same model). */
+export function BatchTotals({ summary }: { summary: LabelSummary[] }) {
+  const base = summary.find((s) => s.label === 'original')
+  const cands = candidates(summary)
+  if (!base || !cands.length) return null
+  const vs = base.models.length === 1 ? base.models[0] : 'original'
+  const n = (v: number | null) => (v == null ? '—' : Math.round(v).toLocaleString())
+  const tot = (s: LabelSummary, v?: number | null) => (v == null ? null : v * s.requests)
+  const b = { inp: tot(base, base.avg_input_tokens), out: tot(base, base.avg_output_tokens), rea: tot(base, base.avg_reasoning_tokens), cost: tot(base, base.avg_cost_usd) }
+  return (
+    <section className="panel">
+      <div className="panel-head"><h2>Whole batch: {count(base.requests, 'request')}, each answered once</h2></div>
+      <div className="scroll">
+        <table className="grid">
+          <thead><tr><th>Model</th><th className="num">Input tokens</th><th className="num">Output tokens</th><th className="num">of which reasoning</th><th className="num">Cost</th><th className="num">Answers that hold</th></tr></thead>
+          <tbody>
+            {[base, ...cands].map((s) => {
+              const isBase = s === base
+              const cell = (v: number | null, bv: number | null, shown: string) => (
+                <td className="num nowrap"><span className="mono">{shown}</span>
+                  <div className={isBase ? 'muted' : ''}>{isBase ? 'baseline' : v == null || !bv ? '' : <b>{v === bv ? 'same' : change(Math.round(((v - bv) / bv) * 100))}</b>}</div></td>
+              )
+              return (
+                <tr key={s.label} className={isBase ? 'base-row' : ''}>
+                  <td className="nowrap"><b>{isBase ? vs : s.label}</b>{isBase && vs === 'original' && <div className="muted">{base.models.join(', ')}</div>}</td>
+                  {cell(tot(s, s.avg_input_tokens), b.inp, n(tot(s, s.avg_input_tokens)))}
+                  {cell(tot(s, s.avg_output_tokens), b.out, n(tot(s, s.avg_output_tokens)))}
+                  {cell(tot(s, s.avg_reasoning_tokens), b.rea, n(tot(s, s.avg_reasoning_tokens)))}
+                  {cell(tot(s, s.avg_cost_usd), b.cost, money(tot(s, s.avg_cost_usd)))}
+                  <td className="num nowrap">{isBase ? <span className="muted">agrees with itself {pct(s.avg_consistency)}</span> : <><b>{s.within}</b> of {s.requests} requests</>}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
 }

@@ -1,4 +1,4 @@
-import { Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 import Shell from './Shell'
 import Home from './pages/Home'
 import Batch from './pages/Batch'
@@ -6,21 +6,26 @@ import Review from './pages/Review'
 import { Migrations, Models } from './pages/Catalog'
 import { CacheOverview, CacheSite, CacheUsecase } from './pages/Cache'
 import { CallSite, CallSiteUsecase, CallSiteUsecases } from './pages/CallSites'
-import { ModelAuditDetail, ModelAudits, NewModelAudit } from './pages/ModelAudits'
+import { ModelAudits, NewModelAudit } from './pages/ModelAudits'
 import { Page } from './ui'
 import Schedules from './pages/Schedules'
 import Quality from './pages/Quality'
+
+function ToAudit() {                                   // the old "All requests" address
+  const { auditId } = useParams()
+  return <Navigate to={`/audit/models/${auditId}`} replace />
+}
 
 export default function App() {
   return (
     <Routes>
       <Route element={<Shell />}>
         <Route index element={<Home />} />
-        <Route path="audit/models/:auditId/requests" element={<Batch />} />
+        <Route path="audit/models/:auditId/requests" element={<ToAudit />} />
         <Route path="audit/models/:auditId/requests/*" element={<Review />} />
         <Route path="audit/models" element={<ModelAudits />} />
         <Route path="audit/models/new" element={<NewModelAudit />} />
-        <Route path="audit/models/:auditId" element={<ModelAuditDetail />} />
+        <Route path="audit/models/:auditId" element={<Batch />} />
         <Route path="usecases" element={<CallSiteUsecases />} />
         <Route path="usecases/:usecase" element={<CallSiteUsecase />} />
         <Route path="usecases/:usecase/callsites/:site" element={<CallSite />} />

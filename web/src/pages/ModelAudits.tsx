@@ -1,10 +1,10 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import Select from 'react-select'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { get, PREFIX, type JobStatus, type ResultsPage } from '../api'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { get, type JobStatus } from '../api'
 import { usecaseName } from '../cache'
-import { AnswersBar, count, Failed, Legend, Loading, money, ms, Page, pct, Squares, verdictWord, VsBar, when } from '../ui'
+import { count, Failed, Loading, money, Page, when } from '../ui'
 
 export type Verdict = { requests: number; within: number; outside: number; unverified: number; pass_rate: number; cost_vs_original_pct: number | null; latency_vs_original_pct: number | null; fit_rate: number | null; verdict: 'passes' | 'drifts' | 'not verified' }
 export type Audit = Omit<JobStatus, 'status' | 'spec'> & {
@@ -15,9 +15,9 @@ export type Audit = Omit<JobStatus, 'status' | 'spec'> & {
   spec: JobStatus['spec'] | null
 }
 
-const STRATEGY_NAME: Record<string, string> = { cheaper: 'Cheaper', better_value: 'Better value', release: 'A release', manual: 'Manual', revalidate: 'Re-validate (retired)', drift_watch: 'Drift watch (retired)' }
+export const STRATEGY_NAME: Record<string, string> = { cheaper: 'Cheaper', better_value: 'Better value', release: 'A release', manual: 'Manual', revalidate: 'Re-validate (retired)', drift_watch: 'Drift watch (retired)' }
 const OLD_STRATEGY: Record<string, string> = { cheaper: 'cheaper tier of each call-site\'s model', open_weight: 'open-weight swap in the same tier', release: 'a release', custom: 'chosen models', auto: 'Auto' }
-const STATUS: Record<string, string> = { sampling: 'Sampling', queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', stopped: 'Stopped' }
+export const STATUS: Record<string, string> = { sampling: 'Sampling', queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', stopped: 'Stopped' }
 
 export function VerdictChip({ v }: { v: Verdict }) {
   return <span className={'chip ' + (v.verdict === 'passes' ? 'cause-ok' : v.verdict === 'drifts' ? 'cause-dynamic_first' : '')}>{v.verdict} · {v.within} of {v.requests}</span>
@@ -154,99 +154,6 @@ export function ModelAudits() {
           </table>
         </section>
       )}
-    </Page>
-  )
-}
-
-/** One model audit: per call-site, the same evidence the validation page shows: answers by category, the original's
-    own agreement, cost and latency against it, and every sampled request with why it was picked and how each
-    candidate did, linking to the request's review. */
-export function ModelAuditDetail() {
-  const { auditId = '' } = useParams()
-  const q = useQuery({ queryKey: ['model-audits', auditId], queryFn: () => get<Audit>(`/audit/models/${auditId}`),
-    refetchInterval: (query) => (['sampling', 'queued', 'running'].includes(query.state.data?.status ?? '') ? 5000 : false) })
-  const results = useQuery({ queryKey: ['results', auditId, q.data?.items_done], queryFn: () => get<ResultsPage>(`/audit/models/${auditId}/results?per_page=200`),
-    enabled: !!q.data && q.data.status !== 'sampling' })
-  const crumbs = [{ label: 'Agentic workloads' }, { label: 'Model audits', to: '/audit/models' }, { label: auditId }]
-  if (q.isPending) return <Page crumbs={crumbs}><Loading /></Page>
-  if (q.isError) return <Page crumbs={crumbs}><Failed error={q.error} /></Page>
-  const c = q.data
-  const j = c
-  const rows = results.data?.results ?? []
-  const spec = c.spec
-  return (
-    <Page crumbs={crumbs}>
-      <div className="head">
-        <div><h1>Model audit {c.id}</h1><span className="muted">{c.scope === 'requests' ? count(c.items_total, 'sent request') : usecaseName(c.usecase)} · {STRATEGY_NAME[c.strategy] ?? OLD_STRATEGY[c.strategy] ?? c.strategy}{c.models.length > 0 && ` (${c.models.join(', ')})`} · started {when(c.created_at)} by {c.trigger}</span></div>
-        <div className="row"><span className={'pill pill-' + (c.status === 'sampling' ? 'running' : c.status)}>{STATUS[c.status] ?? c.status}</span>{c.status !== 'sampling' && <Link className="btn" to={`/audit/models/${c.id}/requests`}>All requests</Link>}<a className="btn" href={`${PREFIX}/api/audit/models/${c.id}/results.csv`}>CSV</a></div>
-      </div>
-      {c.error && <p className="error" role="alert">{c.error}</p>}
-      {spec && (
-        <p className="muted">Judge {spec.judge_model} · {j.items_done} of {j.items_total} done · spent {money(j.spend_usd, 2)}{c.max_budget_usd != null && ` of ${money(c.max_budget_usd, 2)}`}{c.stop_reason && ` · ${c.stop_reason}`}</p>
-      )}
-      {Object.keys(c.samples).map((st) => {
-        const ids = new Set(c.samples[st].map((s) => s.id))
-        const why = Object.fromEntries(c.samples[st].map((s) => [s.id, s.why]))
-        const mine = rows.filter((r) => ids.has(r.id))
-        const labels = [...new Set(mine.flatMap((r) => r.candidates.map((x) => x.label)))]
-        const agg = labels.map((label) => {
-          const cs = mine.map((r) => r.candidates.find((x) => x.label === label)).filter((x): x is NonNullable<typeof x> => !!x)
-          const answers = cs.reduce((a, x) => { for (const k of ['match', 'acceptable', 'drift', 'unclear'] as const) a[k] += x.answers?.[k] ?? 0; return a }, { match: 0, acceptable: 0, drift: 0, unclear: 0 })
-          const avg = (xs: (number | null)[]) => { const v = xs.filter((x): x is number => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null }
-          return { label, requests: cs.length, within: cs.filter((x) => x.verdict === 'within').length, outside: cs.filter((x) => x.verdict === 'outside').length,
-            unverified: cs.filter((x) => x.verdict === 'unverified').length, answers, cost: avg(cs.map((x) => x.cost_usd)), lat: avg(cs.map((x) => x.latency_ms)) }
-        })
-        const baseCost = mine.length ? mine.map((r) => r.reference.runs.filter((x) => !x.recorded && x.cost_usd != null).map((x) => x.cost_usd as number)).flat() : []
-        const baseLat = mine.length ? mine.map((r) => r.reference.runs.filter((x) => !x.recorded && x.latency_ms != null).map((x) => x.latency_ms as number)).flat() : []
-        const bc = baseCost.length ? baseCost.reduce((a, b) => a + b, 0) / baseCost.length : null
-        const bl = baseLat.length ? baseLat.reduce((a, b) => a + b, 0) / baseLat.length : null
-        const cons = mine.filter((r) => r.reference.consistency != null)
-        const consistency = cons.length ? cons.reduce((a, r) => a + (r.reference.consistency as number), 0) / cons.length : null
-        return (
-          <section key={st} className="panel">
-            <div className="panel-head"><b>{st ? <Link to={`/usecases/${encodeURIComponent(c.usecase ?? 'None')}/callsites/${st}`}>{c.site_names[st] ?? st}</Link> : 'Your requests'}</b><span className="muted">{count(c.samples[st].length, st ? 'sampled request' : 'request')}</span></div>
-            {mine.length > 0 && (
-              <>
-                <div className="scroll">
-                  <table className="grid">
-                    <thead><tr><th>Model</th><th>Answers</th><th>Requests</th><th>Cost / call</th><th>Latency</th></tr></thead>
-                    <tbody>
-                      <tr className="base-row"><td><b>original</b></td><td className="muted">baseline · its own answers agree {pct(consistency)}</td><td className="muted">{mine.length}</td>
-                        <td><VsBar value={bc} base={bc} shown={money(bc)} isBase /></td><td><VsBar value={bl} base={bl} shown={ms(bl)} isBase /></td></tr>
-                      {agg.map((s) => (
-                        <tr key={s.label}><td><b>{s.label}</b></td><td><AnswersBar a={s.answers} /></td>
-                          <td className="nowrap"><b>{s.within}</b> pass <span className="muted">of {s.requests}</span>{s.outside > 0 && <div className="muted">{count(s.outside, 'drift')}</div>}{s.unverified > 0 && <div className="muted">{s.unverified} not verified</div>}</td>
-                          <td><VsBar value={s.cost} base={bc} shown={money(s.cost)} /></td><td><VsBar value={s.lat} base={bl} shown={ms(s.lat)} /></td></tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <Legend />
-                <div className="scroll">
-                  <table className="grid">
-                    <thead><tr><th>Sampled request</th><th>Why picked</th><th>Original agrees</th>{labels.map((l) => <th key={l}>{l}</th>)}</tr></thead>
-                    <tbody>
-                      {mine.map((r) => {
-                        const url = `/audit/models/${c.id}/requests/${encodeURIComponent(r.id)}`
-                        return (
-                          <tr key={r.id}>
-                            <td className="mono"><Link to={url}>{r.id.slice(0, 18)}</Link></td>
-                            <td className="muted">{why[r.id]}</td>
-                            <td className="mono">{r.reference.agree ?? '?'}/{r.reference.of}</td>
-                            {labels.map((l) => { const x = r.candidates.find((y) => y.label === l); return (
-                              <td key={l}>{x ? <Link className={'cell v-' + x.verdict} to={`${url}?cand=${encodeURIComponent(l)}`} title={x.judge_reason || x.reason}>{verdictWord[x.verdict]} <Squares runs={x.runs} /></Link> : <span className="muted">—</span>}</td>) })}
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-            {!mine.length && <p className="muted pad">{c.status === 'done' ? 'No candidate to try.' : c.status === 'sampling' ? 'Sampling requests from the log…' : c.status === 'stopped' || c.status === 'failed' ? `${STATUS[c.status]} before any result came in.` : 'Running…'}</p>}
-          </section>
-        )
-      })}
     </Page>
   )
 }

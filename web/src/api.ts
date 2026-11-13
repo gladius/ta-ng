@@ -23,6 +23,10 @@ export type LabelSummary = {
   within_rate?: number | null
   cost_vs_original_pct?: number | null
   latency_vs_original_pct?: number | null
+  avg_input_tokens?: number | null
+  avg_output_tokens?: number | null
+  avg_reasoning_tokens?: number | null
+  avg_output_chars?: number | null
 }
 
 export type Job = {
