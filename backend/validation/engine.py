@@ -234,7 +234,7 @@ def validate_many(items, spec, run=None):
                 kept += ok
                 spend += (r["cost_usd"] or 0) + sum(cost for _, _, cost in votes)
                 rows.append({**{k: r.get(k) for k in ("output", "model", "usage", "latency_ms", "cost_usd", "error",
-                                                       "degraded", "stop_reason")},
+                                                       "degraded", "dropped", "stop_reason")},
                              "kept": ok, "category": category,
                              "votes": "%d/%d" % (yes if ok else len(decided) - yes, len(decided)) if votes else "",
                              "reason": "identical to one of the original's answers" if copy else
@@ -265,7 +265,8 @@ def validate_many(items, spec, run=None):
                                   "consistency": round(coh["agree"] / len(ref), 3) if coh["agree"] is not None and ref
                                   else None,
                                   "runs": [{**{k: r.get(k) for k in ("output", "model", "usage", "latency_ms",
-                                                                      "cost_usd", "error", "recorded", "stop_reason")},
+                                                                      "cost_usd", "error", "recorded", "stop_reason",
+                                                                      "degraded", "dropped")},
                                             "agrees": (n + 1) not in coh["divergent"],
                                             "reason": coh["reasons"].get(n + 1, "")} for n, r in enumerate(ref)]},
                     "candidates": cands, "spend_usd": round(spend, 6)})

@@ -227,12 +227,16 @@ def test_a_logged_request_is_re_sent_as_it_was(monkeypatch):
                                                                     "function": {"name": "lookup", "arguments": "{}"}}]},
             {"role": "tool", "tool_call_id": "c1", "content": "order 1: $50"}]
     body = {"model": "gpt-5.4", "messages": msgs, "max_tokens": 32768, "temperature": 0.2, "stream": True,
-            "response_format": {"type": "json_object"}, "metadata": {"team": "x"}}
+            "response_format": {"type": "json_object"}, "metadata": {"team": "x"}, "user": "u1",
+            "thinking": {"type": "enabled", "budget_tokens": 4000}, "verbosity": "low", "some_new_option": {"a": 1}}
     audit.replay(to_trace(body, {}, "api"), "gpt-5.4-mini")
     assert seen[0]["messages"] == msgs and seen[0]["max_tokens"] == 32768           # no conversion, no 21k cap
     assert (seen[0]["model"], seen[0]["temperature"], seen[0]["response_format"]) == \
         ("gpt-5.4-mini", 0.2, {"type": "json_object"})
-    assert "stream" not in seen[0] and "metadata" not in seen[0]
+    # every logged field goes, the ones we have never heard of too; only transport, identity and per-run fields stay
+    assert (seen[0]["thinking"], seen[0]["verbosity"], seen[0]["some_new_option"]) == \
+        ({"type": "enabled", "budget_tokens": 4000}, "low", {"a": 1})
+    assert not {"stream", "metadata", "user"} & set(seen[0])
 
     seen.clear()                                              # messages that aren't OpenAI chat: rebuilt from the trace
     audit.replay(to_trace({"model": "gpt-5.4", "messages": "just a prompt"}, {}, "api"), "gpt-5.4-mini")
@@ -422,3 +426,32 @@ def test_judge_off_measures_without_a_verdict_and_the_cap_reaches_every_run(monk
     sent.clear()
     engine.validate_many([item], Spec(reference_runs=1, first_runs=1, judge=False))
     assert set(sent) == {None}                                           # no cap set: each request's own
+
+
+def test_fields_the_client_has_no_argument_for_travel_in_the_body(monkeypatch):
+    """`thinking` is not an OpenAI client argument: passed as one it would raise before any call. It goes in the body,
+    beside our own no-cache and no-log."""
+    sent = []
+    monkeypatch.setattr(llm_client, "client", lambda: _client(lambda **kw: (sent.append(kw), _resp())[1]))
+    llm_client.run(model="claude-sonnet-5", messages=[{"role": "user", "content": "hi"}], max_tokens=100,
+                   params={"thinking": {"type": "adaptive"}, "temperature": 0.3})
+    assert sent[0]["temperature"] == 0.3 and "thinking" not in sent[0]
+    assert sent[0]["extra_body"] == {"thinking": {"type": "adaptive"}, "cache": {"no-cache": True}, "no-log": True}
+
+
+def test_a_refused_request_is_retried_bare_and_says_what_it_left_out(monkeypatch):
+    calls = []
+
+    def create(**kw):
+        calls.append(kw)
+        if len(calls) == 1:
+            raise openai.BadRequestError("thinking.budget_tokens is not supported for this model",
+                                         response=httpx.Response(400, request=httpx.Request("POST", "http://gw")), body=None)
+        return _resp()
+    monkeypatch.setattr(llm_client, "client", lambda: _client(create))
+    r = llm_client.run(model="claude-opus-5-5", messages=[{"role": "user", "content": "hi"}], max_tokens=100,
+                       params={"thinking": {"type": "enabled", "budget_tokens": 4000}, "tool_choice": "required",
+                               "response_format": {"type": "json_object"}})
+    assert (r["degraded"], r["dropped"]) == (True, ["thinking", "tool_choice"])
+    assert "tool_choice" not in calls[1] and "thinking" not in calls[1]["extra_body"]
+    assert calls[1]["response_format"] == {"type": "json_object"}            # the core of the request stays

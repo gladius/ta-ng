@@ -89,7 +89,7 @@ type Call = { output: string; model: string | null; usage: Usage | null; latency
 type OriginalAnswer = Call & { recorded: boolean | null; agrees: boolean; reason: string }
 export type Category = 'match' | 'acceptable' | 'drift' | 'unclear'
 export type CandidateAnswer = Call & {
-  degraded: boolean | null; kept: boolean; category: Category | null; votes: string; reason: string
+  degraded: boolean | null; dropped?: string[] | null; kept: boolean; category: Category | null; votes: string; reason: string
   judges: { kept: boolean | null; reason: string }[]
 }
 type CandidateResult = {

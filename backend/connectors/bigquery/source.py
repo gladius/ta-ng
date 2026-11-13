@@ -54,18 +54,30 @@ def _client(project):
         return bigquery.Client(project=project, credentials=Credentials(token))
 
 
-# The logged request fields a re-run sends as they were (model and max_tokens are set per run).
-SENT = ("messages", "tools", "tool_choice", "parallel_tool_calls", "response_format", "temperature", "top_p", "seed",
-        "stop", "reasoning_effort", "frequency_penalty", "presence_penalty")
+# A re-run sends the logged request as it was: every field, known to us or not (`thinking`, a provider's own options),
+# except these. They are set per run (model, the output cap), belong to the caller's transport or identity, or are the
+# gateway's own controls, which a re-run sets itself (no cache, no log).
+NOT_SENT = frozenset((
+    "model", "max_tokens", "max_completion_tokens",                         # set per run
+    "stream", "stream_options", "n",                                        # how the answer came back; we read one whole
+    "user", "metadata", "safety_identifier", "prompt_cache_key", "store",   # who called, and what they keep
+    "service_tier",                                                         # billing and speed, not behaviour
+    "cache", "no-log", "tags", "fallbacks", "guardrails", "mock_response", "api_key", "api_base", "base_url",
+    "timeout", "extra_headers", "extra_body", "proxy_server_request"))      # the gateway's and the client's own
+
+
+def sendable(field):
+    return field not in NOT_SENT and not field.startswith("litellm_")
 _ROLES = {"system", "developer", "user", "assistant", "tool", "function"}
 
 
 def _as_sent(body):
-    """The request's SENT fields, or None when its messages aren't OpenAI chat messages (rebuilt from the trace)."""
+    """The request as a re-run sends it (all but NOT_SENT), or None when its messages aren't OpenAI chat messages
+    (then it is rebuilt from the trace)."""
     msgs = body.get("messages")
     if not (isinstance(msgs, list) and msgs and all(isinstance(m, dict) and m.get("role") in _ROLES for m in msgs)):
         return None
-    return {k: body[k] for k in SENT if body.get(k) is not None}
+    return {k: v for k, v in body.items() if sendable(k) and v is not None}
 
 
 def to_trace(request, response, agent):
@@ -126,8 +138,8 @@ def lookup(request_ids, days=LOOKUP_DAYS):
         body = dict(req) if isinstance(req, dict) else {"messages": req}
         params = _json(row["params"]) if params_col else None
         if isinstance(params, dict):
-            body = {**{k: params[k] for k in ("max_tokens", "max_completion_tokens", *SENT[1:])
-                       if params.get(k) is not None}, **body}
+            body = {**{k: v for k, v in params.items() if v is not None and k != "messages"
+                       and (sendable(k) or k in ("max_tokens", "max_completion_tokens"))}, **body}
         resp = resp if isinstance(resp, dict) else None
         served = (row["served"] if model_col else None) or (resp or {}).get("model")
         if served:

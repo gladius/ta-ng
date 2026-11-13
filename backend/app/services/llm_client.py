@@ -48,6 +48,18 @@ def client():
     return _client
 
 
+_SDK = set()
+
+
+def _sdk_fields():
+    if not _SDK:
+        import inspect
+        from openai.resources.chat.completions import Completions
+        _SDK.update(inspect.signature(Completions.create).parameters)
+        _SDK.difference_update(("self", "extra_body", "extra_headers", "extra_query"))
+    return _SDK
+
+
 def _complete_raw(retry_timeout=True, **kw):
     """Transport only: chat.completions.create, retrying 429 / 5xx / connection; another 4xx raises at once (a retried
     bad request only costs money). A timeout is retried too unless `retry_timeout` is False (a caller with its own
@@ -57,7 +69,11 @@ def _complete_raw(retry_timeout=True, **kw):
     if kw.get("model"):
         kw = {**kw, "model": serving_name(kw["model"])}
     c = client()                 # LiteLLM: its response cache would hand repeated runs one copy, and its request log
-    kw = {**kw, "extra_body": {"cache": {"no-cache": True}, "no-log": True}}       # (-> BigQuery) is production traffic
+    # (-> BigQuery) is production traffic. A field the OpenAI client has no argument for (`thinking`, a provider's own
+    # option) travels in the body all the same: the gateway reads it there.
+    known = _sdk_fields()
+    extra = {k: v for k, v in kw.items() if k not in known}
+    kw = {**{k: v for k, v in kw.items() if k in known}, "extra_body": {**extra, "cache": {"no-cache": True}, "no-log": True}}
     last = None
     for attempt in range(4):
         try:
@@ -204,14 +220,14 @@ def _args(raw):
 
 
 # a target may reject these; the second try leaves them out and marks the result degraded
-_OPTIONAL = ("reasoning_effort", "tool_choice", "parallel_tool_calls", "temperature", "top_p", "seed", "stop",
-             "frequency_penalty", "presence_penalty")
+_CORE = ("model", "max_tokens", "messages", "tools", "response_format")     # what a refused request is retried with
 
 
 def run(*, model, messages, max_tokens, system=None, tools=None, tool_choice=None, reasoning=False, params=None):
     """Provider-neutral model call: tools=[{name, description, schema}], tool_choice=None|'any'|{'tool': name}; a logged
-    OpenAI request passes its own fields as `params`, sent as they are. Returns {text, tool_calls:[{name, args}], usage,
-    latency_ms, model (as served), stop_reason, degraded}."""
+    OpenAI request passes its own fields as `params`, sent as they are. A request the model refuses (400) is retried
+    once with its _CORE only; `dropped` then names the settings left out and `degraded` is True. Returns {text,
+    tool_calls:[{name, args}], usage, latency_ms, model (as served), stop_reason, degraded, dropped}."""
     kw = {"model": model, "max_tokens": max_tokens,
           "messages": ([{"role": "system", "content": system}] if system else []) + list(messages)}
     if tools:
@@ -225,17 +241,17 @@ def run(*, model, messages, max_tokens, system=None, tools=None, tool_choice=Non
         kw["reasoning_effort"] = "low"
         kw["max_tokens"] = max(max_tokens, 1536)
     kw.update(params or {})
-    t0, degraded = time.time(), False
+    t0, dropped = time.time(), []
     try:
         r = _complete_raw(**kw)                              # not complete(): replay keeps the request's temperature
     except openai.BadRequestError:
-        if not any(k in kw for k in _OPTIONAL):
+        dropped = sorted(k for k in kw if k not in _CORE)
+        if not dropped:
             raise
-        r = _complete_raw(**{k: v for k, v in kw.items() if k not in _OPTIONAL})
-        degraded = True
+        r = _complete_raw(**{k: v for k, v in kw.items() if k in _CORE})
     choice = r.choices[0] if r.choices else None
     calls = [{"name": c.function.name, "args": _args(c.function.arguments)}
              for c in ((choice.message.tool_calls if choice else None) or []) if getattr(c, "function", None)]
     return {"text": text(r), "tool_calls": calls, "usage": usage(r),
             "latency_ms": round((time.time() - t0) * 1000), "model": getattr(r, "model", None) or model,
-            "stop_reason": choice.finish_reason if choice else None, "degraded": degraded}
+            "stop_reason": choice.finish_reason if choice else None, "degraded": bool(dropped), "dropped": dropped}

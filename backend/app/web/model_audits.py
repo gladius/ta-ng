@@ -266,7 +266,9 @@ def one_result(audit_id: str, request_id: str):
     trace = got[0]["request"]
     return {**got[1], "request": {"messages": [{"role": m["role"], "content": m["content"]}
                                                for m in trace.get("input_messages", [])],
-                                  "tools": [t[0] for t in trace.get("tools_defined", [])]}}
+                                  "tools": [t[0] for t in trace.get("tools_defined", [])],
+                                  "settings": {k: v for k, v in (trace.get("logged_request") or {}).items()
+                                               if k not in ("messages", "tools")}}}
 
 
 @api.get("/{audit_id}/results.json", include_in_schema=False)
@@ -290,7 +292,7 @@ def download_csv(audit_id: str):
                 "original_avg_cost_usd", "candidate", "candidate_model", "served_model", "verdict", "fit", "fit_rate",
                 "avg_latency_ms", "avg_cost_usd", "reason", "judge_reason", "match", "acceptable", "drift", "unclear",
                 *("original_avg_" + k for k in jobs.TOKENS), *("avg_" + k for k in jobs.TOKENS),
-                "original_cut_off", "cut_off"])
+                "original_cut_off", "cut_off", "original_degraded", "degraded"])
     ms = lambda v: None if v is None else round(v)
     orig = {}
     for row in jobs.table(job_id):
@@ -304,6 +306,6 @@ def download_csv(audit_id: str):
                     row["cost_usd"], row["reason"], row["judge_reason"] or "",
                     *(row.get(k) for k in ("match", "acceptable", "drift", "unclear")),
                     *(orig.get(k) for k in jobs.TOKENS), *(row.get(k) for k in jobs.TOKENS),
-                    orig.get("cut_off"), row.get("cut_off")])
+                    orig.get("cut_off"), row.get("cut_off"), orig.get("degraded"), row.get("degraded")])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="%s.csv"' % audit_id})

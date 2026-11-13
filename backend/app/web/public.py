@@ -199,6 +199,8 @@ class LabelSummary(_Out):
     cut_off: int = Field(default=0, description="Answers that stopped at the output cap: their tokens are understated")
     runs: int = Field(default=0, description="Answers behind this row")
     judged: bool = Field(default=True, description="false: the audit ran with judge off")
+    degraded: int = Field(default=0, description="Answers the model only gave without some of the request's logged "
+                                                 "settings (each run's `dropped` names them)")
     flags: list[str] = Field(default_factory=list, description="What not to miss about this row, in plain words")
 
 
@@ -232,6 +234,7 @@ class Usage(_Out):
     output: int
     cache_read: int
     cache_write: int
+    reasoning: Optional[int] = Field(default=None, description="The part of output spent thinking, when reported")
 
 
 class Call(_Out):
@@ -242,6 +245,9 @@ class Call(_Out):
     cost_usd: Optional[float]
     error: Optional[str] = Field(description="Why the call failed")
     stop_reason: Optional[str]
+    degraded: Optional[bool] = Field(default=None, description="The model refused the request as logged, so it ran "
+                                     "without some of its settings")
+    dropped: Optional[list[str]] = Field(default=None, description="The settings it ran without")
 
 
 class OriginalAnswer(Call):
@@ -263,8 +269,6 @@ class Vote(_Out):
 
 
 class CandidateAnswer(Call):
-    degraded: Optional[bool] = Field(description="The model refused a setting of the request (e.g. reasoning), so "
-                                                 "it ran without it")
     kept: bool = Field(description="The judges' majority: it fits")
     category: Optional[Literal["match", "acceptable", "drift", "unclear"]]
     votes: str = Field(description="e.g. '3/3': the judges that agree with the outcome")
@@ -295,6 +299,8 @@ class Message(_Out):
 class Sent(_Out):
     messages: list[Message] = Field(description="The conversation as text, system prompt first")
     tools: list[str] = Field(description="Names of the tools the request offered")
+    settings: dict = Field(default_factory=dict, description="Every other field of the logged request, sent with each "
+                                                              "re-run as it was (temperature, thinking, ...)")
 
 
 class Result(_Out):

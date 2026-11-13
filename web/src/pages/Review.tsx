@@ -107,7 +107,7 @@ export default function Review() {
                   </article>
                   {answer && (
                     <article className="picked">
-                      <span className="muted">{cand.label} · answer {picked + 1}{answer.model && answer.model !== cand.model ? ` · answered by ${answer.model}` : ''}{answer.degraded ? ' · ran without a setting the model refused' : ''}</span>
+                      <span className="muted">{cand.label} · answer {picked + 1}{answer.model && answer.model !== cand.model ? ` · answered by ${answer.model}` : ''}{answer.degraded ? ` · ran without ${answer.dropped?.length ? answer.dropped.join(', ') : 'a setting'}, which the model refused` : ''}</span>
                       <AnswerText output={answer.output} error={answer.error} />
                     </article>
                   )}

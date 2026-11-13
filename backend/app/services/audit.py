@@ -113,7 +113,7 @@ def replay(trace, model, max_tokens=None):
                              tool_choice=(_tool_choice(trace.get("tool_choice")) if tools else None),
                              reasoning=bool(trace.get("thinking_enabled")))
     return {"output": _render(res["text"], res["tool_calls"]), "usage": res["usage"], "latency_ms": res["latency_ms"],
-            "model": res["model"], "stop_reason": res["stop_reason"], "degraded": res["degraded"]}
+            "model": res["model"], "stop_reason": res["stop_reason"], "degraded": res["degraded"], "dropped": res.get("dropped") or []}
 
 
 def _recorded(trace):

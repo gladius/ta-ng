@@ -88,6 +88,7 @@ _cells = Table(
     Column("reasoning_tokens", Float),               # None when the provider doesn't report it
     Column("output_chars", Float),                   # the visible answer: tokens up with this flat is the tokenizer
     Column("cut_off", Integer),                      # clean runs that stopped at the output cap: their tokens are understated
+    Column("degraded", Integer),                     # clean runs the model only took without some of the logged settings
 )
 TOKENS = ("input_tokens", "output_tokens", "reasoning_tokens", "output_chars")
 _callbacks = Table(
@@ -382,7 +383,8 @@ def _tokens(runs):
             "output_tokens": avg([x["usage"].get("output", 0) for x in runs]),
             "reasoning_tokens": avg([x["usage"].get("reasoning") for x in runs]),
             "output_chars": avg([len(x.get("output") or "") for x in runs]),
-            "cut_off": sum(1 for x in runs if x.get("stop_reason") in ("length", "max_tokens"))}
+            "cut_off": sum(1 for x in runs if x.get("stop_reason") in ("length", "max_tokens")),
+            "degraded": sum(1 for x in runs if x.get("degraded"))}
 
 
 def _cell_rows(job_id, seq, r):
@@ -504,7 +506,7 @@ def summaries(job_ids):
         agg = c.execute(select(ce.job_id, ce.label, func.count(), *_verdicts(ce),
                                func.avg(case((ce.runs > 0, ce.kept * 1.0 / ce.runs))),
                                func.avg(ce.latency_ms), func.avg(ce.cost_usd),
-                               *[func.avg(getattr(ce, k)) for k in TOKENS], func.sum(ce.cut_off), func.sum(ce.runs),
+                               *[func.avg(getattr(ce, k)) for k in TOKENS], func.sum(ce.cut_off), func.sum(ce.runs), func.sum(ce.degraded),
                                *[func.sum(getattr(ce, k)) for k in ANSWERS])
                         .where(ce.job_id.in_(job_ids)).group_by(ce.job_id, ce.label)
                         .order_by(ce.job_id, func.min(ce.pos), ce.label)).all()
@@ -514,12 +516,13 @@ def summaries(job_ids):
             models[(job_id, label)].append(model)
     out = defaultdict(list)
     for job_id, label, n, within, outside, unverified, fit, lat, cost, *rest in agg:
-        tokens, (cut, runs), answers = rest[:len(TOKENS)], rest[len(TOKENS):len(TOKENS) + 2], rest[len(TOKENS) + 2:]
+        tokens, (cut, runs, degraded), answers = rest[:len(TOKENS)], rest[len(TOKENS):len(TOKENS) + 3], rest[len(TOKENS) + 3:]
         judged = label == "original" or (within or 0) + (outside or 0) + (unverified or 0) > 0
         fit = fit if judged else None
         out[job_id].append({"label": label, "models": models[(job_id, label)], "requests": n,
                             **{"avg_" + k: _num(v, 1) for k, v in zip(TOKENS, tokens)},
                             "cut_off": int(cut or 0), "runs": int(runs or 0), "judged": judged,
+                            "degraded": int(degraded or 0),
                             "answers": None if label == "original" or all(a is None for a in answers) else
                             dict(zip(ANSWERS, (int(a or 0) for a in answers))),
                             "within": int(within or 0), "outside": int(outside or 0), "unverified": int(unverified or 0),
@@ -545,6 +548,9 @@ def _flags(s, base):
     out = []
     if s["cut_off"]:
         out.append("%d of %d answers cut off at the output cap: its tokens are understated" % (s["cut_off"], s["runs"]))
+    if s["degraded"]:
+        out.append("%d of %d answers ran without some of the request's settings, which the model refused: not the "
+                   "request as logged" % (s["degraded"], s["runs"]))
     if s["label"] == "original" or not base:
         return out
     ot, bot, oc, boc = (x.get(k) for x in (s, base) for k in ("avg_output_tokens", "avg_output_chars"))
