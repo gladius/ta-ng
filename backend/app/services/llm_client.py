@@ -120,20 +120,24 @@ def _u_get(u, *names):
     return 0
 
 
-def _u_cached_details(u):
-    det = getattr(u, "prompt_tokens_details", None)
+def _u_detail(u, details, name):
+    """A count inside a details object of the usage (None when it isn't reported)."""
+    det = getattr(u, details, None)
     if det is None and isinstance(u, dict):
-        det = u.get("prompt_tokens_details")
-    if det is None:
-        return 0
-    v = getattr(det, "cached_tokens", None)
+        det = u.get(details)
+    v = getattr(det, name, None)
     if v is None and isinstance(det, dict):
-        v = det.get("cached_tokens")
-    return int(v or 0)
+        v = det.get(name)
+    return int(v) if isinstance(v, (int, float)) else None
+
+
+def _u_cached_details(u):
+    return _u_detail(u, "prompt_tokens_details", "cached_tokens") or 0
 
 
 def usage(resp):
-    """Token usage of a response, usage object or dict -> {input (uncached), output, cache_read, cache_write}."""
+    """Token usage of a response, usage object or dict -> {input (uncached), output, cache_read, cache_write}, plus
+    `reasoning` (the part of output spent thinking) when the provider reports it."""
     u = getattr(resp, "usage", None)
     if u is None:
         u = resp.get("usage", resp) if isinstance(resp, dict) else resp
@@ -143,8 +147,12 @@ def usage(resp):
                       "total_cached_tokens"), _u_cached_details(u))
     write = _u_get(u, "cache_creation_input_tokens", "cacheWriteInputTokens")
     inp = _u_get(u, "input_tokens") or max(0, _u_get(u, "prompt_tokens") - read - write)
-    return {"input": inp, "output": _u_get(u, "output_tokens", "completion_tokens"), "cache_read": read,
-            "cache_write": write}
+    out = {"input": inp, "output": _u_get(u, "output_tokens", "completion_tokens"), "cache_read": read,
+           "cache_write": write}
+    reasoning = _u_detail(u, "completion_tokens_details", "reasoning_tokens")
+    if reasoning is None:
+        reasoning = _u_detail(u, "output_tokens_details", "reasoning_tokens")
+    return out if reasoning is None else {**out, "reasoning": reasoning}
 
 
 def text(resp):

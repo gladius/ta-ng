@@ -189,6 +189,11 @@ class LabelSummary(_Out):
     within_rate: Optional[float] = Field(default=None, description="Candidates: within / requests")
     cost_vs_original_pct: Optional[int] = Field(default=None, description="Candidates: -72 means 72% cheaper")
     latency_vs_original_pct: Optional[int] = Field(default=None, description="Candidates: -31 means 31% faster")
+    avg_input_tokens: Optional[float] = Field(default=None, description="Per call, the cached part included")
+    avg_output_tokens: Optional[float] = Field(default=None, description="Per call, the reasoning included")
+    avg_reasoning_tokens: Optional[float] = Field(default=None, description="Per call; null when not reported")
+    avg_output_chars: Optional[float] = Field(default=None, description="Per call, characters of the visible answer")
+    output_tokens_vs_original_pct: Optional[int] = Field(default=None, description="Candidates: 12 means 12% more")
 
 
 class Routing(_Out):

@@ -281,7 +281,8 @@ def download_csv(audit_id: str):
     w = csv.writer(buf)
     w.writerow(["request_id", "original_model", "original_consistency", "original_avg_latency_ms",
                 "original_avg_cost_usd", "candidate", "candidate_model", "served_model", "verdict", "fit", "fit_rate",
-                "avg_latency_ms", "avg_cost_usd", "reason", "judge_reason", "match", "acceptable", "drift", "unclear"])
+                "avg_latency_ms", "avg_cost_usd", "reason", "judge_reason", "match", "acceptable", "drift", "unclear",
+                *("original_avg_" + k for k in jobs.TOKENS), *("avg_" + k for k in jobs.TOKENS)])
     ms = lambda v: None if v is None else round(v)
     orig = {}
     for row in jobs.table(job_id):
@@ -293,6 +294,7 @@ def download_csv(audit_id: str):
                     row["verdict"], "%d/%d" % (row["kept"], row["runs"]),
                     round(row["kept"] / row["runs"], 3) if row["runs"] else None, ms(row["latency_ms"]),
                     row["cost_usd"], row["reason"], row["judge_reason"] or "",
-                    *(row.get(k) for k in ("match", "acceptable", "drift", "unclear"))])
+                    *(row.get(k) for k in ("match", "acceptable", "drift", "unclear")),
+                    *(orig.get(k) for k in jobs.TOKENS), *(row.get(k) for k in jobs.TOKENS)])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="%s.csv"' % audit_id})

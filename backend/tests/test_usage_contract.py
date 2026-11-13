@@ -55,3 +55,9 @@ def test_bare_usage_dict_and_anthropic_passthrough_zero():
 def test_none_is_safe():
     assert usage(None) == {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     assert usage(types.SimpleNamespace(usage=None))["input"] == 0
+
+
+def test_reasoning_tokens_are_read_when_reported():
+    u = usage({"prompt_tokens": 10, "completion_tokens": 50, "completion_tokens_details": {"reasoning_tokens": 30}})
+    assert u["output"] == 50 and u["reasoning"] == 30                 # reasoning is part of output, shown beside it
+    assert "reasoning" not in usage({"prompt_tokens": 10, "completion_tokens": 50})

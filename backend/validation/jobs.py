@@ -83,7 +83,12 @@ _cells = Table(
     Column("acceptable", Integer),
     Column("drift", Integer),
     Column("unclear", Integer),
+    Column("input_tokens", Float),                   # per call, averaged over the row's clean runs; the cache included
+    Column("output_tokens", Float),                  # the reasoning included
+    Column("reasoning_tokens", Float),               # None when the provider doesn't report it
+    Column("output_chars", Float),                   # the visible answer: tokens up with this flat is the tokenizer
 )
+TOKENS = ("input_tokens", "output_tokens", "reasoning_tokens", "output_chars")
 _callbacks = Table(
     "validation_callbacks", db.metadata,
     Column("job_id", String(32), primary_key=True),
@@ -365,19 +370,33 @@ def _unpriced(result):
     return sum(1 for r in runs if r.get("cost_usd") is None and not r.get("error"))
 
 
+def _tokens(runs):
+    """Per-call averages of a row's clean runs -> the TOKENS columns."""
+    runs = [x for x in runs if x.get("usage") and not x.get("error")]
+    def avg(vals):
+        vals = [v for v in vals if v is not None]
+        return round(sum(vals) / len(vals), 1) if vals else None
+    return {"input_tokens": avg([x["usage"].get("input", 0) + x["usage"].get("cache_read", 0)
+                                 + x["usage"].get("cache_write", 0) for x in runs]),
+            "output_tokens": avg([x["usage"].get("output", 0) for x in runs]),
+            "reasoning_tokens": avg([x["usage"].get("reasoning") for x in runs]),
+            "output_chars": avg([len(x.get("output") or "") for x in runs])}
+
+
 def _cell_rows(job_id, seq, r):
     lat, cost = original_averages(r)
     ref = r["reference"]
     rows = [{"job_id": job_id, "seq": seq, "label": "original", "pos": 0, "model": r["model"], "served_model": None,
              "verdict": None, "kept": ref["agree"], "runs": ref["of"], "latency_ms": lat, "cost_usd": cost,
-             "reason": None, "judge_reason": None, **{k: None for k in ANSWERS}}]
+             "reason": None, "judge_reason": None, **{k: None for k in ANSWERS},
+             **_tokens([x for x in ref["runs"] if not x.get("recorded")])}]
     for n, c in enumerate(r["candidates"], 1):
         served = Counter(x["model"] for x in c["runs"] if x.get("model") and not x.get("error")).most_common(1)
         rows.append({"job_id": job_id, "seq": seq, "label": c["label"], "pos": n, "model": c["model"],
                      "served_model": served[0][0] if served else None, "verdict": c["verdict"], "kept": c["kept"],
                      "runs": c["of"], "latency_ms": c["latency_ms"], "cost_usd": c["cost_usd"], "reason": c["reason"],
                      "judge_reason": c.get("judge_reason") or None,
-                     **{k: (c.get("answers") or {}).get(k) for k in ANSWERS}})
+                     **{k: (c.get("answers") or {}).get(k) for k in ANSWERS}, **_tokens(c["runs"])})
     return rows
 
 
@@ -483,6 +502,7 @@ def summaries(job_ids):
         agg = c.execute(select(ce.job_id, ce.label, func.count(), *_verdicts(ce),
                                func.avg(case((ce.runs > 0, ce.kept * 1.0 / ce.runs))),
                                func.avg(ce.latency_ms), func.avg(ce.cost_usd),
+                               *[func.avg(getattr(ce, k)) for k in TOKENS],
                                *[func.sum(getattr(ce, k)) for k in ANSWERS])
                         .where(ce.job_id.in_(job_ids)).group_by(ce.job_id, ce.label)
                         .order_by(ce.job_id, func.min(ce.pos), ce.label)).all()
@@ -491,8 +511,10 @@ def summaries(job_ids):
                                               .distinct().order_by(ce.job_id, ce.label, ce.model)):
             models[(job_id, label)].append(model)
     out = defaultdict(list)
-    for job_id, label, n, within, outside, unverified, fit, lat, cost, *answers in agg:
+    for job_id, label, n, within, outside, unverified, fit, lat, cost, *rest in agg:
+        tokens, answers = rest[:len(TOKENS)], rest[len(TOKENS):]
         out[job_id].append({"label": label, "models": models[(job_id, label)], "requests": n,
+                            **{"avg_" + k: _num(v, 1) for k, v in zip(TOKENS, tokens)},
                             "answers": None if label == "original" or all(a is None for a in answers) else
                             dict(zip(ANSWERS, (int(a or 0) for a in answers))),
                             "within": int(within or 0), "outside": int(outside or 0), "unverified": int(unverified or 0),
@@ -504,7 +526,8 @@ def summaries(job_ids):
             if s["label"] == "original":
                 continue
             s["within_rate"] = round(s["within"] / s["requests"], 3) if s["requests"] else None
-            for k, pct in (("avg_cost_usd", "cost_vs_original_pct"), ("avg_latency_ms", "latency_vs_original_pct")):
+            for k, pct in (("avg_cost_usd", "cost_vs_original_pct"), ("avg_latency_ms", "latency_vs_original_pct"),
+                           ("avg_output_tokens", "output_tokens_vs_original_pct")):
                 s[pct] = round((s[k] - base[k]) / base[k] * 100) if s.get(k) is not None and base.get(k) else None
     return dict(out)
 
