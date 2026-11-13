@@ -144,7 +144,11 @@ def validate_many(items, spec, run=None):
             calls += [(i, c, cand.model)] * first
     runs = defaultdict(list)
     # all at once, as production would send them: no order of ours gives one model's re-runs a cache discount
-    for (i, who, _), r in zip(calls, _pmap(lambda x: _call(run, items[x[0]].request, x[2]), calls, spec.max_parallel)):
+    def sent(i, who):
+        """The request as this run sends it: the original's as logged, a candidate's with its own settings on top."""
+        settings = None if who == "ref" else items[i].candidates[who].settings
+        return {**items[i].request, "candidate_settings": settings} if settings else items[i].request
+    for (i, who, _), r in zip(calls, _pmap(lambda x: _call(run, sent(x[0], x[1]), x[2]), calls, spec.max_parallel)):
         runs[(i, who)].append(r)
     reference = {i: ([_recorded_run(it)] if it.recorded else []) + runs[(i, "ref")] for i, it in enumerate(items)}
     reqs = {i: request_text(it.request) for i, it in enumerate(items)}
@@ -201,7 +205,7 @@ def validate_many(items, spec, run=None):
                                                     for j, r in enumerate(runs[(i, c)]))]
     if extra:
         calls = [x for x in extra for _ in range(spec.candidate_runs - first)]
-        for (i, c, _), r in zip(calls, _pmap(lambda x: _call(run, items[x[0]].request, x[2]), calls, spec.max_parallel)):
+        for (i, c, _), r in zip(calls, _pmap(lambda x: _call(run, sent(x[0], x[1]), x[2]), calls, spec.max_parallel)):
             runs[(i, c)].append(r)
         jobs2 = []
         for i, c, _ in extra:
@@ -253,7 +257,8 @@ def validate_many(items, spec, run=None):
             timed = [r["latency_ms"] for r in cruns if r.get("latency_ms")]
             priced = [r["cost_usd"] for r in cruns if r.get("cost_usd") is not None]
             answers = Counter(x["category"] for x in rows) if spec.judge else {}
-            cands.append({"label": cand.label, "model": cand.model, "kept": kept, "of": len(cruns),
+            cands.append({"label": cand.label, "model": cand.model, "settings": cand.settings or None,
+                          "kept": kept, "of": len(cruns),
                           "answers": {k: answers.get(k, 0) for k in ANSWERS},
                           "fit_rate": round(kept / len(cruns), 3) if cruns and spec.judge else None,
                           "verdict": verdict, "reason": reason, "runs": rows,

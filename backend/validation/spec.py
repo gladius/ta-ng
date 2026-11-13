@@ -22,6 +22,7 @@ class Spec:
 class Candidate:
     label: str                     # the caller's name for it (a router, a release, "cheaper"); opaque to the engine
     model: str
+    settings: dict = None          # request fields set for this candidate's re-runs only (None removes a logged one)
 
 
 @dataclass

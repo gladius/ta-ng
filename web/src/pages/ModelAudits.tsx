@@ -19,6 +19,14 @@ export const STRATEGY_NAME: Record<string, string> = { cheaper: 'Cheaper', bette
 const OLD_STRATEGY: Record<string, string> = { cheaper: 'cheaper tier of each call-site\'s model', open_weight: 'open-weight swap in the same tier', release: 'a release', custom: 'chosen models', auto: 'Auto' }
 export const STATUS: Record<string, string> = { sampling: 'Sampling', queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', stopped: 'Stopped' }
 
+/** A model's thinking choice on the form -> the settings its re-runs get on top of the logged request. */
+const THINKING: Record<string, Record<string, unknown>> = {
+  off: { thinking: { type: 'disabled' }, reasoning_effort: null },
+  low: { reasoning_effort: 'low', thinking: null },
+  medium: { reasoning_effort: 'medium', thinking: null },
+  high: { reasoning_effort: 'high', thinking: null },
+}
+
 export function VerdictChip({ v }: { v: Verdict }) {
   return <span className={'chip ' + (v.verdict === 'passes' ? 'cause-ok' : v.verdict === 'drifts' ? 'cause-dynamic_first' : '')}>{v.verdict} · {v.within} of {v.requests}</span>
 }
@@ -34,6 +42,7 @@ export function AuditDialog({ usecase, site, lockScope = false, onStarted }: { u
   const [usecases, setUsecases] = useState<string[]>(usecase !== undefined ? [usecase ?? 'None'] : [])
   const [models, setModels] = useState<string[]>([])
   const [strategy, setStrategy] = useState('cheaper')
+  const [thinking, setThinking] = useState<Record<string, string>>({})        // per chosen model; absent: as logged
   const strategies = useQuery({ queryKey: ['strategies'], queryFn: () => get<{ strategies: { id: string; does: string }[] }>('/audit/models/strategies'), enabled: open })
   const [advanced, setAdvanced] = useState(false)
   const [samples, setSamples] = useState(12)
@@ -55,7 +64,7 @@ export function AuditDialog({ usecase, site, lockScope = false, onStarted }: { u
       `/audit/models/preview?${new URLSearchParams({ strategy, usecases: site ? '' : usecases.join(','), ...(site && { site }), models: models.join(',') })}`) })
   const start = useMutation({
     mutationFn: () => get<{ audits: { id: string }[] }>('/audit/models', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ usecases: site ? [] : usecases, site, strategy, models, samples, judge, ...(budget !== '' && { max_budget_usd: budget }), ...(cap !== '' && { max_output_tokens: cap }) }) }),
+      body: JSON.stringify({ usecases: site ? [] : usecases, site, strategy, models: models.filter((m) => !THINKING[thinking[m]]), candidates: models.filter((m) => THINKING[thinking[m]]).map((m) => ({ model: m, settings: THINKING[thinking[m]] })), samples, judge, ...(budget !== '' && { max_budget_usd: budget }), ...(cap !== '' && { max_output_tokens: cap }) }) }),
     onSuccess: (r) => { onStarted?.(r.audits.map((a) => a.id)) },
   })
   const available = (served.data?.models ?? []).filter((m) => m.available)
@@ -86,6 +95,27 @@ export function AuditDialog({ usecase, site, lockScope = false, onStarted }: { u
           value={models.map((m) => ({ value: m, label: m }))}
           onChange={(v) => setModels(v.map((o) => o.value))} />
       </label>
+      {models.length > 0 && (
+        <table className="grid compact">
+          <thead><tr><th>Model</th><th>Thinking</th></tr></thead>
+          <tbody>
+            {models.map((m) => (
+              <tr key={m}>
+                <td className="mono">{m}</td>
+                <td>
+                  <select className="input" aria-label={`Thinking for ${m}`} value={thinking[m] ?? ''} onChange={(e) => setThinking({ ...thinking, [m]: e.target.value })}>
+                    <option value="">As logged</option>
+                    <option value="off">Off</option>
+                    <option value="low">Low effort</option>
+                    <option value="medium">Medium effort</option>
+                    <option value="high">High effort</option>
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       <button className="btn small" onClick={() => setAdvanced(!advanced)}>{advanced ? 'Hide advanced' : 'Advanced'}</button>
       {advanced && (
         <div className="row">

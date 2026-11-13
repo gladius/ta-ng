@@ -102,16 +102,18 @@ def replay(trace, model, max_tokens=None):
                 rec_out = len(trace.get("output") or "") // 4
             max_tokens = min(registry.max_output(model), max(512, rec_out * 3))
     logged = trace.get("logged_request")
+    own = trace.get("candidate_settings") or {}          # this candidate's settings: on top; None removes a logged one
     if logged:
         res = llm_client.run(model=model, messages=logged["messages"], max_tokens=max_tokens,
-                             params={k: v for k, v in logged.items() if k != "messages"})
+                             params={k: v for k, v in {**logged, **own}.items() if k != "messages" and v is not None})
     else:
         system = "\n".join(m["content"] for m in trace.get("input_messages", []) if m.get("role") == "system")
         tools = _tools(trace)
         res = llm_client.run(model=model, messages=_messages(trace), max_tokens=max_tokens,
                              system=(system.strip() or None), tools=tools,
                              tool_choice=(_tool_choice(trace.get("tool_choice")) if tools else None),
-                             reasoning=bool(trace.get("thinking_enabled")))
+                             reasoning=bool(trace.get("thinking_enabled")),
+                             params={k: v for k, v in own.items() if v is not None})
     return {"output": _render(res["text"], res["tool_calls"]), "usage": res["usage"], "latency_ms": res["latency_ms"],
             "model": res["model"], "stop_reason": res["stop_reason"], "degraded": res["degraded"], "dropped": res.get("dropped") or []}
 

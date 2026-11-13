@@ -455,3 +455,26 @@ def test_a_refused_request_is_retried_bare_and_says_what_it_left_out(monkeypatch
     assert (r["degraded"], r["dropped"]) == (True, ["thinking", "tool_choice"])
     assert "tool_choice" not in calls[1] and "thinking" not in calls[1]["extra_body"]
     assert calls[1]["response_format"] == {"type": "json_object"}            # the core of the request stays
+
+
+def test_a_candidate_runs_with_its_own_settings_on_top_of_the_logged_request(monkeypatch):
+    """Settings belong to the candidate: its re-runs get them on top of the logged request (None removes a logged
+    field), the original's re-runs stay as logged, and the same model can be tried twice with different settings."""
+    from connectors.bigquery.source import to_trace
+    seen = []
+    monkeypatch.setattr(llm_client, "_complete_raw", lambda **kw: (seen.append(kw), _resp())[1])
+    body = {"model": "claude-opus-4-8", "max_tokens": 1000, "temperature": 0.2, "thinking": {"type": "adaptive"},
+            "messages": [{"role": "user", "content": "refund 1"}]}
+    item = Item(id="r", request=to_trace(body, {}, "api"), model="claude-opus-4-8", candidates=[
+        Candidate("low", "claude-opus-5", {"reasoning_effort": "low", "thinking": None}),
+        Candidate("off", "claude-opus-5", {"thinking": {"type": "disabled"}})])
+    r = validate_many([item], Spec(reference_runs=1, first_runs=1, judge=False))[0]
+    by = {}
+    for kw in seen:
+        by.setdefault((kw["model"], kw.get("reasoning_effort"), str(kw.get("thinking"))), kw)
+    assert ("claude-opus-4-8", None, "{'type': 'adaptive'}") in by                 # the original: as logged
+    assert ("claude-opus-5", "low", "None") in by                                  # effort set, logged thinking removed
+    assert ("claude-opus-5", None, "{'type': 'disabled'}") in by
+    assert all(kw["temperature"] == 0.2 for kw in seen)                            # the rest of the request untouched
+    assert [c["settings"] for c in r["candidates"]] == [{"reasoning_effort": "low", "thinking": None},
+                                                        {"thinking": {"type": "disabled"}}]

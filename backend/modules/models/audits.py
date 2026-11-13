@@ -261,7 +261,8 @@ def start(**kw):
     with eng.begin() as c:
         c.execute(audits.insert().values(id=audit_id, created_at=_now(), trigger=kw.get("trigger", "user"),
                                          usecase=kw.get("usecase") or "", site=kw.get("site"), strategy=kw.get("strategy", "cheaper"),
-                                         candidates=json.dumps(list(kw.get("asked") or [])), samples="{}",
+                                         candidates=json.dumps(list(kw.get("asked") or []) + [c["label"] for c in kw.get("extra") or ()]),
+                                         samples="{}",
                                          max_budget_usd=kw.get("max_budget_usd"), status="sampling",
                                          scope="site" if kw.get("site") else "usecase", callback_url=kw.get("callback_url")))
 
@@ -294,9 +295,11 @@ def start_requests(items, strategy="manual", asked=(), max_budget_usd=None, call
 
 
 def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_SAMPLES, max_budget_usd=None,
-          trigger="user", judge_model=None, auto=False, callback_url=None, judge=True, max_output_tokens=None):
+          trigger="user", judge_model=None, auto=False, callback_url=None, judge=True, max_output_tokens=None,
+          extra=()):
     """Sample, build the items and queue the validation, for an audit row that already exists. Run again (its worker
-    died), it finishes what is missing and never queues the job twice."""
+    died), it finishes what is missing and never queues the job twice. `extra`: candidates with settings of their
+    own, [{label, model, settings}], tried on every request."""
     from app.services.downgrade_refset import spec as app_spec
     from app.web.public import _logged_bodies
     from connectors.bigquery.source import to_trace
@@ -309,7 +312,7 @@ def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_
     try:
         if strategy not in STRATEGY_IDS:
             raise ValueError("strategy must be one of %s" % ", ".join(STRATEGIES))
-        if strategy in ("release", "manual", "custom") and not asked and not auto:
+        if strategy in ("release", "manual", "custom") and not asked and not auto and not extra:
             raise ValueError("%s needs model names" % strategy)
         samples = sample(usecase, site, n)
         if not samples:
@@ -324,11 +327,12 @@ def _fill(audit_id, usecase, site=None, strategy="cheaper", asked=(), n=DEFAULT_
                     continue
                 req, resp = bodies[s["id"]]
                 cands = candidates_for(req.get("model"), strategy, asked, auto, store.get(st))
-                if not cands:
+                if not cands and not extra:
                     continue
                 trace = to_trace(req, resp, usecase or "log")
                 items.append({"id": s["id"], "request": trace, "model": req.get("model"), "recorded": trace["output"] or None,
-                              "candidates": [{"label": (m + " now") if strategy == "drift_watch" else m, "model": m} for m in cands]})
+                              "candidates": [{"label": (m + " now") if strategy == "drift_watch" else m, "model": m}
+                                             for m in cands] + list(extra)})
         if not items:
             raise ValueError("no candidate for these call-sites' models (nothing cheaper / no open-weight swap in the catalog)")
         spec = _spec(judge_model, judge, max_output_tokens)

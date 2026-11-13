@@ -593,3 +593,13 @@ def test_one_scope_and_the_audits_models_stand_in_for_missing_candidates(client)
     assert p["candidates"] == [{"label": "gpt-5.4-mini", "model": "gpt-5.4-mini"}]                       # labels are models
     a = client.get("/api/audit/models/" + aid).json()
     assert (a["scope"], a["strategy"], a["models"], list(a["samples"])) == ("requests", "manual", ["gpt-5.4-mini"], [""])
+
+
+def test_a_candidate_with_settings_gets_a_plain_label():
+    from app.web.public import CandidateIn, candidate
+    assert candidate(CandidateIn(model="claude-opus-5")) == {"label": "claude-opus-5", "model": "claude-opus-5"}
+    low = candidate(CandidateIn(model="claude-opus-5", settings={"reasoning_effort": "low", "thinking": None}))
+    assert low["label"] == "claude-opus-5 · effort low" and low["settings"] == {"reasoning_effort": "low", "thinking": None}
+    assert candidate(CandidateIn(model="claude-opus-5", settings={"thinking": {"type": "disabled"}}))["label"] == \
+        "claude-opus-5 · thinking off"
+    assert candidate(CandidateIn(label="mine", model="m", settings={"top_p": 0.5}))["label"] == "mine"

@@ -54,6 +54,9 @@ class AuditIn(BaseModel):
                                     "'cheaper', or 'manual' for your requests")
     models: list[str] = Field(default_factory=list, description="Models to try besides the strategy's picks; "
                                                                 "required for 'manual' and 'release'")
+    candidates: list[public.CandidateIn] = Field(default_factory=list, max_length=public.MAX_CANDIDATES, description=
+                                                 "Models to try with settings of their own (thinking, effort): see "
+                                                 "`settings`. Tried besides `models` and the strategy's picks")
     samples: int = Field(default=audits.DEFAULT_SAMPLES, ge=1, le=50, description="Requests per call-site (sampled scopes)")
     max_budget_usd: Optional[float] = Field(default=None, gt=0, description="Per audit; no cap when left out")
     callback_url: Optional[HttpUrl] = Field(default=None, description="POSTed the audit's status once, when it ends")
@@ -165,19 +168,21 @@ def start(body: AuditIn):
     if body.trigger not in audits.TRIGGERS:
         raise HTTPException(422, "trigger must be one of %s" % ", ".join(audits.TRIGGERS))
     own = body.requests and all(r.candidates for r in body.requests)
-    if strategy in ("release", "manual") and not body.models and not own:
+    extra = [public.candidate(c) for c in body.candidates]
+    if strategy in ("release", "manual") and not body.models and not own and not extra:
         raise HTTPException(422, "%s needs model names" % strategy)
     cb = str(body.callback_url) if body.callback_url else None
     started = []
     if body.requests:
         items = public.parse_requests(body.requests, lambda m: [{"label": c, "model": c} for c in
-                                                                 audits.candidates_for(m, strategy, body.models)])
-        started.append(audits.start_requests(items, strategy, body.models, body.max_budget_usd, cb, body.trigger,
+                                                                 audits.candidates_for(m, strategy, body.models)] + extra)
+        shown = list(body.models) + [c["label"] for c in extra]
+        started.append(audits.start_requests(items, strategy, shown, body.max_budget_usd, cb, body.trigger,
                                              body.judge_model, body.judge, body.max_output_tokens))
     else:
         kw = dict(strategy=strategy, asked=body.models, auto=False, n=body.samples, max_budget_usd=body.max_budget_usd,
                   trigger=body.trigger, judge_model=body.judge_model, callback_url=cb, judge=body.judge,
-                  max_output_tokens=body.max_output_tokens)
+                  max_output_tokens=body.max_output_tokens, extra=extra)
         if body.site:
             rec = store.get(body.site)
             if not rec:

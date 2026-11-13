@@ -63,9 +63,32 @@ one more judge call. `max_budget_usd` caps an audit (no cap unless given); `spen
 """
 
 class CandidateIn(BaseModel):
-    label: str = Field(min_length=1, max_length=120, description="Your name for it, e.g. a router or a release. "
-                                                                 "Unique within the item; 'original' is reserved")
+    label: Optional[str] = Field(default=None, min_length=1, max_length=120, description=
+                                 "Your name for it, e.g. a router or a release. Unique within the item; 'original' is "
+                                 "reserved. Left out: the model's name, with its settings when it has any")
     model: str = Field(min_length=1, max_length=120, description="The model or router to call, as the gateway names it")
+    settings: Optional[dict] = Field(default=None, description=
+                                     "Request fields set for this candidate's re-runs only, on top of the logged request: "
+                                     'e.g. {"reasoning_effort": "low"} or {"thinking": {"type": "disabled"}}. null as a '
+                                     "value removes a logged field. The same model may be tried several times with "
+                                     "different settings. A setting the model refuses is left out and the run flagged")
+
+
+def candidate(c):
+    """A CandidateIn as the engine takes it: {label, model[, settings]}."""
+    import json
+
+    def said(k, v):
+        if k == "reasoning_effort" and v:
+            return "effort %s" % v
+        if k == "thinking" and isinstance(v, dict) and v.get("type"):
+            return "thinking %s" % {"disabled": "off"}.get(v["type"], v["type"])
+        if v is None:
+            return None                                    # a removed field needs no mention
+        return "%s=%s" % (k, v if isinstance(v, (str, int, float)) else json.dumps(v, separators=(",", ":")))
+    parts = [x for x in (said(k, v) for k, v in (c.settings or {}).items()) if x]
+    named = c.label or (" · ".join([c.model, ", ".join(parts)]) if parts else c.model)[:120]
+    return {"label": named, "model": c.model, **({"settings": c.settings} if c.settings else {})}
 
 
 class RequestIn(BaseModel):
@@ -282,6 +305,7 @@ class CandidateResult(_Out):
     verdict: Verdict
     reason: str = Field(description="Why this verdict, e.g. '(4/5 vs original 5/5)' or why it is unverified")
     judge_reason: str = Field(description="The judges' most common reason behind the verdict")
+    settings: Optional[dict] = Field(default=None, description="The settings this candidate ran with, when it has any")
     kept: int = Field(description="Answers that fit")
     of: int
     fit_rate: Optional[float]
@@ -369,7 +393,7 @@ def parse_requests(requests, default_candidates):
         elif not it.id:
             problems.append("item %d: id is required" % (n + 1))
             continue
-        cands = [c.model_dump() for c in it.candidates] if it.candidates else default_candidates(it.request.get("model"))
+        cands = [candidate(c) for c in it.candidates] if it.candidates else default_candidates(it.request.get("model"))
         if not cands:
             problems.append("%s: no candidate: name models (or this request's candidates) or pick a strategy with "
                             "picks for its model" % it.id)
