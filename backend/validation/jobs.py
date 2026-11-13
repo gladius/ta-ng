@@ -381,7 +381,9 @@ def _tokens(runs):
     return {"input_tokens": avg([x["usage"].get("input", 0) + x["usage"].get("cache_read", 0)
                                  + x["usage"].get("cache_write", 0) for x in runs]),
             "output_tokens": avg([x["usage"].get("output", 0) for x in runs]),
-            "reasoning_tokens": avg([x["usage"].get("reasoning") for x in runs]),
+            # an answer with no thinking may report no count at all: 0 beside ones that do, None when none does
+            "reasoning_tokens": avg([x["usage"].get("reasoning") or 0 for x in runs])
+            if any(x["usage"].get("reasoning") is not None for x in runs) else None,
             "output_chars": avg([len(x.get("output") or "") for x in runs]),
             "cut_off": sum(1 for x in runs if x.get("stop_reason") in ("length", "max_tokens")),
             "degraded": sum(1 for x in runs if x.get("degraded"))}
@@ -507,6 +509,7 @@ def summaries(job_ids):
                                func.avg(case((ce.runs > 0, ce.kept * 1.0 / ce.runs))),
                                func.avg(ce.latency_ms), func.avg(ce.cost_usd),
                                *[func.avg(getattr(ce, k)) for k in TOKENS], func.sum(ce.cut_off), func.sum(ce.runs), func.sum(ce.degraded),
+                               func.sum(ce.reasoning_tokens), func.count(ce.output_tokens),
                                *[func.sum(getattr(ce, k)) for k in ANSWERS])
                         .where(ce.job_id.in_(job_ids)).group_by(ce.job_id, ce.label)
                         .order_by(ce.job_id, func.min(ce.pos), ce.label)).all()
@@ -516,7 +519,11 @@ def summaries(job_ids):
             models[(job_id, label)].append(model)
     out = defaultdict(list)
     for job_id, label, n, within, outside, unverified, fit, lat, cost, *rest in agg:
-        tokens, (cut, runs, degraded), answers = rest[:len(TOKENS)], rest[len(TOKENS):len(TOKENS) + 3], rest[len(TOKENS) + 3:]
+        tokens, (cut, runs, degraded, rsum, measured), answers = (rest[:len(TOKENS)], rest[len(TOKENS):len(TOKENS) + 5],
+                                                                  rest[len(TOKENS) + 5:])
+        tokens = list(tokens)                           # reasoning over every measured request, like output: a request
+        if rsum is not None and measured:               # whose answers reported none counts as 0, not as missing
+            tokens[TOKENS.index("reasoning_tokens")] = float(rsum) / measured
         judged = label == "original" or (within or 0) + (outside or 0) + (unverified or 0) > 0
         fit = fit if judged else None
         out[job_id].append({"label": label, "models": models[(job_id, label)], "requests": n,
@@ -553,9 +560,11 @@ def _flags(s, base):
                    "request as logged" % (s["degraded"], s["runs"]))
     if s["label"] == "original" or not base:
         return out
-    ot, bot, oc, boc = (x.get(k) for x in (s, base) for k in ("avg_output_tokens", "avg_output_chars"))
-    if ot and bot and oc and boc and ot / bot - oc / boc >= 0.3:
-        out.append("output tokens %+d%% while the answer is %+d%% in length" % (round((ot / bot - 1) * 100), round((oc / boc - 1) * 100)))
+    # the visible answer only (output minus reasoning): more tokens for the same text is the tokenizer, not thinking
+    vt, bvt = ((x.get("avg_output_tokens") or 0) - (x.get("avg_reasoning_tokens") or 0) for x in (s, base))
+    oc, boc = s.get("avg_output_chars"), base.get("avg_output_chars")
+    if vt > 0 and bvt > 0 and oc and boc and vt / bvt - oc / boc >= 0.3:
+        out.append("answer tokens %+d%% while the answer is %+d%% in length" % (round((vt / bvt - 1) * 100), round((oc / boc - 1) * 100)))
     share = lambda x: x["avg_reasoning_tokens"] / x["avg_output_tokens"] if x.get("avg_reasoning_tokens") is not None and x.get("avg_output_tokens") else None
     rs, brs = share(s), share(base)
     if rs is not None and brs is not None and rs - brs >= 0.1:

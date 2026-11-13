@@ -74,10 +74,24 @@ def _complete_raw(retry_timeout=True, **kw):
     known = _sdk_fields()
     extra = {k: v for k, v in kw.items() if k not in known}
     kw = {**{k: v for k, v in kw.items() if k in known}, "extra_body": {**extra, "cache": {"no-cache": True}, "no-log": True}}
+    return _send(lambda: c.chat.completions.create(**kw), retry_timeout)
+
+
+def _messages_raw(**body):
+    """Transport for a request in Anthropic's own format: the gateway's /v1/messages, which takes it as it was logged
+    (top-level system, output_config, thinking, content blocks) and serves any model with it. -> the reply as a dict."""
+    from app.registry import serving_name
+    c = client()
+    body = {**body, "model": serving_name(body["model"]), "cache": {"no-cache": True}, "no-log": True}
+    return _send(lambda: c.post("/messages", body=body, cast_to=object), True)
+
+
+def _send(call, retry_timeout=True):
+    """`call()` with the retries every model call gets: 429 / 5xx / connection, and a timeout unless told not to."""
     last = None
     for attempt in range(4):
         try:
-            return c.chat.completions.create(**kw)
+            return call()
         except openai.APIStatusError as e:
             last = e
             if _refused(e):
@@ -168,6 +182,8 @@ def usage(resp):
     reasoning = _u_detail(u, "completion_tokens_details", "reasoning_tokens")
     if reasoning is None:
         reasoning = _u_detail(u, "output_tokens_details", "reasoning_tokens")
+    if reasoning is None:
+        reasoning = _u_detail(u, "output_tokens_details", "thinking_tokens")          # Anthropic's own name for it
     return out if reasoning is None else {**out, "reasoning": reasoning}
 
 
@@ -255,3 +271,26 @@ def run(*, model, messages, max_tokens, system=None, tools=None, tool_choice=Non
     return {"text": text(r), "tool_calls": calls, "usage": usage(r),
             "latency_ms": round((time.time() - t0) * 1000), "model": getattr(r, "model", None) or model,
             "stop_reason": choice.finish_reason if choice else None, "degraded": bool(dropped), "dropped": dropped}
+
+
+_CORE_MESSAGES = ("model", "max_tokens", "messages", "system", "tools")     # an Anthropic-format request's core
+
+
+def run_messages(*, model, body, max_tokens):
+    """One model call for a request logged in Anthropic's format, sent as it was but for the model and the output
+    cap. Refused as logged (400): retried once with its core, system prompt included, and `dropped` names the rest.
+    Returns what run() returns."""
+    body = {**body, "model": model, "max_tokens": max_tokens}
+    t0, dropped = time.time(), []
+    try:
+        r = _messages_raw(**body)
+    except openai.BadRequestError:
+        dropped = sorted(k for k in body if k not in _CORE_MESSAGES)
+        if not dropped:
+            raise
+        r = _messages_raw(**{k: v for k, v in body.items() if k in _CORE_MESSAGES})
+    blocks = [b for b in (r.get("content") or []) if isinstance(b, dict)]
+    return {"text": "\n".join(b.get("text") or "" for b in blocks if b.get("type") == "text"),
+            "tool_calls": [{"name": b.get("name"), "args": b.get("input") or {}} for b in blocks if b.get("type") == "tool_use"],
+            "usage": usage(r), "latency_ms": round((time.time() - t0) * 1000), "model": r.get("model") or model,
+            "stop_reason": r.get("stop_reason"), "degraded": bool(dropped), "dropped": dropped}

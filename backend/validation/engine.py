@@ -47,8 +47,15 @@ def _pmap_warm(fn, items, key, width):
 def _said(content):
     """A message's content as text: parts joined, a part with no text named by its type."""
     if isinstance(content, list):
-        return "\n".join(p.get("text") or "[%s]" % p.get("type", "part") if isinstance(p, dict) else str(p)
-                         for p in content)
+        def part(p):
+            if not isinstance(p, dict):
+                return str(p)
+            if p.get("type") == "tool_use":                   # Anthropic's format: calls and results are blocks
+                return "[calls %s(%s)]" % (p.get("name"), json.dumps(p.get("input") or {}, ensure_ascii=False))
+            if p.get("type") == "tool_result":
+                return "[tool result] " + _said(p.get("content"))
+            return p.get("text") or "[%s]" % p.get("type", "part")
+        return "\n".join(part(p) for p in content)
     return content if isinstance(content, str) else "" if content is None else json.dumps(content)
 
 
@@ -61,6 +68,8 @@ def request_text(trace):
     definitions after the instructions. The same in all of an item's judge calls, so cached."""
     sent = trace.get("logged_request") or {}
     msgs = sent.get("messages") or trace.get("input_messages") or []
+    if sent.get("system") and sent.get("messages"):          # Anthropic's format keeps the system prompt beside them
+        msgs = [{"role": "system", "content": sent["system"]}, *msgs]
     tools = ([json.dumps(t.get("function", t), ensure_ascii=False) for t in sent.get("tools") or []] if sent else
              [schema for _, schema in trace.get("tools_defined") or []])
     parts = []

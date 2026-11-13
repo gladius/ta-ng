@@ -478,3 +478,64 @@ def test_a_candidate_runs_with_its_own_settings_on_top_of_the_logged_request(mon
     assert all(kw["temperature"] == 0.2 for kw in seen)                            # the rest of the request untouched
     assert [c["settings"] for c in r["candidates"]] == [{"reasoning_effort": "low", "thinking": None},
                                                         {"thinking": {"type": "disabled"}}]
+
+
+def test_a_request_logged_in_anthropic_format_is_re_run_on_the_matching_endpoint(monkeypatch):
+    """A body with a top-level system, output_config and content blocks goes to /v1/messages as it was logged: the
+    system prompt is never lost. Its answer and usage are read in that format, and the judge sees the system prompt."""
+    from app.services import audit
+    from connectors.bigquery.source import to_trace
+    sent, chat = [], []
+    monkeypatch.setattr(llm_client, "_complete_raw", lambda **kw: chat.append(kw))
+    monkeypatch.setattr(llm_client, "_messages_raw", lambda **body: (sent.append(body), {
+        "model": "claude-opus-5-5", "stop_reason": "max_tokens",
+        "content": [{"type": "thinking", "thinking": ""}, {"type": "text", "text": "Refunding."},
+                    {"type": "tool_use", "name": "refund", "input": {"order": 17}}],
+        "usage": {"input_tokens": 40, "cache_read_input_tokens": 10, "output_tokens": 30,
+                  "output_tokens_details": {"thinking_tokens": 12}}})[1])
+    body = {"model": "claude-opus-4-8", "max_tokens": 2000, "stream": True, "metadata": {"user_id": "u"},
+            "system": [{"type": "text", "text": "You are a billing agent.", "cache_control": {"type": "ephemeral"}}],
+            "output_config": {"effort": "medium"}, "thinking": {"type": "adaptive"},
+            "tools": [{"name": "refund", "description": "refund an order", "input_schema": {"type": "object"}}],
+            "messages": [{"role": "user", "content": "refund order 17"},
+                         {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "lookup", "input": {"order": 17}}]},
+                         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "order 17: $50"}]}]}
+    logged_answer = {"content": [{"type": "text", "text": "Done."}, {"type": "tool_use", "name": "refund", "input": {"order": 17}}],
+                     "usage": {"input_tokens": 40, "output_tokens": 9}, "model": "claude-opus-4-8"}
+    trace = to_trace(body, logged_answer, "api")
+    assert trace["logged_format"] == "anthropic" and trace["output"] == 'Done.\n[calls refund({"order": 17})]'
+    r = audit.replay(trace, "claude-opus-5-5")
+    assert not chat and len(sent) == 1                                  # never the OpenAI endpoint
+    assert sent[0]["system"] == body["system"] and sent[0]["output_config"] == {"effort": "medium"}
+    assert sent[0]["thinking"] == {"type": "adaptive"} and sent[0]["messages"] == body["messages"]
+    assert (sent[0]["model"], sent[0]["max_tokens"]) == ("claude-opus-5-5", 2000) and "stream" not in sent[0]
+    assert r["output"] == 'Refunding.\n[calls refund({"order": 17})]' and r["stop_reason"] == "max_tokens"
+    assert r["usage"] == {"input": 40, "output": 30, "cache_read": 10, "cache_write": 0, "reasoning": 12}
+    text = engine.request_text(trace)                                   # what the judge reads
+    assert text.startswith("SYSTEM:\nYou are a billing agent.") and "[tool result] order 17: $50" in text
+    assert '[calls lookup({"order": 17})]' in text
+
+    sent.clear()                                                        # a candidate's effort: this format's own field
+    audit.replay({**trace, "candidate_settings": {"reasoning_effort": "low", "thinking": None}}, "claude-opus-5-5")
+    assert sent[0]["output_config"] == {"effort": "low"} and "thinking" not in sent[0] and "reasoning_effort" not in sent[0]
+
+    assert to_trace({"model": "gpt-5.4", "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]},
+                    {}, "api")["logged_format"] == "openai"
+
+
+def test_an_anthropic_format_request_refused_as_logged_keeps_its_system_prompt(monkeypatch):
+    calls = []
+
+    def post(path, body, cast_to):
+        calls.append(body)
+        if len(calls) == 1:
+            raise openai.BadRequestError("output_config.effort: not supported",
+                                         response=httpx.Response(400, request=httpx.Request("POST", "http://gw")), body=None)
+        return {"model": "m", "content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 1, "output_tokens": 1}}
+    monkeypatch.setattr(llm_client, "client", lambda: types.SimpleNamespace(post=post))
+    r = llm_client.run_messages(model="claude-haiku-4-5", max_tokens=100, body={
+        "system": "Be brief.", "output_config": {"effort": "low"}, "thinking": {"type": "adaptive"},
+        "messages": [{"role": "user", "content": "hi"}]})
+    assert r["dropped"] == ["output_config", "thinking"] and r["degraded"]
+    assert calls[1]["system"] == "Be brief." and "output_config" not in calls[1]
+    assert calls[0]["no-log"] is True and calls[0]["cache"] == {"no-cache": True}       # kept out of the log and the cache

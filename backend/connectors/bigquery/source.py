@@ -71,6 +71,32 @@ def sendable(field):
 _ROLES = {"system", "developer", "user", "assistant", "tool", "function"}
 
 
+_BLOCKS = {"tool_use", "tool_result", "thinking", "redacted_thinking"}       # content blocks only Anthropic's format has
+
+
+def request_format(body):
+    """'anthropic' for a request logged in Anthropic's own message format (the gateway's /v1/messages), else 'openai'.
+    A re-run goes back through the same endpoint: the other one refuses these fields."""
+    if isinstance(body.get("system"), (str, list)) or "output_config" in body or "anthropic_version" in body:
+        return "anthropic"
+    for m in body.get("messages") or []:
+        content = m.get("content") if isinstance(m, dict) else None
+        if isinstance(content, list) and any(isinstance(b, dict) and (b.get("type") in _BLOCKS or (
+                b.get("type") == "image" and "source" in b)) for b in content):
+            return "anthropic"
+    return "openai"
+
+
+def _answer(resp):
+    """The logged answer as the message the schema readers take, whichever format it was logged in."""
+    if isinstance(resp.get("content"), list) and not resp.get("choices"):          # Anthropic's: content blocks
+        blocks = [b for b in resp["content"] if isinstance(b, dict)]
+        return {"content": "\n".join(b.get("text") or "" for b in blocks if b.get("type") == "text"),
+                "tool_calls": [{"function": {"name": b.get("name"), "arguments": b.get("input") or {}}}
+                               for b in blocks if b.get("type") == "tool_use"]}
+    return ((resp.get("choices") or [{}])[0] or {}).get("message") or {}
+
+
 def _as_sent(body):
     """The request as a re-run sends it (all but NOT_SENT), or None when its messages aren't OpenAI chat messages
     (then it is rebuilt from the trace)."""
@@ -84,8 +110,11 @@ def to_trace(request, response, agent):
     """One logged (request, response) pair -> a contract trace."""
     req, resp = _json(request), _json(response) or {}
     body = req if isinstance(req, dict) else {"messages": req}
-    msgs = schema.norm_messages(body.get("messages"))
-    message = ((resp.get("choices") or [{}])[0] or {}).get("message") or {}
+    fmt = request_format(body)
+    lead = [{"role": "system", "content": body["system"]}] if fmt == "anthropic" and body.get("system") else []
+    msgs = schema.norm_messages(lead + body["messages"] if lead and isinstance(body.get("messages"), list)
+                                else body.get("messages"))
+    message = _answer(resp)
     out = {"generations": [[{"message": message}]]}     # the shape schema's output readers already take
     from app.services.llm_client import usage as read_usage
     u = read_usage(resp.get("usage") or {})
@@ -98,6 +127,7 @@ def to_trace(request, response, agent):
         tools_defined=schema.norm_tools(body.get("tools")), tool_choice=body.get("tool_choice"), source="bigquery")
     t["max_output_tokens"] = body.get("max_tokens") or body.get("max_completion_tokens")
     t["logged_request"] = _as_sent(body)
+    t["logged_format"] = fmt
     return t
 
 

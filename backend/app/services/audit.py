@@ -103,7 +103,13 @@ def replay(trace, model, max_tokens=None):
             max_tokens = min(registry.max_output(model), max(512, rec_out * 3))
     logged = trace.get("logged_request")
     own = trace.get("candidate_settings") or {}          # this candidate's settings: on top; None removes a logged one
-    if logged:
+    if logged and trace.get("logged_format") == "anthropic":
+        if own.get("reasoning_effort"):                    # the same choice, in this format's own field
+            own = {**{k: v for k, v in own.items() if k != "reasoning_effort"},
+                   "output_config": {**(logged.get("output_config") or {}), "effort": own["reasoning_effort"]}}
+        res = llm_client.run_messages(model=model, max_tokens=max_tokens, body={
+            k: v for k, v in {**logged, **own}.items() if v is not None and k != "reasoning_effort"})
+    elif logged:
         res = llm_client.run(model=model, messages=logged["messages"], max_tokens=max_tokens,
                              params={k: v for k, v in {**logged, **own}.items() if k != "messages" and v is not None})
     else:
