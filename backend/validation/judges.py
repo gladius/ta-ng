@@ -85,14 +85,15 @@ def parse_coherence(raw, total):
     raw = raw or ""
     reasons = {int(m.group(1)): m.group(2).strip()[:120]
                for m in re.finditer(r"^\s*(\d+)\s*[:\-]\s*(.+)$", raw, flags=re.M) if 1 <= int(m.group(1)) <= total}
-    dm = re.search(r"^\W*DIVERGENT\b[:\s]*(none|[0-9, ]+)", raw, flags=re.M | re.I)     # the list stays on its line
+    dm = re.search(r"^\W*DIVERGENT\b[:\s]*(none|[0-9][0-9, ]*)", raw, flags=re.M | re.I)     # the list stays on its line
     if dm:
         div = set() if dm.group(1).strip().lower() == "none" else \
             {d for d in (int(x) for x in re.findall(r"\d+", dm.group(1))) if 1 <= d <= total}
         return total - len(div), div, reasons
     cm = re.search(r"CONSISTENT\W*(\d+)\s*/\s*\d+", raw, flags=re.I)
-    if cm:
-        return max(0, min(int(cm.group(1)), total)), set(), reasons
+    if cm:                                                     # no readable DIVERGENT line: the reasons name them
+        agree = max(0, min(int(cm.group(1)), total))
+        return agree, set(reasons) if len(reasons) == total - agree else set(), reasons
     return None
 
 

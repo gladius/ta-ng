@@ -244,8 +244,9 @@ def run(*, model, messages, max_tokens, system=None, tools=None, tool_choice=Non
     OpenAI request passes its own fields as `params`, sent as they are. A request the model refuses (400) is retried
     once with its _CORE only; `dropped` then names the settings left out and `degraded` is True. Returns {text,
     tool_calls:[{name, args}], usage, latency_ms, model (as served), stop_reason, degraded, dropped}."""
-    kw = {"model": model, "max_tokens": max_tokens,
-          "messages": ([{"role": "system", "content": system}] if system else []) + list(messages)}
+    kw = {"model": model, "messages": ([{"role": "system", "content": system}] if system else []) + list(messages)}
+    if max_tokens:                                           # None: no limit of ours, the gateway's default applies
+        kw["max_tokens"] = max_tokens
     if tools:
         kw["tools"] = [{"type": "function", "function": {
             "name": t["name"], "description": (t.get("description") or "")[:1024],
@@ -255,7 +256,8 @@ def run(*, model, messages, max_tokens, system=None, tools=None, tool_choice=Non
             kw["tool_choice"] = tc
     if reasoning:
         kw["reasoning_effort"] = "low"
-        kw["max_tokens"] = max(max_tokens, 1536)
+        if max_tokens:
+            kw["max_tokens"] = max(max_tokens, 1536)
     kw.update(params or {})
     t0, dropped = time.time(), []
     try:
@@ -280,7 +282,8 @@ def run_messages(*, model, body, max_tokens):
     """One model call for a request logged in Anthropic's format, sent as it was but for the model and the output
     cap. Refused as logged (400): retried once with its core, system prompt included, and `dropped` names the rest.
     Returns what run() returns."""
-    body = {**body, "model": model, "max_tokens": max_tokens}
+    from app import registry                                 # this format requires a limit: the model's own maximum
+    body = {**body, "model": model, "max_tokens": max_tokens or registry.max_output(model)}
     t0, dropped = time.time(), []
     try:
         r = _messages_raw(**body)

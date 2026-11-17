@@ -32,6 +32,7 @@ def test_coherence_reply_parsing():
     assert judges.parse_coherence("CONSISTENT 4/5\nDIVERGENT 2\n2: changed the amount", 5) == (4, {2}, {2: "changed the amount"})
     assert judges.parse_coherence("CONSISTENT 5/5\nDIVERGENT none", 5) == (5, set(), {})
     assert judges.parse_coherence("CONSISTENT 3/5", 5) == (3, set(), {})
+    assert judges.parse_coherence("CONSISTENT 4/5\nDIVERGENT: output 1\n1: says MFA is missing", 5)[:2] == (4, {1})
     assert judges.parse_coherence("DIVERGENT 2\n3: a reason", 5)[:2] == (4, {2})   # the list stays on its own line
     assert judges.parse_coherence("", 5) is None                                     # unreadable -> unknown, never 5/5
     assert judges.parse_coherence("I cannot assess this.", 5) is None
@@ -539,3 +540,13 @@ def test_an_anthropic_format_request_refused_as_logged_keeps_its_system_prompt(m
     assert r["dropped"] == ["output_config", "thinking"] and r["degraded"]
     assert calls[1]["system"] == "Be brief." and "output_config" not in calls[1]
     assert calls[0]["no-log"] is True and calls[0]["cache"] == {"no-cache": True}       # kept out of the log and the cache
+
+
+def test_rerun_sets_no_output_limit_the_original_did_not_set(monkeypatch):
+    from app.services import audit
+    seen = []
+    monkeypatch.setattr(llm_client, "_complete_raw", lambda **kw: (seen.append(kw), _resp())[1])
+    logged = {"messages": [{"role": "user", "content": "x"}]}
+    audit.replay({"logged_request": logged, "output": "a long answer", "usage": {"output_tokens": 900}}, "claude-haiku-4-5")
+    audit.replay({"logged_request": logged, "max_output_tokens": 300}, "claude-haiku-4-5")
+    assert "max_tokens" not in seen[0] and seen[1]["max_tokens"] == 300

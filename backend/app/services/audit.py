@@ -92,15 +92,10 @@ def replay(trace, model, max_tokens=None):
     A logged OpenAI request is sent as it was; only model and max_tokens change. Tools are bound, never executed.
     No temperature is invented (logged, else the model default): re-runs must sample the natural run-to-run variance."""
     if max_tokens is None:
-        # The original's budget: thinking models spend it on thinking, so a smaller one truncates the re-run.
+        # The original's own limit, as far as this model allows. It set none: the re-run sets none either (the gateway
+        # then applies the model's default, as it did for the original); an answer that is cut off shows as cut off.
         rec_max = int(trace.get("max_output_tokens") or 0)
-        if rec_max > 0:
-            max_tokens = min(registry.max_output(model), rec_max)
-        else:                                             # not recorded: 3x the original's output
-            rec_out = int((trace.get("usage") or {}).get("output_tokens", 0) or 0)
-            if rec_out <= 0:
-                rec_out = len(trace.get("output") or "") // 4
-            max_tokens = min(registry.max_output(model), max(512, rec_out * 3))
+        max_tokens = min(registry.max_output(model), rec_max) if rec_max > 0 else None
     logged = trace.get("logged_request")
     own = trace.get("candidate_settings") or {}          # this candidate's settings: on top; None removes a logged one
     if logged and trace.get("logged_format") == "anthropic":
