@@ -84,7 +84,7 @@ export type JobStatus = Job & {
   callback: { sent_at: string | null; error: string | null } | null
 }
 
-type Usage = { input: number; output: number; cache_read: number; cache_write: number }
+type Usage = { input: number; output: number; cache_read: number; cache_write: number; reasoning?: number | null }
 type Call = { output: string; model: string | null; usage: Usage | null; latency_ms: number | null; cost_usd: number | null; error: string | null }
 type OriginalAnswer = Call & { recorded: boolean | null; agrees: boolean; reason: string }
 export type Category = 'match' | 'acceptable' | 'drift' | 'unclear'
@@ -100,7 +100,7 @@ export type Result = {
   id: string; model: string; spend_usd: number
   reference: { agree: number | null; of: number; consistency: number | null; runs: OriginalAnswer[] }
   candidates: CandidateResult[]
-  request?: { messages: { role: string; content: string }[]; tools: string[] } | null
+  request?: { messages: { role: string; content: string }[]; tools: string[]; settings?: Record<string, unknown> | null } | null
 }
 export type ResultsPage = { page: number; per_page: number; total: number; results: Result[] }
 

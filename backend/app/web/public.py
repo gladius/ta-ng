@@ -308,7 +308,7 @@ class CandidateResult(_Out):
     settings: Optional[dict] = Field(default=None, description="The settings this candidate ran with, when it has any")
     kept: int = Field(description="Answers that fit")
     of: int
-    fit_rate: Optional[float]
+    fit_rate: Optional[float] = Field(description="kept / of: the share of this candidate's answers to this request that fit")
     answers: Optional[Answers]
     latency_ms: Optional[int] = Field(description="Average over its answers")
     cost_usd: Optional[float] = Field(description="Average per answer")
